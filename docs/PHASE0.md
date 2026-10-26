@@ -19,12 +19,12 @@ offline.
 | Assemblies: nested components, instances, virtual parts | Done | Mates are stored, not solved yet (Phase 3) |
 | Export STEP (AP242/AP214), IGES, STL, 3MF with read-back validation | Done | Volume within 0.01% (exact) or 1% (mesh) |
 | Headless core tests | Done | 97 checks pass on Linux |
-| Godot extension (`CadPart`, `CadAssembly`) | Done | Compiles and links on Linux; Windows and Android builds are in CI |
+| Godot extension (`CadPart`, `CadAssembly`) | Done | Builds on Linux, Windows and Android arm64 in CI; loads in Godot 4.7.2 |
 | First-person player: walk with exact collision, fly, self-scaling 0.1 mm to 1 km | Written | Needs a playtest |
 | Tool wheel, 8 tools, context option, HUD, model panel, file menu | Written | Needs a playtest |
 | Xbox controller mapping and remapping storage | Written | Needs a playtest with a real controller on both platforms |
 | Touch controls (Android fallback) | Written | Needs a phone |
-| CI: Linux tests + Godot smoke test, Windows build, Android arm64 build | Written | First run happens on this pull request |
+| CI: Linux tests + Godot smoke test, Windows build + tests, Android arm64 build | Done | All green; the smoke test drives the extension and runs the main scene headless |
 | Profile rebuild time and memory on a mid-range Android phone | **Open** | The gate measurement; needs a device |
 | Floating origin and reverse-Z for extreme sizes | **Open** | Single precision is fine to about 10 µm at 10 m; revisit after the phone test |
 | Rebuild on a worker thread | **Open** | Rebuilds take ~25 ms for the sample on a desktop core; move off the main thread in Phase 1 |
