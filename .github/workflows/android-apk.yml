@@ -79,11 +79,14 @@ jobs:
 
           [resource]
           export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
-          export/android/java_sdk_path = "$JAVA_HOME_17_X64"
+          export/android/java_sdk_path = "$JAVA_HOME_21_X64"
           export/android/debug_keystore = "$KEYSTORE"
           export/android/debug_keystore_user = "androiddebugkey"
           export/android/debug_keystore_pass = "android"
           EOF
+          # apksigner from recent build-tools needs a current JDK on PATH.
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$KEYSTORE" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
@@ -93,7 +96,9 @@ jobs:
           GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
           mkdir -p export/android
           timeout 300 $GODOT --headless --path godot --import || true
-          tools/ci_run.sh timeout 600 $GODOT --headless --path godot --export-debug "Android" "$PWD/export/android/FPS-CAD.apk"
+          java -version
+          ls "$ANDROID_SDK_ROOT/build-tools"
+          tools/ci_run.sh timeout 600 $GODOT --headless --verbose --path godot --export-debug "Android" "$PWD/export/android/FPS-CAD.apk"
           test -s export/android/FPS-CAD.apk
           unzip -l export/android/FPS-CAD.apk | grep -E "lib/arm64-v8a/.*\.so" | tee export/android/libs.txt
           grep -q libfpcad export/android/libs.txt || { echo "::error::the APK is missing the CAD extension"; exit 1; }
