@@ -20,6 +20,7 @@ artifacts from a run if you only want to play.
 | Python | 3.8+ (godot-cpp bindings, staging script) |
 | Godot | 4.5 or newer (4.7.2 tested in CI) |
 | Android NDK | r26 or newer, for Android builds |
+| X11 headers (Linux) | `libx11-dev libxext-dev libxi-dev libxmu-dev libgl-dev` on Debian/Ubuntu, for Open CASCADE |
 
 nlohmann/json, miniz and godot-cpp are fetched from GitHub when CMake configures.
 
