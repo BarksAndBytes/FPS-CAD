@@ -96,14 +96,17 @@ jobs:
           GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
           mkdir -p export/android
           timeout 300 $GODOT --headless --path godot --import || true
-          # Godot keeps signing credentials outside export_presets.cfg; hand it the debug keystore.
-          mkdir -p godot/.godot
-          printf '[preset.1]\n\nscript_encryption_key=""\n\n[preset.1.options]\n\nkeystore/debug="%s"\nkeystore/debug_user="androiddebugkey"\nkeystore/debug_password="android"\n' \
-            "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" > godot/.godot/export_credentials.cfg
+          # Export unsigned, then align and sign with the SDK tools so any signing error is visible.
+          sed -i 's|^package/signed=.*||; s|^\[preset.1.options\]$|[preset.1.options]\npackage/signed=false|' godot/export_presets.cfg
           java -version
           ls "$ANDROID_SDK_ROOT/build-tools"
           tools/ci_run.sh timeout 600 $GODOT --headless --verbose --path godot --export-debug "Android" "$PWD/export/android/FPS-CAD.apk"
           test -s export/android/FPS-CAD.apk
+          BT="$ANDROID_SDK_ROOT/build-tools/$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          tools/ci_run.sh "$BT/zipalign" -f -p 4 export/android/FPS-CAD.apk export/android/aligned.apk
+          tools/ci_run.sh "$BT/apksigner" sign --ks "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" --ks-pass pass:android \
+            --ks-key-alias androiddebugkey --key-pass pass:android --out export/android/FPS-CAD.apk export/android/aligned.apk
+          tools/ci_run.sh "$BT/apksigner" verify --print-certs export/android/FPS-CAD.apk
           unzip -l export/android/FPS-CAD.apk | grep -E "lib/arm64-v8a/.*\.so" | tee export/android/libs.txt
           grep -q libfpcad export/android/libs.txt || { echo "::error::the APK is missing the CAD extension"; exit 1; }
           cp export/android/FPS-CAD.apk "export/android/FPS-CAD-${GITHUB_SHA::7}.apk"
