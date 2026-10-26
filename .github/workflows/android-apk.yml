@@ -103,7 +103,8 @@ jobs:
           tools/ci_run.sh timeout 600 $GODOT --headless --verbose --path godot --export-debug "Android" "$PWD/export/android/FPS-CAD.apk"
           test -s export/android/FPS-CAD.apk
           BT="$ANDROID_SDK_ROOT/build-tools/$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
-          tools/ci_run.sh "$BT/zipalign" -f -p 4 export/android/FPS-CAD.apk export/android/aligned.apk
+          python3 tools/dedupe_apk.py export/android/FPS-CAD.apk export/android/deduped.apk
+          tools/ci_run.sh "$BT/zipalign" -f -p 4 export/android/deduped.apk export/android/aligned.apk
           tools/ci_run.sh "$BT/apksigner" sign --ks "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" --ks-pass pass:android \
             --ks-key-alias androiddebugkey --key-pass pass:android --out export/android/FPS-CAD.apk export/android/aligned.apk
           tools/ci_run.sh "$BT/apksigner" verify --print-certs export/android/FPS-CAD.apk
