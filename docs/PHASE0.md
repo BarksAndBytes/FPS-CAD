@@ -31,7 +31,7 @@ offline.
 
 ## How to run the gate check
 
-1. Build or download the Android artifacts from CI, export the Android preset and install it.
+1. On the phone, open the repository's Releases page, download the APK from the **android-dev** pre-release and install it (CI rebuilds it on every push).
 2. Pair an Xbox controller over Bluetooth.
 3. Open the sample, push the roof up and down with RT/LT for 30 seconds while walking.
 4. Note the frame time (Godot's monitor overlay) and the rebuild time shown in the log.
