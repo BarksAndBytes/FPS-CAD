@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  OCCT_TAG: V8_0_1
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  linux:
+    name: Linux · core tests, extension, Godot smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        # Open CASCADE's TKService toolkit needs the X11 headers even with OpenGL turned off.
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libx11-dev libxext-dev libxi-dev libxmu-dev libgl-dev
+
+      - name: Cache Open CASCADE
+        id: occt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/occt
+          key: occt-${{ env.OCCT_TAG }}-linux-v1
+
+      - name: Build Open CASCADE
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: tools/ci_run.sh tools/build_occt.sh "${{ runner.temp }}/occt" linux
+
+      - name: Build core, CLI, tests and extension
+        run: |
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/occt" \
+            -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
+          tools/ci_run.sh cmake --build build -j
+
+      - name: Core tests
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/occt/lib
+        run: tools/ci_run.sh ctest --test-dir build --output-on-failure
+
+      - name: Round-trip the sample files through the CLI
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/occt/lib
+        run: |
+          mkdir -p out
+          build/core/fpcad sample out/pavilion.fpprt
+          build/core/fpcad sample-assembly out/pins.fpasm
+          for f in step igs stl 3mf; do
+            tools/ci_run.sh build/core/fpcad export out/pavilion.fpprt out/pavilion.$f
+            tools/ci_run.sh build/core/fpcad export out/pins.fpasm out/pins.$f
+          done
+
+      - name: Stage Open CASCADE beside the extension
+        run: python3 tools/stage_occt.py --occt "${{ runner.temp }}/occt" --platform linux
+
+      - name: Godot smoke test
+        run: |
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          timeout 300 $GODOT --headless --path godot --import || true
+          tools/ci_run.sh timeout 300 $GODOT --headless --path godot --script res://tests/smoke_test.gd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fps-cad-linux
+          path: |
+            godot/bin
+            out
+
+  windows:
+    name: Windows · core tests and extension
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Cache Open CASCADE
+        id: occt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/occt
+          key: occt-${{ env.OCCT_TAG }}-windows-v1
+      - name: Build Open CASCADE
+        if: steps.occt.outputs.cache-hit != 'true'
+        shell: bash
+        run: tools/ci_run.sh tools/build_occt.sh "$(cygpath -m '${{ runner.temp }}')/occt" windows
+      - name: Build core, CLI, tests and extension
+        shell: bash
+        run: |
+          OCCT="$(cygpath -m '${{ runner.temp }}')/occt"
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$OCCT" \
+            -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
+          tools/ci_run.sh cmake --build build -j
+      - name: Core tests
+        shell: bash
+        run: |
+          OCCT="$(cygpath -u '${{ runner.temp }}')/occt"
+          export PATH="$OCCT/win64/vc14/bin:$OCCT/bin:$PATH"
+          tools/ci_run.sh ctest --test-dir build --output-on-failure
+      - name: Stage Open CASCADE beside the extension
+        shell: bash
+        run: python tools/stage_occt.py --occt "$(cygpath -m '${{ runner.temp }}')/occt" --platform windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fps-cad-windows
+          path: godot/bin
+
+  android:
+    name: Android arm64 · core and extension
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Cache Open CASCADE
+        id: occt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/occt-android
+          key: occt-${{ env.OCCT_TAG }}-android-arm64-v1
+      - name: Build Open CASCADE
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" tools/ci_run.sh tools/build_occt.sh "${{ runner.temp }}/occt-android" android
+      - name: Build core and extension
+        run: |
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_shared \
+            -DCMAKE_FIND_ROOT_PATH="${{ runner.temp }}/occt-android" \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/occt-android" \
+            -DFPCAD_BUILD_TESTS=OFF -DFPCAD_BUILD_CLI=OFF \
+            -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
+          tools/ci_run.sh cmake --build build -j
+      - name: Stage Open CASCADE and libc++ beside the extension
+        run: |
+          LIBCXX=$(find "$ANDROID_NDK_LATEST_HOME" -path "*aarch64-linux-android/libc++_shared.so" | head -1)
+          python3 tools/stage_occt.py --occt "${{ runner.temp }}/occt-android" --platform android --extra "$LIBCXX"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fps-cad-android-arm64
+          path: godot/bin

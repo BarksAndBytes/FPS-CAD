@@ -1,0 +1,1019 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}</style>
+<title>First-Person CAD</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed 3D viewport; HUD rows pinned top and bottom; model panel docked right (bottom sheet on phones); tool wheel as a centered overlay. Single dusk-drafting-room look by choice. */
+:root{
+  --sky:#3a4553;
+  --panel:rgba(17,21,27,.80);
+  --panel-solid:#171c23;
+  --line:rgba(226,233,242,.13);
+  --fg:#e8edf3;
+  --muted:#9ba7b6;
+  --accent:#ff8a3d;
+  --accent-ink:#1d1206;
+  --measure:#ffd166;
+  --x:#e0775f; --z:#6c9be0;
+  --f-display:"Chakra Petch","Segoe UI",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --pad-l:max(16px, env(safe-area-inset-left, 0px));
+  --pad-r:max(16px, env(safe-area-inset-right, 0px));
+  --pad-t:max(14px, env(safe-area-inset-top, 0px));
+  --pad-b:max(14px, env(safe-area-inset-bottom, 0px));
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--sky);color:var(--fg);font-family:var(--f-body);overflow:hidden;
+  padding-left:var(--pad-l);padding-right:var(--pad-r);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+canvas#view{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* HUD frame */
+#hud{position:fixed;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;
+  padding-left:var(--pad-l);padding-right:var(--pad-r);padding-block:var(--pad-t) var(--pad-b);z-index:5}
+.row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.row.bottom{align-items:flex-end}
+.stack{display:flex;flex-direction:column;gap:8px;min-width:0}
+.chip{pointer-events:auto;display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:7px 12px 7px 9px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);text-align:left}
+.chip .ico{width:30px;height:30px;display:grid;place-items:center;border-radius:7px;background:var(--accent);color:var(--accent-ink)}
+.chip .ico svg{width:20px;height:20px}
+.toolname{font-family:var(--f-display);font-weight:600;font-size:16px;letter-spacing:.07em;text-transform:uppercase;line-height:1.1}
+.toolkey{font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+.chip.flash{animation:flash .35s ease-out}
+@keyframes flash{from{box-shadow:0 0 0 2px var(--accent)}to{box-shadow:0 0 0 0 transparent}}
+.hint,.readout{font-family:var(--f-mono);font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;padding:5px 9px;width:max-content;max-width:100%;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.hint b{color:var(--fg);font-weight:500}
+.readout{font-variant-numeric:tabular-nums;line-height:1.55}
+.readout .k{color:var(--fg)}
+.btns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.hbtn{pointer-events:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px;
+  font-family:var(--f-mono);font-size:12px;display:flex;align-items:center;gap:6px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.hbtn svg{width:15px;height:15px}
+.hbtn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+
+/* crosshair */
+#cross{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:4;display:flex;flex-direction:column;align-items:center}
+#cross svg{width:26px;height:26px;color:var(--fg);filter:drop-shadow(0 0 2px rgba(0,0,0,.7))}
+#cross.on svg{color:var(--accent)}
+#aim{position:absolute;top:34px;white-space:nowrap;font-family:var(--f-mono);font-size:12px;color:var(--fg);
+  background:rgba(17,21,27,.66);padding:3px 8px;border-radius:6px;font-variant-numeric:tabular-nums}
+#aim:empty{display:none}
+
+#centerBottom{display:flex;flex-direction:column;align-items:center;gap:8px;flex:1;min-width:0}
+#measureOut{font-family:var(--f-mono);font-size:13px;color:var(--measure);background:var(--panel);border:1px solid rgba(255,209,102,.35);
+  border-radius:8px;padding:6px 11px;font-variant-numeric:tabular-nums;text-align:center}
+#measureOut b{font-size:16px;font-weight:500;margin-right:8px}
+#toast{font-family:var(--f-mono);font-size:12px;background:var(--panel-solid);border:1px solid var(--line);border-radius:8px;padding:6px 11px;
+  opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s}
+#toast.show{opacity:1;transform:none}
+#paused{font-family:var(--f-mono);font-size:12px;color:var(--fg);background:var(--panel-solid);border:1px solid var(--accent);border-radius:8px;padding:7px 12px;text-align:center}
+
+/* model panel */
+#panel{position:fixed;z-index:6;right:var(--pad-r);top:calc(var(--pad-t) + 52px);width:308px;max-height:calc(100% - var(--pad-t) - var(--pad-b) - 130px);
+  overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  user-select:text;-webkit-user-select:text;font-size:13px}
+body.locked #panel{pointer-events:none;opacity:.86}
+#panel section{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
+#panel section:last-child{border-bottom:0}
+#panel h2{margin:0;font-family:var(--f-display);font-weight:600;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;align-items:baseline}
+#panel h2 span{font-family:var(--f-mono);letter-spacing:0;text-transform:none;font-weight:400}
+.empty{color:var(--muted);line-height:1.45;margin:0}
+.params{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.field.wide{grid-column:1/-1}
+.field label{font-family:var(--f-mono);font-size:10.5px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.field .in{display:flex;align-items:center;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:6px}
+.field input{all:unset;flex:1;min-width:0;padding:6px 8px;font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums;color:var(--fg)}
+.field .u{font-family:var(--f-mono);font-size:11px;color:var(--muted);padding-right:8px}
+.field .in:focus-within{border-color:var(--accent)}
+.acts{display:flex;gap:6px;flex-wrap:wrap}
+.pbtn{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-family:var(--f-mono);font-size:12px}
+.pbtn:hover{border-color:var(--muted)}
+.pbtn.danger:hover{border-color:var(--x);color:var(--x)}
+.tree{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.tree button{width:100%;display:grid;grid-template-columns:20px 1fr auto;gap:8px;align-items:center;background:none;border:1px solid transparent;border-radius:6px;padding:5px 6px;text-align:left}
+.tree button:hover{background:rgba(255,255,255,.05)}
+.tree button[aria-current="true"]{border-color:var(--accent);background:rgba(255,138,61,.09)}
+.tree svg{width:16px;height:16px;color:var(--muted)}
+.tree .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .dm{font-family:var(--f-mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tree .idx{font-family:var(--f-mono);font-size:10px;color:var(--muted)}
+#jsonOut{width:100%;box-sizing:border-box;height:90px;background:rgba(0,0,0,.3);color:var(--fg);border:1px solid var(--line);border-radius:6px;font-family:var(--f-mono);font-size:11px}
+
+/* touch controls */
+.touchOnly{display:none!important}
+body.touch .touchOnly{display:flex!important}
+body.touch dl.touchOnly{display:grid!important}
+body.touch .deskOnly{display:none!important}
+body:not(.started) #hud .row.bottom > :not(#centerBottom){visibility:hidden}
+body.touch.panel-open #pad{visibility:hidden}
+#pad{pointer-events:none;flex-direction:column;align-items:flex-end;gap:10px}
+.prow{display:flex;gap:10px;align-items:flex-end}
+.tbtn{pointer-events:auto;touch-action:none;width:58px;height:58px;border-radius:50%;background:rgba(17,21,27,.62);border:1.5px solid rgba(226,233,242,.28);
+  display:grid;place-items:center;align-content:center;gap:1px;font-family:var(--f-mono);font-size:10px;color:var(--fg);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.tbtn svg{width:20px;height:20px}
+.tbtn.fire{width:78px;height:78px;border-color:var(--accent);color:var(--accent);font-size:11px}
+.tbtn.fire svg{width:26px;height:26px}
+.tbtn.sm{width:48px;height:48px;font-size:18px;font-family:var(--f-display);font-weight:600}
+.tbtn.held{background:rgba(255,138,61,.28)}
+.sizeCol{display:flex;flex-direction:column;align-items:center;gap:6px}
+.sizeCol span{font-family:var(--f-mono);font-size:10px;color:var(--muted);letter-spacing:.06em}
+#stickHint{pointer-events:none;width:110px;height:110px;border-radius:50%;border:1.5px dashed rgba(226,233,242,.25);align-items:center;justify-content:center;
+  font-family:var(--f-mono);font-size:11px;color:var(--muted)}
+#stick{position:fixed;left:0;top:0;width:120px;height:120px;margin:-60px 0 0 -60px;border-radius:50%;border:1.5px solid rgba(226,233,242,.35);
+  background:rgba(17,21,27,.3);pointer-events:none;z-index:6}
+#knob{position:absolute;left:50%;top:50%;width:50px;height:50px;margin:-25px 0 0 -25px;border-radius:50%;background:rgba(232,237,243,.55)}
+
+/* tool wheel */
+#wheel{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:rgba(12,15,20,.42)}
+#ring{position:relative;width:340px;height:340px;max-width:100%}
+#ring::before{content:"";position:absolute;inset:40px;border-radius:50%;border:1px solid var(--line);background:radial-gradient(circle, rgba(17,21,27,.55) 0 38%, rgba(17,21,27,.25) 39% 100%)}
+.wi{position:absolute;width:82px;height:82px;margin:-41px 0 0 -41px;border-radius:50%;background:var(--panel-solid);border:1.5px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-family:var(--f-display);font-weight:500;font-size:11px;letter-spacing:.05em;text-transform:uppercase;transition:transform .08s,border-color .08s}
+.wi svg{width:24px;height:24px}
+.wi .kk{font-family:var(--f-mono);font-size:10px;color:var(--muted);letter-spacing:0}
+.wi.cur{border-color:rgba(255,138,61,.55)}
+.wi.hov{border-color:var(--accent);background:var(--accent);color:var(--accent-ink);transform:scale(1.1)}
+.wi.hov .kk{color:var(--accent-ink)}
+#wheelCenter{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;width:130px;pointer-events:none}
+#wheelCenter .t{font-family:var(--f-display);font-weight:600;font-size:15px;letter-spacing:.08em;text-transform:uppercase}
+#wheelCenter .d{font-family:var(--f-mono);font-size:10.5px;color:var(--muted);margin-top:4px;line-height:1.4}
+
+/* start sheet */
+#start{position:fixed;inset:0;z-index:30;display:grid;place-items:center;background:rgba(22,27,34,.55);
+  padding-left:var(--pad-l);padding-right:var(--pad-r);padding-block:var(--pad-t) var(--pad-b);overflow:auto}
+.sheet{width:min(560px,100%);background:var(--panel-solid);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.sheet .body{padding:22px 22px 18px;display:flex;flex-direction:column;gap:14px}
+.sheet h1{margin:0;font-family:var(--f-display);font-weight:600;font-size:30px;letter-spacing:.04em;text-transform:uppercase;line-height:1;text-wrap:balance}
+.sheet p{margin:0;color:var(--muted);line-height:1.5;max-width:60ch}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;align-items:baseline}
+.keys dt{font-family:var(--f-mono);font-size:12px;color:var(--fg);white-space:nowrap}
+.keys dd{margin:0;color:var(--muted)}
+kbd{font-family:var(--f-mono);font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:rgba(255,255,255,.04)}
+.go{align-self:flex-start;background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:11px 18px;font-family:var(--f-display);font-weight:600;font-size:15px;letter-spacing:.08em;text-transform:uppercase}
+.titleblock{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);font-family:var(--f-mono);font-size:10.5px}
+.titleblock div{padding:8px 12px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:2px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;min-width:0}
+.titleblock div:last-child{border-right:0}
+.titleblock b{color:var(--fg);font-weight:500;letter-spacing:0;text-transform:none;font-size:12px}
+
+@media (max-width:720px){
+  #panel{left:var(--pad-l);right:var(--pad-r);width:auto;top:auto;bottom:var(--pad-b);max-height:58%}
+  .toolname{font-size:14px}
+  .readout{font-size:11px}
+  .hint{font-size:11px}
+  .sheet h1{font-size:24px}
+  .titleblock{grid-template-columns:repeat(2,1fr)}
+  .titleblock div:nth-child(2){border-right:0}
+  .titleblock div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+  #ring{width:300px;height:300px}
+  .wi{width:72px;height:72px;margin:-36px 0 0 -36px;font-size:10px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<canvas id="view" tabindex="0" aria-label="3D model view"></canvas>
+
+<div id="cross" aria-hidden="true">
+  <svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 4v6M13 16v6M4 13h6M16 13h6"/><circle cx="13" cy="13" r="1.2" fill="currentColor" stroke="none"/></svg>
+  <div id="aim"></div>
+</div>
+
+<div id="hud">
+  <div class="row">
+    <div class="stack">
+      <button class="chip" id="toolChip" type="button" aria-label="Open tool wheel">
+        <span class="ico" id="toolIco"></span>
+        <span><div class="toolname" id="toolName">Select</div><div class="toolkey"><span class="deskOnly">hold <kbd>Q</kbd> for wheel</span><span class="touchOnly">tap for tool wheel</span></div></span>
+      </button>
+      <div class="hint" id="toolHint"></div>
+      <div class="readout" id="readout"></div>
+    </div>
+    <div class="btns">
+      <button class="hbtn" id="bUndo" type="button" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg>Undo</button>
+      <button class="hbtn" id="bRedo" type="button" title="Redo (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg>Redo</button>
+      <button class="hbtn" id="bFly" type="button" aria-pressed="false" title="Fly (F)">Fly</button>
+      <button class="hbtn" id="bPanel" type="button" aria-pressed="false" title="Model panel (Tab)">Model</button>
+    </div>
+  </div>
+  <div class="row bottom">
+    <div class="touchOnly" id="stickHint">move</div>
+    <div id="centerBottom">
+      <div id="paused" hidden>Paused · click the view to resume · the model panel is editable now</div>
+      <div id="measureOut" hidden></div>
+      <div id="toast" role="status"></div>
+    </div>
+    <div class="touchOnly" id="pad">
+      <div class="prow">
+        <div class="sizeCol"><button class="tbtn sm" id="tGrow" type="button" aria-label="Grow">+</button><span>SIZE</span><button class="tbtn sm" id="tShrink" type="button" aria-label="Shrink">−</button></div>
+      </div>
+      <div class="prow">
+        <button class="tbtn" id="tDown" type="button" hidden>▼<span>down</span></button>
+        <button class="tbtn" id="tJump" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span id="tJumpL">jump</span></button>
+        <div style="display:flex;flex-direction:column;gap:10px;align-items:center">
+          <button class="tbtn" id="tAlt" type="button"><span id="tAltL" style="font-size:11px">alt</span></button>
+          <button class="tbtn fire" id="tFire" type="button"><span id="tFireI"></span><span id="tFireL">fire</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="stick" hidden><div id="knob"></div></div>
+
+<aside id="panel" hidden aria-label="Model">
+  <section id="paramSec"></section>
+  <section>
+    <h2>Feature tree <span id="treeCount"></span></h2>
+    <ul class="tree" id="tree"></ul>
+  </section>
+  <section>
+    <div class="acts">
+      <button class="pbtn" type="button" data-act="json">Copy JSON</button>
+      <button class="pbtn danger" type="button" data-act="reset" id="resetBtn">Reset sample</button>
+    </div>
+    <textarea id="jsonOut" readonly hidden aria-label="Model JSON"></textarea>
+    <p class="empty" style="font-size:11.5px">The model is saved in this browser.</p>
+  </section>
+</aside>
+
+<div id="wheel" hidden>
+  <div id="ring"><div id="wheelCenter"><div class="t" id="wcT"></div><div class="d" id="wcD"></div></div></div>
+</div>
+
+<div id="start">
+  <div class="sheet">
+    <div class="body">
+      <h1>First-Person CAD</h1>
+      <p>Walk around a parametric model. Change your own size to zoom in or out. Pick tools from the wheel like weapons, and edit every part by its dimensions.</p>
+      <dl class="keys deskOnly">
+        <dt><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> · mouse</dt><dd>Move and look. <kbd>Shift</kbd> sprint, <kbd>Space</kbd> jump</dd>
+        <dt>scroll · <kbd>−</kbd> <kbd>=</kbd></dt><dd>Shrink or grow yourself. <kbd>R</kbd> back to 1:1</dd>
+        <dt>hold <kbd>Q</kbd> · <kbd>1</kbd>–<kbd>7</kbd></dt><dd>Tool wheel, or pick a tool directly</dd>
+        <dt>left / right click</dt><dd>Primary and secondary action of the tool</dd>
+        <dt><kbd>F</kbd></dt><dd>Fly through walls. <kbd>Space</kbd> up, <kbd>C</kbd> down</dd>
+        <dt><kbd>Esc</kbd> · <kbd>Tab</kbd></dt><dd>Free the mouse to edit parameters · show the model panel</dd>
+        <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo. Add <kbd>Shift</kbd> to redo</dd>
+      </dl>
+      <dl class="keys touchOnly" style="display:none">
+        <dt>left thumb</dt><dd>Drag anywhere on the left to walk</dd>
+        <dt>right thumb</dt><dd>Drag on the right to look around</dd>
+        <dt>Fire · Alt</dt><dd>Primary and secondary action of the tool</dd>
+        <dt>Size + / −</dt><dd>Grow or shrink yourself to zoom</dd>
+        <dt>tool chip</dt><dd>Tap the tool name at top left for the wheel</dd>
+        <dt>Model</dt><dd>Edit dimensions of the selected part</dd>
+      </dl>
+      <button class="go" id="goBtn" type="button">Enter the model</button>
+    </div>
+    <div class="titleblock">
+      <div>Scale<b>1 : 1</b></div><div>Units<b>metres</b></div><div>Tools<b>7</b></div><div>Sheet<b>1 / 1</b></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+<script>
+(() => {
+const T = THREE;
+const $ = s => document.querySelector(s);
+const body = document.body;
+
+const COL = { sky:0x3a4553, ground:0x323b47, gMin:0x48535f, gMaj:0x6c7a8c, axX:0xe0775f, axZ:0x6c9be0,
+  box:0xd8d2c6, cyl:0xc4cad1, edge:0x1c222a, accent:0xff8a3d, measure:0xffd166 };
+const EYE = 1.62, TALL = 1.75;
+
+const sv = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const ICON = {
+  select: sv('<path d="M6 3l13 7.5-5.8 1.6L10.4 18z"/>'),
+  push:   sv('<path d="M4 15h16v5H4z"/><path d="M12 12V3M8 7l4-4 4 4"/>'),
+  box:    sv('<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>'),
+  cyl:    sv('<ellipse cx="12" cy="6" rx="7" ry="2.8"/><path d="M5 6v12c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V6"/>'),
+  move:   sv('<path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>'),
+  measure:sv('<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>'),
+  erase:  sv('<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/>'),
+};
+const TOOLS = [
+  {id:'select', name:'Select',      pri:'select part',      alt:'match my size to part', priS:'pick',  altS:'fit'},
+  {id:'push',   name:'Push / Pull', pri:'push face out',    alt:'pull face in',          priS:'push',  altS:'pull'},
+  {id:'box',    name:'Box',         pri:'place box',        alt:'copy size from part',   priS:'place', altS:'size'},
+  {id:'cyl',    name:'Cylinder',    pri:'place cylinder',   alt:'copy size from part',   priS:'place', altS:'size'},
+  {id:'move',   name:'Move',        pri:'grab / drop part', alt:'duplicate & grab',      priS:'grab',  altS:'copy'},
+  {id:'measure',name:'Measure',     pri:'set point',        alt:'clear',                 priS:'point', altS:'clear'},
+  {id:'erase',  name:'Delete',      pri:'delete part',      alt:'undo',                  priS:'delete',altS:'undo'},
+];
+
+/* ---------- model ---------- */
+const KEY = 'fpcad.model.v1';
+const sample = () => ([
+  {id:1, type:'box', name:'Plinth',   p:{x:0,   z:0,   y:0,   w:10, d:7,   h:0.4}},
+  {id:2, type:'box', name:'Core',     p:{x:-2.5,z:-1,  y:0.4, w:4,  d:4,   h:3}},
+  {id:3, type:'cyl', name:'Column 1', p:{x:2.6, z:1.8, y:0.4, r:0.3,h:3}},
+  {id:4, type:'cyl', name:'Column 2', p:{x:2.6, z:-1.8,y:0.4, r:0.3,h:3}},
+  {id:5, type:'box', name:'Roof',     p:{x:0.3, z:0,   y:3.4, w:9,  d:6.2, h:0.3}},
+  {id:6, type:'box', name:'Step',     p:{x:0,   z:4,   y:0,   w:3,  d:1,   h:0.2}},
+]);
+function load(){
+  try { const a = JSON.parse(localStorage.getItem(KEY)); if (Array.isArray(a) && a.every(f => f && f.p && (f.type==='box'||f.type==='cyl'))) return a; } catch(e){}
+  return sample();
+}
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(features)); } catch(e){} }
+
+let features = load();
+let past = [], future = [];
+let selected = null, grabbed = null, grabOrig = null, pushLock = null;
+let toolIdx = 0;
+let pickBox = null, pickCyl = null;
+let mA = null, mB = null;
+
+const feat = id => features.find(f => f.id === id);
+const r6 = v => Math.round(v * 1e6) / 1e6;
+function nextId(){ return features.reduce((m,f) => Math.max(m, f.id), 0) + 1; }
+function nextName(type){
+  const base = type === 'box' ? 'Box' : 'Cylinder';
+  let n = features.filter(f => f.type === type).length + 1;
+  while (features.some(f => f.name === `${base} ${n}`)) n++;
+  return `${base} ${n}`;
+}
+function dimsOf(f){ return f.type === 'box' ? {w:f.p.w, d:f.p.d, h:f.p.h} : {w:2*f.p.r, d:2*f.p.r, h:f.p.h}; }
+function commit(){ past.push(JSON.stringify(features)); if (past.length > 300) past.shift(); future.length = 0; }
+function undo(){
+  if (!past.length) return toast('Nothing to undo');
+  future.push(JSON.stringify(features)); features = JSON.parse(past.pop()); grabbed = null; rebuild(); toast('Undo');
+}
+function redo(){
+  if (!future.length) return toast('Nothing to redo');
+  past.push(JSON.stringify(features)); features = JSON.parse(future.pop()); grabbed = null; rebuild(); toast('Redo');
+}
+
+/* ---------- formatting ---------- */
+function fmtLen(v){
+  const a = Math.abs(v);
+  if (a >= 1000) return (v/1000).toFixed(2) + ' km';
+  if (a >= 1) return v.toFixed(2) + ' m';
+  if (a >= 0.1) return (v*1000).toFixed(0) + ' mm';
+  if (a >= 0.01) return (v*1000).toFixed(1) + ' mm';
+  return (v*1000).toFixed(2) + ' mm';
+}
+const fmtDims = d => d.r != null ? `⌀${fmtLen(2*d.r)} × ${fmtLen(d.h)}` : `${fmtLen(d.w)} × ${fmtLen(d.d)} × ${fmtLen(d.h)}`;
+function summary(f){ return f.type === 'box' ? fmtDims(f.p) : fmtDims({r:f.p.r, h:f.p.h}); }
+
+/* ---------- three ---------- */
+const canvas = $('#view');
+const renderer = new T.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+const scene = new T.Scene();
+scene.background = new T.Color(COL.sky);
+scene.fog = new T.FogExp2(COL.sky, 0.012);
+const camera = new T.PerspectiveCamera(72, 1, 0.02, 4000);
+camera.rotation.order = 'YXZ';
+
+scene.add(new T.HemisphereLight(0xe2ebf6, 0x3b4048, 0.85));
+const sun = new T.DirectionalLight(0xfff0dc, 0.8); sun.position.set(0.6, 1, 0.35); scene.add(sun);
+const fill = new T.DirectionalLight(0xbfd2ff, 0.22); fill.position.set(-0.5, 0.3, -0.7); scene.add(fill);
+
+const gridU = {
+  uSp:{value:1}, uCam:{value:new T.Vector3()}, uFog:{value:0.012},
+  cBg:{value:new T.Color(COL.ground)}, cMin:{value:new T.Color(COL.gMin)}, cMaj:{value:new T.Color(COL.gMaj)},
+  cX:{value:new T.Color(COL.axX)}, cZ:{value:new T.Color(COL.axZ)}, cFog:{value:new T.Color(COL.sky)},
+};
+const ground = new T.Mesh(new T.PlaneGeometry(40000, 40000), new T.ShaderMaterial({
+  uniforms: gridU, side: T.DoubleSide,
+  vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `
+    uniform float uSp; uniform vec3 uCam; uniform float uFog;
+    uniform vec3 cBg; uniform vec3 cMin; uniform vec3 cMaj; uniform vec3 cX; uniform vec3 cZ; uniform vec3 cFog;
+    varying vec3 vW;
+    float grid(vec2 p, float sp, float w){
+      vec2 c = p / sp; vec2 fw = fwidth(c);
+      vec2 g = abs(fract(c - 0.5) - 0.5) / (fw * w);
+      float l = min(g.x, g.y);
+      return (1.0 - min(l, 1.0)) * clamp(1.0 - max(fw.x, fw.y) * 1.6, 0.0, 1.0);
+    }
+    void main(){
+      vec2 p = vW.xz;
+      vec3 col = cBg;
+      col = mix(col, cMin, grid(p, uSp, 1.0) * 0.75);
+      col = mix(col, cMaj, grid(p, uSp * 10.0, 1.5));
+      vec2 fw = fwidth(p);
+      col = mix(col, cX, 1.0 - min(abs(p.y) / (fw.y * 2.0), 1.0));
+      col = mix(col, cZ, 1.0 - min(abs(p.x) / (fw.x * 2.0), 1.0));
+      float d = length(vW - uCam) * uFog;
+      gl_FragColor = vec4(mix(col, cFog, 1.0 - exp(-d * d)), 1.0);
+    }`
+}));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+const modelGroup = new T.Group(); scene.add(modelGroup);
+const edgeMat = new T.LineBasicMaterial({ color: COL.edge });
+let meshes = []; const meshById = new Map();
+
+function makeMesh(f){
+  const p = f.p;
+  const g = f.type === 'box' ? new T.BoxGeometry(p.w, p.h, p.d) : new T.CylinderGeometry(p.r, p.r, p.h, 48, 1);
+  const mat = new T.MeshStandardMaterial({ color: f.type === 'box' ? COL.box : COL.cyl, roughness:.82, metalness:.04,
+    emissive: COL.accent, emissiveIntensity: 0, polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
+  const m = new T.Mesh(g, mat);
+  m.position.set(p.x, p.y + p.h/2, p.z);
+  m.userData.fid = f.id;
+  m.add(new T.LineSegments(new T.EdgesGeometry(g, 30), edgeMat));
+  return m;
+}
+function rebuild(){
+  for (const m of meshes){ m.geometry.dispose(); m.material.dispose(); m.children[0].geometry.dispose(); }
+  modelGroup.clear(); meshes = []; meshById.clear();
+  for (const f of features){ const m = makeMesh(f); modelGroup.add(m); meshes.push(m); meshById.set(f.id, m); }
+  if (selected != null && !feat(selected)) selected = null;
+  renderPanel(); save();
+}
+
+/* helpers: ghost, face highlight, measure */
+const accentMat = new T.MeshBasicMaterial({ color: COL.accent, transparent:true, opacity:.42, depthWrite:false });
+const ghostMat = new T.MeshBasicMaterial({ color: COL.accent, transparent:true, opacity:.2, depthWrite:false });
+const ghostEdge = new T.LineBasicMaterial({ color: COL.accent });
+const unitBox = new T.BoxGeometry(1,1,1), unitCyl = new T.CylinderGeometry(.5,.5,1,48,1);
+const hlBox = new T.Mesh(unitBox, accentMat), hlCyl = new T.Mesh(unitCyl, accentMat);
+const ghostBox = new T.Mesh(unitBox, ghostMat); ghostBox.add(new T.LineSegments(new T.EdgesGeometry(unitBox), ghostEdge));
+const ghostCyl = new T.Mesh(unitCyl, ghostMat); ghostCyl.add(new T.LineSegments(new T.EdgesGeometry(unitCyl, 30), ghostEdge));
+[hlBox, hlCyl, ghostBox, ghostCyl].forEach(o => { o.visible = false; scene.add(o); });
+
+const mMat = new T.MeshBasicMaterial({ color: COL.measure, depthTest:false });
+const dotGeo = new T.SphereGeometry(1, 14, 10);
+const dotA = new T.Mesh(dotGeo, mMat), dotB = new T.Mesh(dotGeo, mMat), dotSnap = new T.Mesh(dotGeo, new T.MeshBasicMaterial({ color:0xffffff, depthTest:false, transparent:true, opacity:.8 }));
+const mLine = new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(), new T.Vector3()]), new T.LineBasicMaterial({ color: COL.measure, depthTest:false }));
+[dotA, dotB, dotSnap, mLine].forEach(o => { o.visible = false; o.renderOrder = 10; scene.add(o); });
+
+/* ---------- player ---------- */
+const player = { pos:new T.Vector3(0, 0, 14), vel:new T.Vector3(), yaw:0, pitch:-0.12, s:1, ts:1, fly:false, onGround:true };
+let SNAP = 0.25, MINOR = 1;
+const keys = {};
+let jumpQueued = false, btnUp = false, btnDown = false, scaleHold = 0;
+const stick = { x:0, y:0 };
+
+const ray = new T.Raycaster(), ray2 = new T.Raycaster();
+const V0 = new T.Vector2(0,0), DOWN = new T.Vector3(0,-1,0), tmp = new T.Vector3();
+
+function snapTo(v){ return r6(Math.round(v / SNAP) * SNAP); }
+
+function floorAt(x, y, z){
+  ray2.set(tmp.set(x, y, z), DOWN); ray2.far = 1e6;
+  const h = ray2.intersectObjects(meshes, false);
+  return Math.max(h.length ? h[0].point.y : -Infinity, 0);
+}
+function blocked(dir, dist){
+  const s = player.s, o = new T.Vector3();
+  for (const hh of [0.55*s, 1.45*s]){
+    o.set(player.pos.x, player.pos.y + hh, player.pos.z);
+    ray2.set(o, dir); ray2.far = dist + 0.3*s;
+    if (ray2.intersectObjects(meshes, false).length) return true;
+  }
+  return false;
+}
+const AX = { px:new T.Vector3(1,0,0), nx:new T.Vector3(-1,0,0), pz:new T.Vector3(0,0,1), nz:new T.Vector3(0,0,-1) };
+
+function updateMove(dt){
+  const s = player.s, k = keys;
+  let ix = ((k.KeyD||k.ArrowRight)?1:0) - ((k.KeyA||k.ArrowLeft)?1:0) + stick.x;
+  let iz = ((k.KeyW||k.ArrowUp)?1:0) - ((k.KeyS||k.ArrowDown)?1:0) + stick.y;
+  const il = Math.hypot(ix, iz); if (il > 1){ ix /= il; iz /= il; }
+  const sp = 4.5 * s * ((k.ShiftLeft||k.ShiftRight) ? 2.5 : 1);
+  const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
+  if (player.fly){
+    const cp = Math.cos(player.pitch), spch = Math.sin(player.pitch);
+    const up = ((k.Space||btnUp)?1:0) - ((k.KeyC||k.ControlLeft||btnDown)?1:0);
+    player.pos.x += (-sy*cp*iz + cy*ix) * sp * dt;
+    player.pos.z += (-cy*cp*iz - sy*ix) * sp * dt;
+    player.pos.y += (spch*iz + up) * sp * dt;
+    player.vel.set(0,0,0); jumpQueued = false;
+    return;
+  }
+  const dx = (-sy*iz + cy*ix) * sp * dt, dz = (-cy*iz - sy*ix) * sp * dt;
+  if (dx && !blocked(dx > 0 ? AX.px : AX.nx, Math.abs(dx))) player.pos.x += dx;
+  if (dz && !blocked(dz > 0 ? AX.pz : AX.nz, Math.abs(dz))) player.pos.z += dz;
+  if (jumpQueued && player.onGround) player.vel.y = 5.1 * s;
+  jumpQueued = false;
+  player.vel.y -= 22 * s * dt;
+  player.pos.y += player.vel.y * dt;
+  const fl = floorAt(player.pos.x, player.pos.y + 0.45*s, player.pos.z);
+  if (player.pos.y <= fl){ player.pos.y = fl; player.vel.y = 0; player.onGround = true; }
+  else player.onGround = (player.pos.y - fl) < 0.02*s && player.vel.y <= 0;
+}
+
+function updateScale(dt){
+  if (keys.Equal || keys.NumpadAdd || keys.BracketRight) player.ts *= Math.exp(1.3*dt);
+  if (keys.Minus || keys.NumpadSubtract || keys.BracketLeft) player.ts *= Math.exp(-1.3*dt);
+  if (scaleHold) player.ts *= Math.exp(1.3*dt*scaleHold);
+  player.ts = Math.min(50, Math.max(0.02, player.ts));
+  const a = Math.log(player.s), b = Math.log(player.ts);
+  player.s = Math.exp(a + (b - a) * (1 - Math.exp(-dt * 9)));
+  const s = player.s;
+  MINOR = Math.pow(10, Math.round(Math.log10(s)));
+  SNAP = MINOR / 4;
+  camera.near = Math.max(0.0005, 0.02 * s);
+  camera.far = Math.min(30000, Math.max(80, 6000 * s));
+  camera.updateProjectionMatrix();
+  const fd = 0.012 / Math.max(s, 0.12);
+  scene.fog.density = fd; gridU.uFog.value = fd; gridU.uSp.value = MINOR;
+}
+
+/* ---------- aiming ---------- */
+let aimHit = null;
+function aim(exclude){
+  ray.setFromCamera(V0, camera); ray.far = camera.far;
+  const list = [ground]; for (const m of meshes) if (m.userData.fid !== exclude) list.push(m);
+  const h = ray.intersectObjects(list, false)[0];
+  if (!h) return null;
+  if (h.object === ground) return { point:h.point.clone(), normal:new T.Vector3(0,1,0), fid:null, dist:h.distance };
+  return { point:h.point.clone(), normal:h.face.normal.clone(), fid:h.object.userData.fid, dist:h.distance };
+}
+function faceOf(f, n){
+  if (f.type === 'box'){
+    if (Math.abs(n.x) > .9) return n.x > 0 ? '+x' : '-x';
+    if (Math.abs(n.y) > .9) return n.y > 0 ? '+y' : '-y';
+    return n.z > 0 ? '+z' : '-z';
+  }
+  if (n.y > .9) return '+y'; if (n.y < -.9) return '-y'; return 'side';
+}
+const FACE_NAME = {'+x':'right face','-x':'left face','+y':'top face','-y':'bottom face','+z':'front face','-z':'back face','side':'side'};
+function faceDim(f, face){
+  if (face === 'side') return ['radius', f.p.r];
+  if (face[1] === 'x') return ['width', f.p.w];
+  if (face[1] === 'z') return ['depth', f.p.d];
+  return ['height', f.p.h];
+}
+function pushFace(f, face, amt){
+  const p = f.p, mn = SNAP;
+  const grow = (key, sign, posKey) => { const nv = Math.max(mn, p[key] + amt); if (posKey) p[posKey] = r6(p[posKey] + sign*(nv - p[key])/2); p[key] = r6(nv); };
+  switch (face){
+    case '+x': grow('w', 1, 'x'); break; case '-x': grow('w', -1, 'x'); break;
+    case '+z': grow('d', 1, 'z'); break; case '-z': grow('d', -1, 'z'); break;
+    case '+y': p.h = r6(Math.max(mn, p.h + amt)); break;
+    case '-y': { const nh = Math.max(mn, p.h + amt); p.y = r6(p.y - (nh - p.h)); p.h = r6(nh); break; }
+    case 'side': p.r = r6(Math.max(mn/2, p.r + amt)); break;
+  }
+}
+function placement(h, dims){
+  const n = h.normal, p = h.point, f = h.fid != null ? feat(h.fid) : null;
+  let x, y, z;
+  if (n.y > .5){ x = snapTo(p.x); z = snapTo(p.z); y = f ? f.p.y + f.p.h : 0; }
+  else if (n.y < -.5){ x = snapTo(p.x); z = snapTo(p.z); y = (f ? f.p.y : p.y) - dims.h; }
+  else if (f && f.type === 'cyl'){ x = p.x + n.x*dims.w/2; z = p.z + n.z*dims.d/2; y = f.p.y; }
+  else if (Math.abs(n.x) > Math.abs(n.z)){ x = (f ? f.p.x + Math.sign(n.x)*f.p.w/2 : p.x) + Math.sign(n.x)*dims.w/2; z = snapTo(p.z); y = f ? f.p.y : 0; }
+  else { z = (f ? f.p.z + Math.sign(n.z)*f.p.d/2 : p.z) + Math.sign(n.z)*dims.d/2; x = snapTo(p.x); y = f ? f.p.y : 0; }
+  return { x:r6(x), y:r6(y), z:r6(z) };
+}
+function placeDims(type){
+  if (type === 'box') return pickBox || { w:MINOR, d:MINOR, h:MINOR };
+  const c = pickCyl || { r:MINOR/2, h:MINOR };
+  return { w:2*c.r, d:2*c.r, h:c.h, r:c.r };
+}
+function snapPoint(h){
+  if (!h) return null;
+  const f = h.fid != null ? feat(h.fid) : null;
+  if (f){
+    const p = f.p, pts = [];
+    if (f.type === 'box'){
+      for (const sx of [-1,1]) for (const sz of [-1,1]) for (const yy of [p.y, p.y+p.h]) pts.push(new T.Vector3(p.x+sx*p.w/2, yy, p.z+sz*p.d/2));
+      pts.push(new T.Vector3(p.x, p.y+p.h, p.z));
+    } else {
+      for (const yy of [p.y, p.y+p.h]){ pts.push(new T.Vector3(p.x, yy, p.z)); for (let i=0;i<4;i++){ const a=i*Math.PI/2; pts.push(new T.Vector3(p.x+Math.cos(a)*p.r, yy, p.z+Math.sin(a)*p.r)); } }
+    }
+    let best = null, bd = 0.22 * player.s;
+    for (const q of pts){ const d = q.distanceTo(h.point); if (d < bd){ bd = d; best = q; } }
+    if (best) return { p:best, snapped:'corner' };
+  } else {
+    const q = new T.Vector3(snapTo(h.point.x), 0, snapTo(h.point.z));
+    if (q.distanceTo(h.point) < 0.2 * player.s) return { p:q, snapped:'grid' };
+  }
+  return { p:h.point.clone(), snapped:null };
+}
+
+/* ---------- actions ---------- */
+const tool = () => TOOLS[toolIdx].id;
+let holdTimer = null, holdInt = null;
+function press(pri){
+  act(pri, false);
+  if (tool() === 'push' && pushLock){
+    stopHold();
+    holdTimer = setTimeout(() => { holdInt = setInterval(() => act(pri, true), 70); }, 300);
+  }
+}
+function stopHold(){ clearTimeout(holdTimer); clearInterval(holdInt); holdTimer = holdInt = null; }
+
+function act(pri, repeat){
+  const h = aimHit, t = tool();
+  const hf = h && h.fid != null ? feat(h.fid) : null;
+  switch (t){
+    case 'select':
+      if (pri){ selected = hf ? hf.id : null; renderPanel(); if (hf) toast(`${hf.name} selected`); }
+      else if (hf){ const d = dimsOf(hf); player.ts = Math.min(50, Math.max(0.02, Math.max(d.w, d.d, d.h) / (TALL * 1.6))); toast(`Sized to ${hf.name}`); }
+      break;
+    case 'push': {
+      let L = repeat ? pushLock : (hf ? { fid:hf.id, face:faceOf(hf, h.normal) } : null);
+      if (!L){ pushLock = null; if (!repeat) toast('Aim at a face of a part'); return; }
+      const f = feat(L.fid); if (!f) return;
+      if (!repeat){ commit(); pushLock = L; }
+      pushFace(f, L.face, pri ? SNAP : -SNAP);
+      rebuild();
+      break;
+    }
+    case 'box': case 'cyl': {
+      if (pri){
+        if (!h) return;
+        const d = placeDims(t), pl = placement(h, d);
+        commit();
+        const f = { id:nextId(), type:t, name:nextName(t), p: t === 'box' ? { x:pl.x, z:pl.z, y:pl.y, w:d.w, d:d.d, h:d.h } : { x:pl.x, z:pl.z, y:pl.y, r:d.r, h:d.h } };
+        features.push(f); rebuild(); toast(`${f.name} placed`);
+      } else {
+        if (!hf){ if (t === 'box') pickBox = null; else pickCyl = null; toast('Size back to auto'); return; }
+        const d = dimsOf(hf);
+        if (t === 'box') pickBox = { w:d.w, d:d.d, h:d.h }; else pickCyl = { r:Math.min(d.w, d.d)/2, h:d.h };
+        toast(`Size copied from ${hf.name}`);
+      }
+      break;
+    }
+    case 'move':
+      if (grabbed != null){
+        if (pri){ const f = feat(grabbed); grabbed = null; rebuild(); if (f) toast(`${f.name} dropped`); }
+        else { const f = feat(grabbed); if (f && grabOrig) f.p = grabOrig; grabbed = null; past.pop(); rebuild(); toast('Move cancelled'); }
+        return;
+      }
+      if (!hf) return;
+      commit();
+      if (pri){ grabbed = hf.id; grabOrig = { ...hf.p }; }
+      else { const c = JSON.parse(JSON.stringify(hf)); c.id = nextId(); c.name = nextName(c.type); features.push(c); rebuild(); grabbed = c.id; grabOrig = { ...c.p }; toast(`${c.name} copied`); }
+      break;
+    case 'measure':
+      if (!pri){ mA = mB = null; return; }
+      { const sp = snapPoint(h); if (!sp) return;
+        if (!mA || mB){ mA = sp.p.clone(); mB = null; } else { mB = sp.p.clone(); } }
+      break;
+    case 'erase':
+      if (!pri){ undo(); return; }
+      if (!hf) return;
+      commit(); features = features.filter(f => f !== hf); rebuild(); toast(`${hf.name} deleted`);
+      break;
+  }
+}
+function deleteSelected(){
+  const f = selected != null ? feat(selected) : null; if (!f) return;
+  commit(); features = features.filter(x => x !== f); selected = null; rebuild(); toast(`${f.name} deleted`);
+}
+function duplicateSelected(){
+  const f = selected != null ? feat(selected) : null; if (!f) return;
+  commit(); const c = JSON.parse(JSON.stringify(f)); c.id = nextId(); c.name = nextName(c.type);
+  c.p.x = r6(c.p.x + dimsOf(f).w + SNAP); features.push(c); selected = c.id; rebuild(); toast(`${c.name} added`);
+}
+
+/* ---------- HUD ---------- */
+const el = { name:$('#toolName'), ico:$('#toolIco'), hint:$('#toolHint'), read:$('#readout'), aim:$('#aim'), cross:$('#cross'),
+  mout:$('#measureOut'), toast:$('#toast'), paused:$('#paused'), chip:$('#toolChip'), fly:$('#bFly'), panelB:$('#bPanel'),
+  fireI:$('#tFireI'), fireL:$('#tFireL'), altL:$('#tAltL'), jumpL:$('#tJumpL'), down:$('#tDown') };
+const cache = new Map();
+function setHTML(node, s){ if (cache.get(node) !== s){ cache.set(node, s); node.innerHTML = s; } }
+let toastT = null;
+function toast(msg){ el.toast.textContent = msg; el.toast.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.toast.classList.remove('show'), 1600); }
+
+let isTouchUI = matchMedia('(pointer: coarse)').matches;
+function setTouchUI(on){ if (isTouchUI === on) return; isTouchUI = on; body.classList.toggle('touch', on); refreshTool(); }
+body.classList.toggle('touch', isTouchUI);
+
+function refreshTool(){
+  const t = TOOLS[toolIdx];
+  el.name.textContent = t.name;
+  el.ico.innerHTML = ICON[t.id];
+  el.fireI.innerHTML = ICON[t.id];
+  el.fireL.textContent = t.priS; el.altL.textContent = t.altS;
+  const a = isTouchUI ? 'Fire' : 'LMB', b = isTouchUI ? 'Alt' : 'RMB';
+  el.hint.innerHTML = `<b>${a}</b> ${t.pri} · <b>${b}</b> ${t.alt}`;
+  el.chip.classList.remove('flash'); void el.chip.offsetWidth; el.chip.classList.add('flash');
+  renderWheel();
+}
+function setTool(i){
+  if (i < 0 || i >= TOOLS.length) return;
+  if (grabbed != null){ grabbed = null; rebuild(); }
+  stopHold(); pushLock = null; toolIdx = i; refreshTool();
+}
+function setFly(on){
+  player.fly = on; el.fly.setAttribute('aria-pressed', on); el.jumpL.textContent = on ? 'up' : 'jump'; el.down.hidden = !on;
+  toast(on ? 'Fly on · through walls' : 'Walking');
+}
+
+function updateHUD(){
+  const s = player.s, p = player.pos;
+  const dec = Math.min(4, Math.max(2, Math.ceil(-Math.log10(SNAP)) + 1));
+  setHTML(el.read, `<span class="k">${fmtLen(TALL*s)}</span> tall · grid ${fmtLen(MINOR)} · snap ${fmtLen(SNAP)} · ${player.fly ? 'FLY' : 'WALK'}<br>X ${p.x.toFixed(dec)}  Y ${p.y.toFixed(dec)}  Z ${p.z.toFixed(dec)}`);
+
+  const h = aimHit, t = tool(), hf = h && h.fid != null ? feat(h.fid) : null;
+  let lab = '';
+  if (t === 'select') lab = hf ? hf.name : '';
+  else if (t === 'push'){
+    const L = holdInt && pushLock ? pushLock : (hf ? { fid:hf.id, face:faceOf(hf, h.normal) } : null);
+    const f = L && feat(L.fid);
+    if (f){ const [dn, dv] = faceDim(f, L.face); lab = `${f.name} · ${FACE_NAME[L.face]} · ${dn} ${fmtLen(dv)}`; }
+  }
+  else if (t === 'box' || t === 'cyl'){ const d = placeDims(t); lab = 'Place ' + (t === 'box' ? fmtDims(d) : fmtDims({ r:d.r, h:d.h })) + ((t==='box'?pickBox:pickCyl) ? '' : ' (auto)'); }
+  else if (t === 'move'){ const g = grabbed != null && feat(grabbed); lab = g ? `Moving ${g.name}` : (hf ? `Grab ${hf.name}` : ''); }
+  else if (t === 'measure'){ const sp = snapPoint(h); lab = sp && sp.snapped ? sp.snapped : ''; if (mA && !mB && sp) lab = (lab ? lab + ' · ' : '') + fmtLen(mA.distanceTo(sp.p)); }
+  else if (t === 'erase') lab = hf ? `Delete ${hf.name}` : '';
+  setHTML(el.aim, lab);
+  el.cross.classList.toggle('on', !!hf || grabbed != null);
+
+  if (mA && mB){
+    const d = mB.clone().sub(mA), dd = Math.min(4, Math.max(2, Math.ceil(-Math.log10(SNAP)) + 1));
+    setHTML(el.mout, `<b>${fmtLen(d.length())}</b>ΔX ${d.x.toFixed(dd)}  ΔY ${d.y.toFixed(dd)}  ΔZ ${d.z.toFixed(dd)}`);
+    el.mout.hidden = false;
+  } else el.mout.hidden = true;
+}
+
+function updateVisuals(){
+  const t = tool(), h = aimHit, s = player.s;
+  const hoverId = h && h.fid != null && ['select','push','move','erase'].includes(t) ? h.fid : null;
+  for (const m of meshes){
+    const id = m.userData.fid;
+    m.material.emissiveIntensity = (id === selected || id === grabbed) ? 0.32 : (id === hoverId ? (t === 'erase' ? 0.3 : 0.13) : 0);
+  }
+  // live move
+  if (grabbed != null){
+    const f = feat(grabbed), m = meshById.get(grabbed);
+    if (f && m && h){ const pl = placement(h, dimsOf(f)); f.p.x = pl.x; f.p.y = pl.y; f.p.z = pl.z; m.position.set(pl.x, pl.y + f.p.h/2, pl.z); }
+  }
+  // ghost
+  ghostBox.visible = ghostCyl.visible = false;
+  if ((t === 'box' || t === 'cyl') && h){
+    const d = placeDims(t), pl = placement(h, d), g = t === 'box' ? ghostBox : ghostCyl;
+    g.visible = true; g.position.set(pl.x, pl.y + d.h/2, pl.z); g.scale.set(d.w, d.h, d.d);
+  }
+  // face highlight
+  hlBox.visible = hlCyl.visible = false;
+  if (t === 'push'){
+    const L = holdInt && pushLock ? pushLock : (h && h.fid != null ? { fid:h.fid, face:faceOf(feat(h.fid), h.normal) } : null);
+    const f = L && feat(L.fid);
+    if (f){
+      const p = f.p, e = 0.003*s, th = 0.006*s, cy = p.y + p.h/2;
+      if (f.type === 'box'){
+        hlBox.visible = true;
+        const sx = L.face[0] === '+' ? 1 : -1;
+        if (L.face[1] === 'x'){ hlBox.position.set(p.x + sx*(p.w/2 + e), cy, p.z); hlBox.scale.set(th, p.h, p.d); }
+        else if (L.face[1] === 'z'){ hlBox.position.set(p.x, cy, p.z + sx*(p.d/2 + e)); hlBox.scale.set(p.w, p.h, th); }
+        else { hlBox.position.set(p.x, sx > 0 ? p.y + p.h + e : p.y - e, p.z); hlBox.scale.set(p.w, th, p.d); }
+      } else {
+        hlCyl.visible = true;
+        if (L.face === 'side'){ hlCyl.position.set(p.x, cy, p.z); hlCyl.scale.set(2*p.r + 2*e, p.h, 2*p.r + 2*e); }
+        else { hlCyl.position.set(p.x, L.face === '+y' ? p.y + p.h + e : p.y - e, p.z); hlCyl.scale.set(2*p.r, th, 2*p.r); }
+      }
+    }
+  }
+  // measure
+  const ds = 0.035 * s;
+  const sp = t === 'measure' ? snapPoint(h) : null;
+  dotSnap.visible = !!(sp && sp.snapped); if (dotSnap.visible){ dotSnap.position.copy(sp.p); dotSnap.scale.setScalar(ds*0.8); }
+  dotA.visible = !!mA; if (mA){ dotA.position.copy(mA); dotA.scale.setScalar(ds); }
+  dotB.visible = !!mB; if (mB){ dotB.position.copy(mB); dotB.scale.setScalar(ds); }
+  const end = mB || (mA && sp ? sp.p : null);
+  mLine.visible = !!(mA && end);
+  if (mLine.visible){ const a = mLine.geometry.attributes.position; a.setXYZ(0, mA.x, mA.y, mA.z); a.setXYZ(1, end.x, end.y, end.z); a.needsUpdate = true; mLine.geometry.computeBoundingSphere(); }
+}
+
+/* ---------- panel ---------- */
+const panel = $('#panel'), paramSec = $('#paramSec'), treeEl = $('#tree');
+let panelOpen = window.innerWidth >= 900;
+function setPanel(on){ panelOpen = on; panel.hidden = !on; body.classList.toggle('panel-open', on); el.panelB.setAttribute('aria-pressed', on); }
+const FIELDS = {
+  box: [['x','X','m'],['z','Z','m'],['y','Base Y','m'],['w','Width','m'],['d','Depth','m'],['h','Height','m']],
+  cyl: [['x','X','m'],['z','Z','m'],['y','Base Y','m'],['r','Radius','m'],['h','Height','m']],
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function renderPanel(){
+  const f = selected != null ? feat(selected) : null;
+  if (f){
+    paramSec.innerHTML = `<h2>Parameters <span>${f.type === 'box' ? 'box' : 'cylinder'} #${f.id}</span></h2>
+      <div class="params">
+        <div class="field wide"><label for="p-name">Name</label><div class="in"><input id="p-name" data-k="name" value="${esc(f.name)}"></div></div>
+        ${FIELDS[f.type].map(([k, l, u]) => `<div class="field"><label for="p-${k}">${l}</label><div class="in"><input id="p-${k}" data-k="${k}" inputmode="decimal" value="${+f.p[k].toFixed(4)}"><span class="u">${u}</span></div></div>`).join('')}
+      </div>
+      <div class="acts"><button class="pbtn" type="button" data-act="dup">Duplicate</button><button class="pbtn danger" type="button" data-act="del">Delete</button><button class="pbtn" type="button" data-act="desel">Deselect</button></div>`;
+  } else {
+    paramSec.innerHTML = `<h2>Parameters</h2><p class="empty">No part selected. Use <b>Select</b> (key 1) and aim at a part, or pick one from the tree below.</p>`;
+  }
+  $('#treeCount').textContent = `${features.length} parts`;
+  treeEl.innerHTML = features.map((g, i) => `<li><button type="button" data-fid="${g.id}" aria-current="${g.id === selected}">${ICON[g.type]}<span class="nm">${esc(g.name)}</span><span class="dm">${summary(g)}</span></button></li>`).join('');
+}
+panel.addEventListener('change', e => {
+  const inp = e.target.closest('input[data-k]'); if (!inp) return;
+  const f = feat(selected); if (!f) return;
+  const k = inp.dataset.k;
+  if (k === 'name'){ const v = inp.value.trim(); if (v){ commit(); f.name = v; rebuild(); } else renderPanel(); return; }
+  const v = parseFloat(inp.value.replace(',', '.'));
+  const positive = ['w','d','h','r'].includes(k);
+  if (!isFinite(v) || (positive && v <= 0)){ toast(positive ? 'Size must be greater than 0' : 'Enter a number'); renderPanel(); return; }
+  commit(); f.p[k] = r6(v); rebuild();
+});
+panel.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('input')) e.target.blur(); });
+let resetArm = null;
+panel.addEventListener('click', e => {
+  const row = e.target.closest('[data-fid]');
+  if (row){ selected = +row.dataset.fid; renderPanel(); return; }
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const a = b.dataset.act;
+  if (a === 'dup') duplicateSelected();
+  else if (a === 'del') deleteSelected();
+  else if (a === 'desel'){ selected = null; renderPanel(); }
+  else if (a === 'json'){
+    const txt = JSON.stringify(features, null, 2), out = $('#jsonOut');
+    const fallback = () => { out.hidden = false; out.value = txt; out.focus(); out.select(); toast('Select and copy the JSON below'); };
+    try { navigator.clipboard.writeText(txt).then(() => toast('Model JSON copied'), fallback); } catch(err){ fallback(); }
+  }
+  else if (a === 'reset'){
+    if (!resetArm){ b.textContent = 'Click again to reset'; resetArm = setTimeout(() => { resetArm = null; b.textContent = 'Reset sample'; }, 3000); return; }
+    clearTimeout(resetArm); resetArm = null; b.textContent = 'Reset sample';
+    commit(); features = sample(); selected = null; rebuild(); toast('Sample model restored');
+  }
+});
+
+/* ---------- wheel ---------- */
+const wheel = $('#wheel'), ring = $('#ring');
+let wheelOpen = false, wheelHover = -1; const wv = { x:0, y:0 };
+const wItems = TOOLS.map((t, i) => {
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'wi'; b.dataset.i = i;
+  b.innerHTML = `${ICON[t.id]}<span>${t.name.replace(' / ', '/')}</span><span class="kk">${i+1}</span>`;
+  b.addEventListener('click', ev => { ev.stopPropagation(); setTool(i); closeWheel(false); });
+  b.addEventListener('pointerenter', () => { wheelHover = i; renderWheel(); });
+  ring.appendChild(b); return b;
+});
+function layoutWheel(){
+  const R = ring.clientWidth * 0.36, c = ring.clientWidth / 2;
+  wItems.forEach((b, i) => { const a = -Math.PI/2 + i * 2*Math.PI / TOOLS.length; b.style.left = (c + Math.cos(a)*R) + 'px'; b.style.top = (c + Math.sin(a)*R) + 'px'; });
+}
+function renderWheel(){
+  wItems.forEach((b, i) => { b.classList.toggle('hov', i === wheelHover); b.classList.toggle('cur', i === toolIdx); });
+  const t = TOOLS[wheelHover >= 0 ? wheelHover : toolIdx];
+  $('#wcT').textContent = t.name; $('#wcD').textContent = `${t.pri}\n· ${t.alt}`.replace('\n', ' ');
+}
+function openWheel(){ if (wheelOpen) return; wheelOpen = true; wv.x = wv.y = 0; wheelHover = -1; wheel.hidden = false; layoutWheel(); renderWheel(); stopHold(); }
+function closeWheel(commitSel){ if (!wheelOpen) return; if (commitSel && wheelHover >= 0) setTool(wheelHover); wheelOpen = false; wheel.hidden = true; }
+function wheelFromVec(x, y){
+  if (Math.hypot(x, y) < 28) return;
+  let a = Math.atan2(y, x) + Math.PI/2; if (a < 0) a += 2*Math.PI;
+  const i = Math.round(a / (2*Math.PI / TOOLS.length)) % TOOLS.length;
+  if (i !== wheelHover){ wheelHover = i; renderWheel(); }
+}
+wheel.addEventListener('click', () => closeWheel(false));
+el.chip.addEventListener('click', () => { if (!started) return; wheelOpen ? closeWheel(false) : openWheel(); });
+
+/* ---------- input ---------- */
+let started = false, locked = false, noLock = false, drag = null;
+function lock(){
+  try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => { noLock = true; }); } catch(e){ noLock = true; }
+}
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; body.classList.toggle('locked', locked); if (!locked) stopHold(); });
+document.addEventListener('pointerlockerror', () => { noLock = true; });
+function look(dx, dy, k){ player.yaw -= dx*k; player.pitch = Math.max(-1.55, Math.min(1.55, player.pitch - dy*k)); }
+
+document.addEventListener('mousemove', e => {
+  if (!locked) { if (wheelOpen && !isTouchUI){ const r = ring.getBoundingClientRect(); wheelFromVec(e.clientX - r.left - r.width/2, e.clientY - r.top - r.height/2); } return; }
+  if (wheelOpen){ wv.x += e.movementX; wv.y += e.movementY; const l = Math.hypot(wv.x, wv.y); if (l > 120){ wv.x *= 120/l; wv.y *= 120/l; } wheelFromVec(wv.x, wv.y); return; }
+  look(e.movementX, e.movementY, 0.0022);
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'mouse'){ touchDown(e); return; }
+  setTouchUI(false);
+  if (!started) return;
+  canvas.focus();
+  if (wheelOpen){ closeWheel(true); return; }
+  if (!locked && !noLock){ lock(); return; }
+  if (locked){ if (e.button === 0) press(true); else if (e.button === 2) press(false); return; }
+  drag = { id:e.pointerId, x:e.clientX, y:e.clientY, moved:0, btn:e.button };
+  canvas.setPointerCapture(e.pointerId);
+});
+document.addEventListener('mouseup', () => stopHold());
+canvas.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'mouse'){ touchMove(e); return; }
+  if (drag && drag.id === e.pointerId){ const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy); look(dx, dy, 0.004); }
+});
+canvas.addEventListener('pointerup', e => {
+  if (e.pointerType !== 'mouse'){ touchUp(e); return; }
+  if (drag && drag.id === e.pointerId){ if (drag.moved < 5) act(drag.btn !== 2, false); drag = null; }
+});
+canvas.addEventListener('pointercancel', e => { if (e.pointerType !== 'mouse') touchUp(e); drag = null; });
+canvas.addEventListener('wheel', e => { e.preventDefault(); if (!started) return; player.ts = Math.min(50, Math.max(0.02, player.ts * Math.exp(-e.deltaY * 0.0015))); }, { passive:false });
+
+/* touch: left = floating stick, right = look */
+let stickT = null; const lookT = new Map();
+const stickEl = $('#stick'), knob = $('#knob');
+function touchDown(e){
+  setTouchUI(true);
+  if (!started) return;
+  canvas.setPointerCapture(e.pointerId);
+  const x = e.clientX, y = e.clientY;
+  if (!stickT && x < innerWidth * 0.45 && y > innerHeight * 0.3){
+    stickT = { id:e.pointerId, x0:x, y0:y };
+    stickEl.hidden = false; stickEl.style.transform = `translate(${x}px,${y}px)`; knob.style.transform = '';
+  } else lookT.set(e.pointerId, { x, y });
+}
+function touchMove(e){
+  if (stickT && stickT.id === e.pointerId){
+    let dx = e.clientX - stickT.x0, dy = e.clientY - stickT.y0; const l = Math.hypot(dx, dy), R = 50;
+    if (l > R){ dx *= R/l; dy *= R/l; }
+    stick.x = dx / R; stick.y = -dy / R; knob.style.transform = `translate(${dx}px,${dy}px)`;
+  } else if (lookT.has(e.pointerId)){
+    const t = lookT.get(e.pointerId); look(e.clientX - t.x, e.clientY - t.y, 0.0055); t.x = e.clientX; t.y = e.clientY;
+  }
+}
+function touchUp(e){
+  if (stickT && stickT.id === e.pointerId){ stickT = null; stick.x = stick.y = 0; stickEl.hidden = true; }
+  lookT.delete(e.pointerId);
+}
+function holdBtn(id, down, up){
+  const b = $(id);
+  b.addEventListener('pointerdown', e => { e.preventDefault(); setTouchUI(e.pointerType !== 'mouse' || isTouchUI); b.classList.add('held'); try { b.setPointerCapture(e.pointerId); } catch(_){} down(); });
+  const end = () => { if (!b.classList.contains('held')) return; b.classList.remove('held'); up && up(); };
+  b.addEventListener('pointerup', end); b.addEventListener('pointercancel', end); b.addEventListener('lostpointercapture', end);
+  b.addEventListener('contextmenu', e => e.preventDefault());
+}
+holdBtn('#tFire', () => press(true), stopHold);
+holdBtn('#tAlt', () => press(false), stopHold);
+holdBtn('#tJump', () => { if (player.fly) btnUp = true; else jumpQueued = true; }, () => { btnUp = false; });
+holdBtn('#tDown', () => { btnDown = true; }, () => { btnDown = false; });
+holdBtn('#tGrow', () => { player.ts = Math.min(50, player.ts * 1.12); scaleHold = 1; }, () => { scaleHold = 0; });
+holdBtn('#tShrink', () => { player.ts = Math.max(0.02, player.ts / 1.12); scaleHold = -1; }, () => { scaleHold = 0; });
+
+$('#bUndo').addEventListener('click', undo);
+$('#bRedo').addEventListener('click', redo);
+el.fly.addEventListener('click', () => setFly(!player.fly));
+el.panelB.addEventListener('click', () => setPanel(!panelOpen));
+
+window.addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('input,textarea')) return;
+  if (!started){ if (e.code === 'Enter') start(); return; }
+  if (e.code === 'Escape' && wheelOpen){ closeWheel(false); return; }
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY'){ e.preventDefault(); redo(); return; }
+  if (e.ctrlKey || e.metaKey) return;
+  keys[e.code] = true;
+  if (/^Digit[1-7]$/.test(e.code)){ setTool(+e.code.slice(5) - 1); return; }
+  switch (e.code){
+    case 'KeyQ': if (!e.repeat) openWheel(); break;
+    case 'KeyF': if (!e.repeat) setFly(!player.fly); break;
+    case 'KeyR': player.ts = 1; toast('Back to 1:1'); break;
+    case 'Space': e.preventDefault(); if (!player.fly && !e.repeat) jumpQueued = true; break;
+    case 'Tab': e.preventDefault(); setPanel(!panelOpen); break;
+    case 'Delete': case 'Backspace': e.preventDefault(); deleteSelected(); break;
+    case 'ArrowUp': case 'ArrowDown': case 'ArrowLeft': case 'ArrowRight': e.preventDefault(); break;
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; if (e.code === 'KeyQ') closeWheel(true); });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; stopHold(); scaleHold = 0; });
+
+function start(){
+  started = true; body.classList.add('started'); $('#start').hidden = true;
+  if (!isTouchUI){ canvas.focus(); lock(); }
+}
+$('#goBtn').addEventListener('click', start);
+document.querySelectorAll('.keys').forEach(d => d.style.display = '');
+
+/* ---------- loop ---------- */
+function resize(){
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
+  if (wheelOpen) layoutWheel();
+}
+window.addEventListener('resize', resize);
+
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  updateScale(dt);
+  if (started && !wheelOpen) updateMove(dt);
+  camera.position.set(player.pos.x, player.pos.y + EYE * player.s, player.pos.z);
+  camera.rotation.set(player.pitch, player.yaw, 0);
+  camera.updateMatrixWorld();
+  ground.position.set(camera.position.x, 0, camera.position.z);
+  gridU.uCam.value.copy(camera.position);
+  aimHit = started ? aim(grabbed) : null;
+  updateVisuals();
+  updateHUD();
+  el.paused.hidden = !(started && !isTouchUI && !locked && !noLock);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+rebuild();
+setPanel(panelOpen);
+refreshTool();
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+
+</html>
