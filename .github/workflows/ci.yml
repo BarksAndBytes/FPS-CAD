@@ -29,19 +29,19 @@ jobs:
 
       - name: Build Open CASCADE
         if: steps.occt.outputs.cache-hit != 'true'
-        run: tools/build_occt.sh "${{ runner.temp }}/occt" linux
+        run: tools/ci_run.sh tools/build_occt.sh "${{ runner.temp }}/occt" linux
 
       - name: Build core, CLI, tests and extension
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="${{ runner.temp }}/occt" \
             -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
-          cmake --build build -j
+          tools/ci_run.sh cmake --build build -j
 
       - name: Core tests
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/occt/lib
-        run: ctest --test-dir build --output-on-failure
+        run: tools/ci_run.sh ctest --test-dir build --output-on-failure
 
       - name: Round-trip the sample files through the CLI
         env:
@@ -51,8 +51,8 @@ jobs:
           build/core/fpcad sample out/pavilion.fpprt
           build/core/fpcad sample-assembly out/pins.fpasm
           for f in step igs stl 3mf; do
-            build/core/fpcad export out/pavilion.fpprt out/pavilion.$f
-            build/core/fpcad export out/pins.fpasm out/pins.$f
+            tools/ci_run.sh build/core/fpcad export out/pavilion.fpprt out/pavilion.$f
+            tools/ci_run.sh build/core/fpcad export out/pins.fpasm out/pins.$f
           done
 
       - name: Stage Open CASCADE beside the extension
@@ -64,7 +64,7 @@ jobs:
           unzip -q godot.zip
           GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
           $GODOT --headless --path godot --import || true
-          $GODOT --headless --path godot --script res://tests/smoke_test.gd
+          tools/ci_run.sh $GODOT --headless --path godot --script res://tests/smoke_test.gd
 
       - uses: actions/upload-artifact@v4
         with:
@@ -88,20 +88,20 @@ jobs:
       - name: Build Open CASCADE
         if: steps.occt.outputs.cache-hit != 'true'
         shell: bash
-        run: tools/build_occt.sh "$(cygpath -m '${{ runner.temp }}')/occt" windows
+        run: tools/ci_run.sh tools/build_occt.sh "$(cygpath -m '${{ runner.temp }}')/occt" windows
       - name: Build core, CLI, tests and extension
         shell: bash
         run: |
           OCCT="$(cygpath -m '${{ runner.temp }}')/occt"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$OCCT" \
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$OCCT" \
             -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
-          cmake --build build -j
+          tools/ci_run.sh cmake --build build -j
       - name: Core tests
         shell: bash
         run: |
           OCCT="$(cygpath -u '${{ runner.temp }}')/occt"
           export PATH="$OCCT/win64/vc14/bin:$OCCT/bin:$PATH"
-          ctest --test-dir build --output-on-failure
+          tools/ci_run.sh ctest --test-dir build --output-on-failure
       - name: Stage Open CASCADE beside the extension
         shell: bash
         run: python tools/stage_occt.py --occt "$(cygpath -m '${{ runner.temp }}')/occt" --platform windows
@@ -125,19 +125,17 @@ jobs:
           key: occt-${{ env.OCCT_TAG }}-android-arm64-v1
       - name: Build Open CASCADE
         if: steps.occt.outputs.cache-hit != 'true'
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
-        run: tools/build_occt.sh "${{ runner.temp }}/occt-android" android
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" tools/ci_run.sh tools/build_occt.sh "${{ runner.temp }}/occt-android" android
       - name: Build core and extension
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_shared \
             -DCMAKE_FIND_ROOT_PATH="${{ runner.temp }}/occt-android" \
             -DCMAKE_PREFIX_PATH="${{ runner.temp }}/occt-android" \
             -DFPCAD_BUILD_TESTS=OFF -DFPCAD_BUILD_CLI=OFF \
             -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
-          cmake --build build -j
+          tools/ci_run.sh cmake --build build -j
       - name: Stage Open CASCADE and libc++ beside the extension
         run: |
           LIBCXX=$(find "$ANDROID_NDK_LATEST_HOME" -path "*aarch64-linux-android/libc++_shared.so" | head -1)
