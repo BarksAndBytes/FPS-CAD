@@ -5,6 +5,9 @@
 
 include(FetchContent)
 set(GODOTCPP_DISABLE_EXCEPTIONS OFF CACHE BOOL "" FORCE)  # the core reports errors with exceptions
+# Use the shared C++ runtime like Open CASCADE does, so one runtime serves the whole process
+# (on Windows a static one clashes with the core at link time).
+set(GODOTCPP_USE_STATIC_CPP OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(godot_cpp
   GIT_REPOSITORY https://github.com/godotengine/godot-cpp.git
   GIT_TAG godot-4.5-stable
