@@ -44,8 +44,13 @@ set_target_properties(fpcad_gdext PROPERTIES
   PREFIX "lib"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/godot/bin"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/godot/bin"
-  BUILD_RPATH "$ORIGIN"
+  BUILD_WITH_INSTALL_RPATH TRUE
   INSTALL_RPATH "$ORIGIN")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Open CASCADE's own libraries carry no search path, so ask for an old-style DT_RPATH: unlike
+  # DT_RUNPATH it also applies when those libraries load each other from beside the extension.
+  target_link_options(fpcad_gdext PRIVATE "-Wl,--disable-new-dtags")
+endif()
 foreach(cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
   set_target_properties(fpcad_gdext PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY_${cfg} "${CMAKE_SOURCE_DIR}/godot/bin"
