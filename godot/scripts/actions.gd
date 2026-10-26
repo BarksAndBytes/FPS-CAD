@@ -98,9 +98,9 @@ func prompt(action: StringName) -> String:
 
 ## Replaces an action's binding for one device kind and saves it.
 func rebind(action: StringName, event: InputEvent) -> void:
-	var pad := event is InputEventJoypadButton or event is InputEventJoypadMotion
+	var pad: bool = event is InputEventJoypadButton or event is InputEventJoypadMotion
 	for e in InputMap.action_get_events(action):
-		var e_pad := e is InputEventJoypadButton or e is InputEventJoypadMotion
+		var e_pad: bool = e is InputEventJoypadButton or e is InputEventJoypadMotion
 		if e_pad == pad:
 			InputMap.action_erase_event(action, e)
 	InputMap.action_add_event(action, event)

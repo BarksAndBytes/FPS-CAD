@@ -159,7 +159,7 @@ func _move(dt: float) -> void:
 	if input_enabled:
 		mv = Input.get_vector(&"move_left", &"move_right", &"move_back", &"move_forward") + move_from_touch
 	mv = mv.limit_length(1.0)
-	var sprinting := sprint_toggled or Input.is_action_pressed(&"sprint_hold")
+	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold")
 	var speed := WALK_SPEED * size * (SPRINT if sprinting else 1.0)
 	var fwd := Vector3(-sin(yaw), 0, -cos(yaw))
 	var right := Vector3(cos(yaw), 0, -sin(yaw))

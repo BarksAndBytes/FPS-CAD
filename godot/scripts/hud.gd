@@ -142,7 +142,7 @@ func _ready() -> void:
 
 
 func _on_chip_input(e: InputEvent) -> void:
-	var tapped := (e is InputEventMouseButton or e is InputEventScreenTouch) and e.pressed
+	var tapped: bool = (e is InputEventMouseButton or e is InputEventScreenTouch) and e.pressed
 	if tapped:
 		request.emit("open_wheel", null)
 

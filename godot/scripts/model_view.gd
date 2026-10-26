@@ -208,7 +208,7 @@ func highlight(body: int, feature_id: String, face: int, size: float) -> void:
 	var lift := 0.002 * size
 	for t in tri_faces.size():
 		var f := tri_faces[t]
-		var take := f == face if face >= 0 else (f < face_features.size() and face_features[f] == feature_id)
+		var take: bool = f == face if face >= 0 else (f < face_features.size() and face_features[f] == feature_id)
 		if not take:
 			continue
 		for k in 3:

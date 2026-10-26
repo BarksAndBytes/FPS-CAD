@@ -20,11 +20,11 @@ func _initialize() -> void:
 	var watchdog := Timer.new()
 	watchdog.wait_time = 120.0
 	watchdog.one_shot = true
+	watchdog.autostart = true  # the root is not in the tree yet during _initialize
 	watchdog.timeout.connect(func():
 		printerr("FAIL smoke test timed out (last check above)")
 		quit(1))
 	root.add_child(watchdog)
-	watchdog.start()
 	_run.call_deferred()
 
 

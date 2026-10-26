@@ -163,7 +163,7 @@ func _aim_hit() -> Dictionary:
 func _process(dt: float) -> void:
 	if doc == null:
 		return
-	var playing := started and not hud.panel_open and not hud.menu_open
+	var playing: bool = started and not hud.panel_open and not hud.menu_open
 	player.input_enabled = playing and not wheel.visible
 	view.follow(player.camera.global_position, player.size)
 	_aim = _aim_hit() if started else {}
@@ -193,7 +193,7 @@ func _gameplay_input() -> void:
 		wheel.open(tools.index)
 		return
 	# The click that captures the mouse should not also fire the tool.
-	var mouse_free := Actions.last_device == "keyboard" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
+	var mouse_free: bool = Actions.last_device == "keyboard" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
 	if Input.is_action_just_pressed(&"primary") and not mouse_free:
 		tools.press(true)
 	elif Input.is_action_just_released(&"primary"):
@@ -253,7 +253,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _update_mouse_mode() -> void:
-	var want_free := not started or hud.panel_open or hud.menu_open or Actions.last_device == "touch" \
+	var want_free: bool = not started or hud.panel_open or hud.menu_open or Actions.last_device == "touch" \
 		or (wheel.visible and _wheel_from_button)
 	if want_free and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE

@@ -149,7 +149,7 @@ func place_base(hit: Dictionary, id: String) -> Vector3:
 
 func _act(primary: bool, repeat: bool) -> void:
 	var hit := aim
-	var on_feature := not hit.is_empty() and not hit.get("ground", false) and hit.get("feature_id", "") != ""
+	var on_feature: bool = not hit.is_empty() and not hit.get("ground", false) and hit.get("feature_id", "") != ""
 	match tool().id:
 		"select":
 			if primary:
@@ -340,7 +340,7 @@ func _update_preview(hit: Dictionary) -> void:
 	view.show_ghost("", Vector3.ZERO, {})
 	if not is_assembly:
 		view.highlight_component(-1)
-	var on_feature := not hit.is_empty() and not hit.get("ground", false)
+	var on_feature: bool = not hit.is_empty() and not hit.get("ground", false)
 	match id:
 		"select", "delete":
 			if on_feature:
