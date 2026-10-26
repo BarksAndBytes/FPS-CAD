@@ -1,0 +1,26 @@
+# Build trees
+/build*/
+/.occt-src/
+/out/
+/export/
+
+# Built extension and staged Open CASCADE libraries (produced by CI or tools/stage_occt.py)
+/godot/bin/*.so
+/godot/bin/*.so.*
+/godot/bin/*.dll
+/godot/bin/*.dylib
+/godot/bin/*.lib
+/godot/bin/*.exp
+/godot/bin/*.pdb
+
+# Godot
+/godot/.godot/
+/godot/export_credentials.cfg
+*.import
+*.uid
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
