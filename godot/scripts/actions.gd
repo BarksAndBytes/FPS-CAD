@@ -50,8 +50,12 @@ func _ready() -> void:
 	_button(&"redo", JOY_BUTTON_DPAD_RIGHT); _chord(&"redo", KEY_Z, true); _chord(&"redo", KEY_Y, false)
 	_keys(&"delete_selected", [KEY_DELETE])
 
-	# Menus
-	_keys(&"model_panel", [KEY_TAB]); _button(&"model_panel", JOY_BUTTON_BACK)
+	# Menus. Godot's built-in ui_accept and ui_cancel have no controller buttons (keyboard only),
+	# so without these A and B do nothing in menus.
+	_button(&"ui_accept", JOY_BUTTON_A)
+	_button(&"ui_cancel", JOY_BUTTON_B)
+	_keys(&"model_panel", [KEY_TAB])
+	_keys(&"controller_map", [KEY_F1]); _button(&"controller_map", JOY_BUTTON_BACK)
 	_keys(&"menu", [KEY_ESCAPE]); _button(&"menu", JOY_BUTTON_START)
 	_keys(&"screenshot", [KEY_F12]); _button(&"screenshot", JOY_BUTTON_MISC1)
 
@@ -79,15 +83,24 @@ func prompt(action: StringName) -> String:
 		&"primary": "RT", &"secondary": "LT", &"tool_wheel": "RB", &"context_wheel": "LB",
 		&"jump": "A", &"crouch": "B", &"finish": "X", &"inspect": "Y", &"grow": "D-pad ↑",
 		&"shrink": "D-pad ↓", &"undo": "D-pad ←", &"redo": "D-pad →", &"model_panel": "View",
-		&"menu": "Menu", &"precision_aim": "R3", &"sprint_toggle": "L3",
+		&"menu": "Menu", &"precision_aim": "R3", &"sprint_toggle": "L3", &"controller_map": "View",
+		&"ui_accept": "A", &"ui_cancel": "B", &"move": "Left stick", &"look": "Right stick",
+		&"inspect_panel": "Y",
 	}
 	const KEYS := {
 		&"primary": "LMB", &"secondary": "RMB", &"tool_wheel": "Q", &"context_wheel": "E",
 		&"jump": "Space", &"crouch": "C", &"finish": "Enter", &"inspect": "I", &"grow": "=",
 		&"shrink": "−", &"undo": "Ctrl+Z", &"redo": "Ctrl+Shift+Z", &"model_panel": "Tab",
 		&"menu": "Esc", &"precision_aim": "Alt", &"sprint_toggle": "Shift", &"toggle_fly": "F",
+		&"controller_map": "F1", &"ui_accept": "Enter", &"ui_cancel": "Esc", &"move": "WASD",
+		&"look": "Mouse", &"inspect_panel": "Tab",
 	}
-	const TOUCH := {&"primary": "Fire", &"secondary": "Alt", &"tool_wheel": "Tool", &"jump": "Jump"}
+	const TOUCH := {
+		&"primary": "Fire", &"secondary": "Alt", &"tool_wheel": "Tool", &"jump": "Jump",
+		&"grow": "+", &"shrink": "−", &"controller_map": "Controls", &"menu": "Menu",
+		&"ui_accept": "Tap", &"ui_cancel": "Back", &"move": "Left thumb", &"look": "Right thumb",
+		&"inspect_panel": "Model", &"undo": "Undo", &"context_wheel": "Tool chip",
+	}
 	match last_device:
 		"controller":
 			return PAD.get(action, String(action))
@@ -115,6 +128,8 @@ func _load_rebinds() -> void:
 	if cfg.load(BINDINGS_PATH) != OK:
 		return
 	for action in cfg.get_section_keys("bindings"):
+		if action.begins_with("ui_"):
+			continue  # menu navigation stays fixed so a bad remap cannot lock players out
 		var events: Array = cfg.get_value("bindings", action, [])
 		if not InputMap.has_action(action) or events.is_empty():
 			continue

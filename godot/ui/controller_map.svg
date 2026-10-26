@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720">
+  <!--
+    FPS-CAD controller map. The game rasterizes the shapes and draws every <text> itself:
+    class="lbl" texts are callouts (data-key in the accent colour, then data-desc), class="glyph"
+    texts are button letters. Keep attributes in the order x, y, text-anchor, data-key, data-desc
+    so the game's parser can read them.
+  -->
+  <rect width="1200" height="720" fill="#1b2129"/>
+
+  <!-- Triggers and bumpers -->
+  <path d="M 330 212 C 350 176, 405 162, 452 166 L 458 204 C 412 200, 372 210, 344 228 Z" fill="#3a4553" stroke="#6c7a8c" stroke-width="2"/>
+  <path d="M 870 212 C 850 176, 795 162, 748 166 L 742 204 C 788 200, 828 210, 856 228 Z" fill="#3a4553" stroke="#6c7a8c" stroke-width="2"/>
+  <path d="M 286 262 C 322 222, 398 206, 474 208 L 476 230 C 404 228, 344 242, 304 274 Z" fill="#46525f" stroke="#6c7a8c" stroke-width="2"/>
+  <path d="M 914 262 C 878 222, 802 206, 726 208 L 724 230 C 796 228, 856 242, 896 274 Z" fill="#46525f" stroke="#6c7a8c" stroke-width="2"/>
+
+  <!-- Body -->
+  <path d="M 420 236 C 500 218, 700 218, 780 236 C 880 252, 930 300, 950 380 C 975 470, 990 560, 960 615 C 935 660, 870 660, 840 620 C 800 565, 760 520, 700 515 L 500 515 C 440 520, 400 565, 360 620 C 330 660, 265 660, 240 615 C 210 560, 225 470, 250 380 C 270 300, 320 252, 420 236 Z" fill="#2a323d" stroke="#6c7a8c" stroke-width="2.5"/>
+
+  <!-- Left stick -->
+  <circle cx="430" cy="330" r="44" fill="#1f262e" stroke="#6c7a8c" stroke-width="2"/>
+  <circle cx="430" cy="330" r="28" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+
+  <!-- D-pad -->
+  <path d="M 483 405 h 34 v 18 h 18 v 34 h -18 v 18 h -34 v -18 h -18 v -34 h 18 Z" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+
+  <!-- Right stick -->
+  <circle cx="700" cy="440" r="44" fill="#1f262e" stroke="#6c7a8c" stroke-width="2"/>
+  <circle cx="700" cy="440" r="28" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+
+  <!-- Face buttons -->
+  <circle cx="790" cy="288" r="19" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+  <circle cx="748" cy="330" r="19" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+  <circle cx="832" cy="330" r="19" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+  <circle cx="790" cy="372" r="19" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+
+  <!-- Centre buttons: guide (unlabelled), View, Menu, Share -->
+  <circle cx="600" cy="268" r="18" fill="#1f262e" stroke="#6c7a8c" stroke-width="1.5"/>
+  <rect x="551" y="322" width="28" height="18" rx="9" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+  <rect x="621" y="322" width="28" height="18" rx="9" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+  <rect x="590" y="360" width="20" height="12" rx="6" fill="#3a4553" stroke="#8a96a8" stroke-width="1.5"/>
+
+  <!-- Leader lines -->
+  <g fill="none" stroke="#ff8a3d" stroke-width="1.6" stroke-linecap="round">
+    <polyline points="380,186 300,150 250,150"/>
+    <polyline points="320,250 270,212 250,212"/>
+    <polyline points="386,330 250,330"/>
+    <polyline points="465,440 250,440"/>
+    <polyline points="820,186 900,150 950,150"/>
+    <polyline points="880,250 930,212 950,212"/>
+    <polyline points="809,288 860,270 950,270"/>
+    <polyline points="851,330 950,330"/>
+    <polyline points="809,372 860,390 950,390"/>
+    <polyline points="748,349 760,380 760,500 950,500"/>
+    <polyline points="700,484 700,560 950,560"/>
+    <polyline points="565,322 565,110 540,110"/>
+    <polyline points="635,322 635,110 660,110"/>
+    <polyline points="600,372 600,680"/>
+  </g>
+  <g fill="#ff8a3d">
+    <circle cx="380" cy="186" r="3.5"/><circle cx="320" cy="250" r="3.5"/><circle cx="386" cy="330" r="3.5"/>
+    <circle cx="465" cy="440" r="3.5"/><circle cx="820" cy="186" r="3.5"/><circle cx="880" cy="250" r="3.5"/>
+    <circle cx="809" cy="288" r="3.5"/><circle cx="851" cy="330" r="3.5"/><circle cx="809" cy="372" r="3.5"/>
+    <circle cx="748" cy="349" r="3.5"/><circle cx="700" cy="484" r="3.5"/><circle cx="565" cy="322" r="3.5"/>
+    <circle cx="635" cy="322" r="3.5"/><circle cx="600" cy="372" r="3.5"/>
+  </g>
+
+  <!-- Button letters -->
+  <g font-family="Chakra Petch, sans-serif" font-size="20" font-weight="600" fill="#e8edf3">
+    <text class="glyph" x="790" y="295" text-anchor="middle">Y</text>
+    <text class="glyph" x="748" y="337" text-anchor="middle">X</text>
+    <text class="glyph" x="832" y="337" text-anchor="middle">B</text>
+    <text class="glyph" x="790" y="379" text-anchor="middle">A</text>
+  </g>
+
+  <!-- Callouts -->
+  <g font-family="IBM Plex Sans, sans-serif" font-size="20" fill="#e8edf3">
+    <text class="lbl" x="242" y="157" text-anchor="end" data-key="LT" data-desc="Secondary action"><tspan fill="#ff8a3d" font-weight="600">LT</tspan>  Secondary action</text>
+    <text class="lbl" x="242" y="219" text-anchor="end" data-key="LB" data-desc="Tool option"><tspan fill="#ff8a3d" font-weight="600">LB</tspan>  Tool option</text>
+    <text class="lbl" x="242" y="320" text-anchor="end" data-key="L stick" data-desc="Move"><tspan fill="#ff8a3d" font-weight="600">L stick</tspan>  Move</text>
+    <text class="lbl" x="242" y="346" text-anchor="end" data-key="Click" data-desc="Sprint"><tspan fill="#ff8a3d" font-weight="600">Click</tspan>  Sprint</text>
+    <text class="lbl" x="242" y="430" text-anchor="end" data-key="D-pad ↑↓" data-desc="Grow / shrink"><tspan fill="#ff8a3d" font-weight="600">D-pad ↑↓</tspan>  Grow / shrink</text>
+    <text class="lbl" x="242" y="456" text-anchor="end" data-key="←→" data-desc="Undo / redo"><tspan fill="#ff8a3d" font-weight="600">←→</tspan>  Undo / redo</text>
+    <text class="lbl" x="958" y="157" text-anchor="start" data-key="RT" data-desc="Primary action"><tspan fill="#ff8a3d" font-weight="600">RT</tspan>  Primary action</text>
+    <text class="lbl" x="958" y="219" text-anchor="start" data-key="RB" data-desc="Hold: tool wheel"><tspan fill="#ff8a3d" font-weight="600">RB</tspan>  Hold: tool wheel</text>
+    <text class="lbl" x="958" y="277" text-anchor="start" data-key="Y" data-desc="Inspect parameters"><tspan fill="#ff8a3d" font-weight="600">Y</tspan>  Inspect parameters</text>
+    <text class="lbl" x="958" y="337" text-anchor="start" data-key="B" data-desc="Back · crouch / fly down"><tspan fill="#ff8a3d" font-weight="600">B</tspan>  Back · crouch / fly down</text>
+    <text class="lbl" x="958" y="397" text-anchor="start" data-key="A" data-desc="Select · jump / fly up"><tspan fill="#ff8a3d" font-weight="600">A</tspan>  Select · jump / fly up</text>
+    <text class="lbl" x="958" y="507" text-anchor="start" data-key="X" data-desc="Finish operation"><tspan fill="#ff8a3d" font-weight="600">X</tspan>  Finish operation</text>
+    <text class="lbl" x="958" y="554" text-anchor="start" data-key="R stick" data-desc="Look"><tspan fill="#ff8a3d" font-weight="600">R stick</tspan>  Look</text>
+    <text class="lbl" x="958" y="580" text-anchor="start" data-key="Click" data-desc="Precision aim"><tspan fill="#ff8a3d" font-weight="600">Click</tspan>  Precision aim</text>
+    <text class="lbl" x="532" y="117" text-anchor="end" data-key="View" data-desc="This map"><tspan fill="#ff8a3d" font-weight="600">View</tspan>  This map</text>
+    <text class="lbl" x="668" y="117" text-anchor="start" data-key="Menu" data-desc="Pause menu"><tspan fill="#ff8a3d" font-weight="600">Menu</tspan>  Pause menu</text>
+    <text class="lbl" x="600" y="706" text-anchor="middle" data-key="Share" data-desc="Screenshot"><tspan fill="#ff8a3d" font-weight="600">Share</tspan>  Screenshot</text>
+  </g>
+</svg>

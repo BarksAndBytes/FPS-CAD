@@ -38,10 +38,18 @@ network calls for modeling, saving or export.
 | Right bumper (hold) | Tool wheel |
 | Left bumper (hold) | Context wheel (snap modes, mate types, options) |
 | A / B | Jump or fly up / crouch, fly down, back |
-| X / Y | Finish operation / inspect target parameters |
+| A / B in menus | Select / back |
+| X / Y | Finish operation / inspect target parameters (model panel) |
 | D-pad up / down | Grow / shrink (x2 per tap, hold for smooth) |
 | D-pad left / right | Undo / redo |
-| View / Menu | Model panel / file menu |
+| View / Menu | Controls map / pause menu |
+
+## Onboarding
+
+Launch shows three skippable splash cards (studio, technology, "best played with a controller"),
+then the title screen over an orbiting model: Training, Free build, Assembly sandbox, Controls,
+Quit. Training runs on the core's `trainingCourse()` part and checks real game state for each of
+its eleven objectives. Completion is stored in `user://settings.cfg`.
 
 ## Native file layout (`.fpprt`)
 

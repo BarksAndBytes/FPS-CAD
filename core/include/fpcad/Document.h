@@ -76,6 +76,9 @@ struct PartDocument {
   void loadVariables(const Json& j);
 
   static PartDocument sample();  // the pavilion from the v1 prototype, plus a cut and a fillet
+  // The training course: a step to jump onto, a wall with a 30 cm crawl tunnel, a block to push
+  // up and a pad to build on. The tutorial finds features by these names.
+  static PartDocument trainingCourse();
 };
 
 // A rigid placement: translation in metres and a unit quaternion (x, y, z, w).

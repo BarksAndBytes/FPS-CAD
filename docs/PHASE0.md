@@ -24,6 +24,9 @@ offline.
 | Tool wheel, 8 tools, context option, HUD, model panel, file menu | Written | Needs a playtest |
 | Xbox controller mapping and remapping storage | Written | Needs a playtest with a real controller on both platforms |
 | Touch controls (Android fallback) | Written | Needs a phone |
+| Controller works in every menu (A select, B back, focus always visible) | Done | Godot's ui_accept / ui_cancel have no pad buttons by default; bound in `actions.gd`, covered by the smoke test |
+| Splash cards, title screen, training course (11 objectives) | Done | Smoke test drives the first two objectives and the complete card with pad events |
+| Controls map on View / F1 (controller, keyboard, touch pages) | Done | `godot/ui/controller_map.svg` |
 | CI: Linux tests + Godot smoke test, Windows build + tests, Android arm64 build | Done | All green; the smoke test drives the extension and runs the main scene headless |
 | Profile rebuild time and memory on a mid-range Android phone | **Open** | The gate measurement; needs a device |
 | Floating origin and reverse-Z for extreme sizes | **Open** | Single precision is fine to about 10 µm at 10 m; revisit after the phone test |
@@ -33,5 +36,5 @@ offline.
 
 1. On the phone, open the repository's Releases page, download the APK from the **android-dev** pre-release and install it (CI rebuilds it on every push).
 2. Pair an Xbox controller over Bluetooth.
-3. Open the sample, push the roof up and down with RT/LT for 30 seconds while walking.
+3. Play Training once, then open Free build and push the roof up and down with RT/LT for 30 seconds while walking.
 4. Note the frame time (Godot's monitor overlay) and the rebuild time shown in the log.

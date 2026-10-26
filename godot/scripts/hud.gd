@@ -10,12 +10,12 @@ const FG := Color("e8edf3")
 const MUTED := Color("9ba7b6")
 const ACCENT := Color("ff8a3d")
 const MEASURE := Color("ffd166")
+const UiTheme := preload("res://scripts/ui_theme.gd")
 
 var doc: RefCounted
 var units := "mm"
 var panel_open := false
 var menu_open := false
-var started := false
 
 var _tool_name := Label.new()
 var _tool_key := Label.new()
@@ -29,7 +29,7 @@ var _panel := PanelContainer.new()
 var _params := VBoxContainer.new()
 var _tree := VBoxContainer.new()
 var _menu := PanelContainer.new()
-var _start := PanelContainer.new()
+var _menu_col := VBoxContainer.new()
 var _fly_btn := Button.new()
 var _toast_t := 0.0
 var _feature_id := ""
@@ -61,6 +61,8 @@ func _ready() -> void:
 	var chip := _box(ACCENT.darkened(0.55))
 	var chip_col := VBoxContainer.new()
 	chip_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if UiTheme.display_font != null:
+		_tool_name.add_theme_font_override("font", UiTheme.display_font)
 	_tool_name.add_theme_font_size_override("font_size", 20)
 	_tool_name.add_theme_color_override("font_color", FG)
 	_tool_key.add_theme_font_size_override("font_size", 12)
@@ -84,7 +86,7 @@ func _ready() -> void:
 	right.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	right.add_theme_constant_override("separation", 6)
 	margin.add_child(right)
-	for spec in [["Undo", "undo"], ["Redo", "redo"], ["Fly", "fly"], ["Model", "panel"], ["Menu", "menu"]]:
+	for spec in [["Undo", "undo"], ["Redo", "redo"], ["Fly", "fly"], ["Model", "panel"], ["Controls", "controls"], ["Menu", "menu"]]:
 		var b := Button.new()
 		b.text = spec[0]
 		b.focus_mode = Control.FOCUS_NONE
@@ -138,7 +140,6 @@ func _ready() -> void:
 
 	_build_panel(root)
 	_build_menu(root)
-	_build_start(root)
 
 
 func _on_chip_input(e: InputEvent) -> void:
@@ -384,81 +385,43 @@ func _build_menu(root: Control) -> void:
 	sb.set_corner_radius_all(12)
 	sb.set_content_margin_all(18)
 	_menu.add_theme_stylebox_override("panel", sb)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 8)
-	col.custom_minimum_size = Vector2(320, 0)
-	var t := Label.new()
-	t.text = "FILE"
-	t.add_theme_font_size_override("font_size", 18)
-	col.add_child(t)
-	for spec in [
-		["Resume", "resume"], ["Save", "save"], ["Open last saved part", "open_saved"],
-		["New sample part", "sample_part"], ["Open sample assembly", "sample_assembly"],
-		["Export STEP", "export_step"], ["Export IGES", "export_iges"], ["Export STL", "export_stl"],
-		["Export 3MF", "export_3mf"], ["Quit", "quit"]]:
-		var b := Button.new()
-		b.text = spec[0]
-		var action: String = spec[1]
-		b.pressed.connect(func(): request.emit(action, null))
-		col.add_child(b)
-	var note := Label.new()
-	note.text = "Files are saved on this device only."
-	note.add_theme_color_override("font_color", MUTED)
-	note.add_theme_font_size_override("font_size", 12)
-	col.add_child(note)
-	_menu.add_child(col)
+	_menu_col.add_theme_constant_override("separation", 8)
+	_menu_col.custom_minimum_size = Vector2(340, 0)
+	_menu.add_child(_menu_col)
 	_menu.visible = false
 	root.add_child(_menu)
+
+
+## Rebuilds the pause menu: items are [label, action] pairs sent through the request signal.
+func set_menu_items(items: Array) -> void:
+	for c in _menu_col.get_children():
+		_menu_col.remove_child(c)
+		c.queue_free()
+	_menu_col.add_child(UiTheme.title("PAUSED", 22))
+	for spec in items:
+		var b := Button.new()
+		b.text = spec[0]
+		b.custom_minimum_size = Vector2(0, 46)
+		var action: String = spec[1]
+		b.pressed.connect(func(): request.emit(action, null))
+		_menu_col.add_child(b)
+	var note := UiTheme.text("%s select   ·   %s back   ·   files stay on this device" % [
+		Actions.prompt(&"ui_accept"), Actions.prompt(&"ui_cancel")], 13, MUTED)
+	_menu_col.add_child(note)
+
+
+func menu_control() -> Control:
+	return _menu
+
+
+func panel_control() -> Control:
+	return _panel
 
 
 func set_menu(on: bool) -> void:
 	menu_open = on
 	_menu.visible = on
 	if on:
-		var first: Button = _menu.get_child(0).get_child(1)
-		first.call_deferred("grab_focus")
-
-
-# ---------- start screen ----------
-
-func _build_start(root: Control) -> void:
-	_start.set_anchors_preset(Control.PRESET_CENTER)
-	_start.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_start.grow_vertical = Control.GROW_DIRECTION_BOTH
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.09, 0.11, 0.14, 0.97)
-	sb.border_color = LINE
-	sb.set_border_width_all(1)
-	sb.set_corner_radius_all(14)
-	sb.set_content_margin_all(24)
-	_start.add_theme_stylebox_override("panel", sb)
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 12)
-	col.custom_minimum_size = Vector2(min(560, get_viewport().get_visible_rect().size.x - 40), 0)
-	var title := Label.new()
-	title.text = "FPS-CAD"
-	title.add_theme_font_size_override("font_size", 34)
-	col.add_child(title)
-	var body := Label.new()
-	body.autowrap_mode = TextServer.AUTOWRAP_WORD
-	body.add_theme_color_override("font_color", MUTED)
-	body.text = "Walk around a parametric model. Change your size to zoom. Pick tools from the wheel and edit every part by its dimensions."
-	col.add_child(body)
-	var keys := Label.new()
-	keys.autowrap_mode = TextServer.AUTOWRAP_WORD
-	keys.text = ("Controller: left stick move · right stick look · RT / LT tool actions · hold RB tool wheel · "
-		+ "LB tool option · D-pad ↑↓ size, ←→ undo/redo · A jump · Y inspect · View model panel\n"
-		+ "Keyboard: WASD + mouse · LMB / RMB · hold Q wheel · E option · scroll size · F fly · Tab panel · Esc menu")
-	col.add_child(keys)
-	var go := Button.new()
-	go.text = "Enter the model"
-	go.pressed.connect(func(): request.emit("start", null))
-	col.add_child(go)
-	_start.add_child(col)
-	root.add_child(_start)
-	go.call_deferred("grab_focus")
-
-
-func hide_start() -> void:
-	started = true
-	_start.visible = false
+		var first := UiTheme.first_focusable(_menu_col)
+		if first != null:
+			first.grab_focus.call_deferred()

@@ -34,6 +34,12 @@ void CadPart::make_sample() {
   redo_.clear();
 }
 
+void CadPart::make_training() {
+  model_ = std::make_unique<fpcad::PartModel>(fpcad::PartDocument::trainingCourse());
+  undo_.clear();
+  redo_.clear();
+}
+
 void CadPart::new_blank(const String& name, const String& units) {
   fpcad::PartDocument d;
   d.name = str(name);
@@ -432,6 +438,7 @@ Dictionary CadPart::export_file(const String& path, const String& units) {
 
 void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("make_sample"), &CadPart::make_sample);
+  ClassDB::bind_method(D_METHOD("make_training"), &CadPart::make_training);
   ClassDB::bind_method(D_METHOD("new_blank", "name", "units"), &CadPart::new_blank);
   ClassDB::bind_method(D_METHOD("load_file", "path"), &CadPart::load_file);
   ClassDB::bind_method(D_METHOD("save_file", "path"), &CadPart::save_file);

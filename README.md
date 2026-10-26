@@ -42,6 +42,12 @@ Full instructions, including Windows and Android: [docs/BUILDING.md](docs/BUILDI
 
 ## Controls
 
+New players start with **Training** on the title screen: an eleven-step course that teaches
+moving, jumping, shrinking through a 30 cm tunnel, the tool wheel, push/pull, placing a box,
+measuring and the controls map. Press View (F1) at any time for the full map:
+
+![Controller map](godot/ui/controller_map.svg)
+
 | Xbox controller | Keyboard and mouse | Action |
 | --- | --- | --- |
 | Left stick | WASD | Move (L3 toggles sprint; Shift sprints) |
@@ -52,9 +58,10 @@ Full instructions, including Windows and Android: [docs/BUILDING.md](docs/BUILDI
 | D-pad ↑ / ↓ | Scroll, = / − | Grow / shrink (tap ×2, hold for smooth); R resets |
 | D-pad ← / → | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | A / B | Space / C | Jump or fly up / fly down |
-| Y | I | Inspect the target's parameters |
-| View | Tab | Model panel |
-| Menu | Esc | File menu: save, open, export |
+| A / B | Enter / Esc | Select / back in every menu |
+| Y | I, Tab | Inspect the target's parameters (model panel) |
+| View | F1 | Controls map (controller, keyboard and touch pages) |
+| Menu | Esc | Pause menu: controls, save, open, export, exit to title |
 | — | F | Fly through walls |
 
 ## The CLI
