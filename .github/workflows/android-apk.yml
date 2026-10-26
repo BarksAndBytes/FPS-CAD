@@ -96,6 +96,10 @@ jobs:
           GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
           mkdir -p export/android
           timeout 300 $GODOT --headless --path godot --import || true
+          # Godot keeps signing credentials outside export_presets.cfg; hand it the debug keystore.
+          mkdir -p godot/.godot
+          printf '[preset.1]\n\nscript_encryption_key=""\n\n[preset.1.options]\n\nkeystore/debug="%s"\nkeystore/debug_user="androiddebugkey"\nkeystore/debug_password="android"\n' \
+            "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" > godot/.godot/export_credentials.cfg
           java -version
           ls "$ANDROID_SDK_ROOT/build-tools"
           tools/ci_run.sh timeout 600 $GODOT --headless --verbose --path godot --export-debug "Android" "$PWD/export/android/FPS-CAD.apk"
