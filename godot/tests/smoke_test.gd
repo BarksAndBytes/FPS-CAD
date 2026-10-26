@@ -16,6 +16,15 @@ func _check(ok: bool, what: String) -> void:
 
 
 func _initialize() -> void:
+	# A script error inside _run would leave the tree running forever; give up after 2 minutes.
+	var watchdog := Timer.new()
+	watchdog.wait_time = 120.0
+	watchdog.one_shot = true
+	watchdog.timeout.connect(func():
+		printerr("FAIL smoke test timed out (last check above)")
+		quit(1))
+	root.add_child(watchdog)
+	watchdog.start()
 	_run.call_deferred()
 
 

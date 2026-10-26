@@ -64,8 +64,8 @@ jobs:
           curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
           unzip -q godot.zip
           GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
-          $GODOT --headless --path godot --import || true
-          tools/ci_run.sh $GODOT --headless --path godot --script res://tests/smoke_test.gd
+          timeout 300 $GODOT --headless --path godot --import || true
+          tools/ci_run.sh timeout 300 $GODOT --headless --path godot --script res://tests/smoke_test.gd
 
       - uses: actions/upload-artifact@v4
         with:
