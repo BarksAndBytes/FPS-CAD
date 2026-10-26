@@ -5,7 +5,7 @@ name: Android APK
 
 on:
   push:
-    branches: [main, phase-0-foundations]
+    branches: ["**"]
   workflow_dispatch:
 
 permissions:
