@@ -47,6 +47,20 @@ func option() -> String:
 	return "" if opts.is_empty() else opts[options.get(tool().id, 0)]
 
 
+## Clears all per-document state; called when a new mode or document starts.
+func reset() -> void:
+	_grab = {}
+	_push_hit = {}
+	_hold_time = -1.0
+	_measure_a = null
+	_measure_b = null
+	_place_dims = {}
+	options = {}
+	selected = ""
+	aim = {}
+	set_tool(0)
+
+
 func set_tool(i: int) -> void:
 	if i < 0 or i >= TOOLS.size():
 		return

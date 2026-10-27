@@ -139,6 +139,37 @@ PartDocument PartDocument::sample() {
   return d;
 }
 
+PartDocument PartDocument::trainingCourse() {
+  PartDocument d;
+  d.name = "Training course";
+  d.units = "mm";
+  auto box = [&](const char* name, double x, double y, double w, double dd, double h, BodyOp op) {
+    Feature f;
+    f.type = "box";
+    f.name = name;
+    f.op = op;
+    f.params = {{"x", x}, {"y", y}, {"z", 0}, {"w", w}, {"d", dd}, {"h", h}};
+    d.add(f);
+  };
+  // Separate bodies keep each station independent, so editing one never merges it with another.
+  box("Start pad", 0, -12, 4, 4, 0.05, BodyOp::NewBody);
+  box("Step", 0, -6, 5, 2, 0.8, BodyOp::NewBody);  // too high to walk up, low enough to jump
+  box("Wall", 0, 0, 24, 1, 3, BodyOp::NewBody);
+  Feature tunnel;
+  tunnel.type = "extrude";
+  tunnel.name = "Crawl tunnel";
+  tunnel.op = BodyOp::Cut;
+  tunnel.params = {{"plane", {{"origin", {0, 0, 0}}, {"normal", {0, 1, 0}}, {"xdir", {1, 0, 0}}}},
+                   {"profile", {{"kind", "rect"}, {"cx", 0}, {"cy", -0.15}, {"w", 0.3}, {"h", 0.3}}},
+                   {"depth", 3},
+                   {"symmetric", true}};
+  d.add(tunnel);
+  box("Lift block", 3, 5, 1.5, 1.5, 1, BodyOp::NewBody);
+  box("Build pad", -3, 5, 3, 3, 0.05, BodyOp::NewBody);
+  d.viewpoints.push_back({"Start", {0, -14, 0}, 0, -0.12, 1});
+  return d;
+}
+
 Json AssemblyDocument::componentsJson() const {
   Json arr = Json::array();
   for (auto& c : components) {

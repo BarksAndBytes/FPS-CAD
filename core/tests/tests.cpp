@@ -118,6 +118,25 @@ int main() {
     CHECK_NEAR(mp.mass, mp.volume * 2700, 1e-6);
   });
 
+  run("training course builds with an open crawl tunnel", [] {
+    PartModel m(PartDocument::trainingCourse());
+    auto r = m.rebuild();
+    CHECK(r.ok);
+    CHECK(m.bodyCount() == 5);
+    // At 15 cm off the ground the tunnel is open all the way through the wall...
+    CHECK(!m.pick({0, -3, 0.15}, {0, 1, 0}, 6));
+    // ...but at 1 m, or 40 cm to the side, the wall stops you.
+    auto wall = m.pick({0, -3, 1.0}, {0, 1, 0}, 6);
+    CHECK(wall && std::abs(wall->point[1] - (-0.5)) < 1e-6);
+    CHECK(m.pick({0.4, -3, 0.15}, {0, 1, 0}, 6));
+    // The step is 80 cm high and the lift block's top face drives its height.
+    auto step = m.pick({0, -6, 5}, {0, 0, -1});
+    CHECK(step && std::abs(step->point[2] - 0.8) < 1e-6);
+    auto lift = m.pick({3, 5, 5}, {0, 0, -1});
+    auto drive = lift ? m.faceDrive(*lift) : std::nullopt;
+    CHECK(drive && drive->param == "+h" && std::abs(drive->value - 1.0) < 1e-9);
+  });
+
   run("display mesh tags every face with its feature", [] {
     PartModel m(PartDocument::sample());
     m.rebuild();

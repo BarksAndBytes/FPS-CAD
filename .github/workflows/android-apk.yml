@@ -1,0 +1,132 @@
+name: Android APK
+
+# Builds an installable debug APK and publishes it as the "android-dev" pre-release, so the
+# latest build can be downloaded straight to a phone from the repository's Releases page.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+env:
+  OCCT_TAG: V8_0_1
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Cache Open CASCADE (Android)
+        id: occt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/occt-android
+          key: occt-${{ env.OCCT_TAG }}-android-arm64-v1
+
+      - name: Build Open CASCADE
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" tools/ci_run.sh tools/build_occt.sh "${{ runner.temp }}/occt-android" android
+
+      - name: Build the extension for Android
+        run: |
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_shared \
+            -DCMAKE_FIND_ROOT_PATH="${{ runner.temp }}/occt-android" \
+            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/occt-android" \
+            -DFPCAD_BUILD_TESTS=OFF -DFPCAD_BUILD_CLI=OFF \
+            -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
+          tools/ci_run.sh cmake --build build -j
+
+      - name: Stage Open CASCADE and libc++ beside the extension
+        run: |
+          LIBCXX=$(find "$ANDROID_NDK_LATEST_HOME" -path "*aarch64-linux-android/libc++_shared.so" | head -1)
+          python3 tools/stage_occt.py --occt "${{ runner.temp }}/occt-android" --platform android --extra "$LIBCXX"
+          ls -la godot/bin
+
+      - name: Install Godot and its export templates
+        run: |
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          curl -sSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          DEST="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$DEST"
+          unzip -q -j templates.tpz "templates/android_*" "templates/version.txt" -d "$DEST"
+          ls "$DEST"
+
+      - name: Configure Android SDK, Java and a debug keystore
+        run: |
+          KEYSTORE="$RUNNER_TEMP/debug.keystore"
+          keytool -genkeypair -v -keystore "$KEYSTORE" -storepass android -alias androiddebugkey \
+            -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          MAJOR_MINOR=$(echo "$GODOT_VERSION" | cut -d. -f1,2)
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-${MAJOR_MINOR}.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          export/android/java_sdk_path = "$JAVA_HOME_21_X64"
+          export/android/debug_keystore = "$KEYSTORE"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+          # apksigner from recent build-tools needs a current JDK on PATH.
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+
+      - name: Export the APK
+        run: |
+          GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          mkdir -p export/android
+          timeout 300 $GODOT --headless --path godot --import || true
+          # Export unsigned, then align and sign with the SDK tools so any signing error is visible.
+          sed -i 's|^package/signed=.*||; s|^\[preset.1.options\]$|[preset.1.options]\npackage/signed=false|' godot/export_presets.cfg
+          java -version
+          ls "$ANDROID_SDK_ROOT/build-tools"
+          tools/ci_run.sh timeout 600 $GODOT --headless --verbose --path godot --export-debug "Android" "$PWD/export/android/FPS-CAD.apk"
+          test -s export/android/FPS-CAD.apk
+          BT="$ANDROID_SDK_ROOT/build-tools/$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          python3 tools/dedupe_apk.py export/android/FPS-CAD.apk export/android/deduped.apk
+          tools/ci_run.sh "$BT/zipalign" -f -p 4 export/android/deduped.apk export/android/aligned.apk
+          tools/ci_run.sh "$BT/apksigner" sign --ks "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" --ks-pass pass:android \
+            --ks-key-alias androiddebugkey --key-pass pass:android --out export/android/FPS-CAD.apk export/android/aligned.apk
+          tools/ci_run.sh "$BT/apksigner" verify --print-certs export/android/FPS-CAD.apk
+          unzip -l export/android/FPS-CAD.apk | grep -E "lib/arm64-v8a/.*\.so" | tee export/android/libs.txt
+          grep -q libfpcad export/android/libs.txt || { echo "::error::the APK is missing the CAD extension"; exit 1; }
+          cp export/android/FPS-CAD.apk "export/android/FPS-CAD-${GITHUB_SHA::7}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fps-cad-android-apk
+          path: export/android/FPS-CAD.apk
+
+      - name: Publish the android-dev pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-dev --cleanup-tag --yes || true
+          gh release create android-dev "export/android/FPS-CAD-${GITHUB_SHA::7}.apk" \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Android development build (${GITHUB_SHA::7})" \
+            --notes "Debug build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a phone.
+
+          Install: open this page on the phone, download the APK, and allow installs from your browser when Android asks. Android 10 or newer, 64-bit (arm64). Pair an Xbox controller over Bluetooth first, or use the on-screen controls.
+
+          This build is signed with a throwaway debug key, so uninstall it before installing a build signed with a different key."

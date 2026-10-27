@@ -7,6 +7,8 @@
 | [Godot Engine](https://godotengine.org) | Game engine | MIT | Export templates |
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON in native files | MIT | Header-only |
 | [miniz](https://github.com/richgel999/miniz) | ZIP containers (.fpprt, .fpasm, .3mf) | MIT | Statically linked |
+| [Chakra Petch](https://github.com/google/fonts/tree/main/ofl/chakrapetch) | Display font (titles, tool names) | SIL OFL 1.1 | `godot/fonts/`, licence beside it |
+| [IBM Plex Sans](https://github.com/google/fonts/tree/main/ofl/ibmplexsans) | Body font | SIL OFL 1.1 | `godot/fonts/`, licence beside it |
 
 ## LGPL obligations for Open CASCADE
 

@@ -1,17 +1,23 @@
 extends Node3D
 ## Wires the game together: the CAD document (from the C++ extension), the player, the model
-## view, the tools, the HUD, the tool wheel and the touch controls. Owns gameplay input, files
-## and autosave. Everything runs locally; files live in the app's user:// folder.
+## view, the tools, the HUD, the tool wheel, touch controls, the controls map, the splash cards,
+## the title screen and the training course. Owns gameplay input, files and autosave.
+## Everything runs locally; files live in the app's user:// folder.
+##
+## States: "splash" → "title" → "play". Play modes: "training", "free", "assembly".
 
 const PROJECTS := "user://projects"
 const EXPORTS := "user://exports"
 const RECOVERY := "user://recovery/autosave"
 const AUTOSAVE_SECONDS := 120.0
+const UiTheme := preload("res://scripts/ui_theme.gd")
 const ToolsScript := preload("res://scripts/tools.gd")
+const Tutorial := preload("res://scripts/tutorial.gd")
 
 var doc: RefCounted
 var is_assembly := false
-var started := false
+var state := "boot"
+var mode := ""
 var last_saved := ""
 
 var player: Node3D
@@ -20,15 +26,24 @@ var tools: Node
 var hud: CanvasLayer
 var wheel: Control
 var touch: Control
+var cmap: CanvasLayer
+var title: CanvasLayer
+var splash: CanvasLayer
+var tutorial: Node3D
 
 var _aim := {}
 var _autosave_t := 0.0
+var _orbit_t := 0.0
 var _wheel_from_button := false
+var _cmap_from_menu := false
 
 
 func _ready() -> void:
+	UiTheme.apply()
 	for dir in [PROJECTS, EXPORTS, RECOVERY.get_base_dir()]:
 		DirAccess.make_dir_recursive_absolute(dir)
+	if OS.has_feature("mobile"):
+		Actions.last_device = "touch"
 
 	hud = preload("res://scripts/hud.gd").new()
 	add_child(hud)
@@ -36,6 +51,7 @@ func _ready() -> void:
 		hud.toast("The CAD extension did not load. Build it first: see docs/BUILDING.md")
 		push_error("FPS-CAD: CadPart class missing; the GDExtension in godot/bin did not load.")
 		return
+	hud.visible = false
 
 	view = preload("res://scripts/model_view.gd").new()
 	add_child(view)
@@ -65,13 +81,144 @@ func _ready() -> void:
 	touch.action_pressed.connect(_on_touch_pressed)
 	touch.action_released.connect(_on_touch_released)
 
+	cmap = preload("res://scripts/controller_map.gd").new()
+	add_child(cmap)
+	cmap.closed.connect(_on_cmap_closed)
+	title = preload("res://scripts/title.gd").new()
+	add_child(title)
+	title.chosen.connect(_on_title_chosen)
+
 	hud.request.connect(_on_hud_request)
 	Actions.device_changed.connect(_on_device_changed)
-	_on_device_changed(Actions.last_device if not OS.has_feature("mobile") else "touch")
+	_on_device_changed(Actions.last_device)
 
+	_load_background()
+	if "--skip-splash" in OS.get_cmdline_user_args():
+		_show_title()
+	else:
+		state = "splash"
+		splash = preload("res://scripts/splash.gd").new()
+		add_child(splash)
+		splash.finished.connect(_show_title)
+
+
+# ---------- states and modes ----------
+
+## The pavilion, seen from a slow orbit behind the splash and title screens.
+func _load_background() -> void:
 	var part = ClassDB.instantiate(&"CadPart")
 	part.make_sample()
 	_open(part, false)
+	_spawn(Vector3(0, 2.5, 18), 0.0, 1.0)
+	player.fly = true
+
+
+func _show_title() -> void:
+	splash = null
+	state = "title"
+	mode = ""
+	if tutorial != null:
+		tutorial.queue_free()
+		tutorial = null
+	hud.set_menu(false)
+	hud.set_panel(false)
+	hud.visible = false
+	wheel.close(false)
+	player.input_enabled = false
+	if doc == null or is_assembly or doc.get_part_name() != "Pavilion":
+		_load_background()
+	player.fly = true
+	title.show_title(Tutorial.is_done())
+
+
+func _start_mode(m: String) -> void:
+	state = "play"
+	mode = m
+	title.visible = false
+	hud.visible = true
+	player.fly = false
+	if tutorial != null:
+		tutorial.queue_free()
+		tutorial = null
+	var d: RefCounted
+	match m:
+		"training":
+			d = ClassDB.instantiate(&"CadPart")
+			d.make_training()
+			_open(d, false)
+			_spawn(Vector3(0, 0.05, 14), 0.0, 1.0)
+			tutorial = Tutorial.new()
+			tutorial.game = self
+			add_child(tutorial)
+			tutorial.finished.connect(_on_tutorial_finished)
+			tutorial.start()
+		"assembly":
+			d = ClassDB.instantiate(&"CadAssembly")
+			d.make_sample()
+			_open(d, true)
+			_spawn(Vector3(0, 0, 0.35), 0.0, 0.05)  # the pin plate is 200 mm across
+		_:
+			d = ClassDB.instantiate(&"CadPart")
+			d.make_sample()
+			_open(d, false)
+			_spawn(Vector3(0, 0, 14), 0.0, 1.0)
+	tools.reset()
+	hud.set_menu_items(_menu_items())
+	if Actions.last_device == "keyboard":
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _menu_items() -> Array:
+	var items := [["Resume", "resume"], ["Controls", "controls"]]
+	if mode == "training":
+		items.append(["Restart training", "restart_training"])
+	items += [
+		["Save", "save"], ["Open last saved", "open_saved"],
+		["Export STEP", "export_step"], ["Export IGES", "export_iges"],
+		["Export STL", "export_stl"], ["Export 3MF", "export_3mf"],
+		["Exit to title", "title"], ["Quit", "quit"],
+	]
+	return items
+
+
+func _spawn(feet: Vector3, yaw: float, size: float) -> void:
+	player.feet = feet
+	player.yaw = yaw
+	player.pitch = -0.12
+	player.size = size
+	player.target_size = size
+
+
+func _on_title_chosen(id: String) -> void:
+	match id:
+		"controls":
+			cmap.open()
+		"quit":
+			get_tree().quit()
+		_:
+			_start_mode(id)
+
+
+func _on_tutorial_finished(choice: String) -> void:
+	match choice:
+		"free":
+			_start_mode("free")
+		"title":
+			_show_title()
+		_:
+			if tutorial != null:
+				tutorial.queue_free()
+				tutorial = null
+			mode = "free"
+			hud.set_menu_items(_menu_items())
+
+
+func _on_cmap_closed() -> void:
+	if state == "title":
+		title.focus_default()
+	elif _cmap_from_menu:
+		hud.set_menu(true)
+	_cmap_from_menu = false
 
 
 # ---------- documents ----------
@@ -128,7 +275,7 @@ func _export(ext: String) -> void:
 
 
 func _autosave() -> void:
-	if doc == null or not started:
+	if doc == null or state != "play":
 		return
 	var path := RECOVERY + (".fpasm" if is_assembly else ".fpprt")
 	doc.save_file(ProjectSettings.globalize_path(path))
@@ -160,19 +307,32 @@ func _aim_hit() -> Dictionary:
 	return ground if not ground.is_empty() else hit
 
 
+## True while something covers the view and should get the controller instead of the player.
+func modal_open() -> bool:
+	var tutorial_card: bool = tutorial != null and tutorial.is_open_card()
+	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card
+
+
 func _process(dt: float) -> void:
 	if doc == null:
 		return
-	var playing: bool = started and not hud.panel_open and not hud.menu_open
-	player.input_enabled = playing and not wheel.visible
 	view.follow(player.camera.global_position, player.size)
-	_aim = _aim_hit() if started else {}
+	if state != "play":
+		_orbit(dt)
+		if state == "title" and not cmap.visible and Actions.last_device == "controller":
+			title.keep_focus()
+		_update_mouse_mode()
+		return
+	var playing: bool = not modal_open()
+	player.input_enabled = playing and not wheel.visible
+	_aim = _aim_hit()
 	if playing:
 		_gameplay_input()
 	tools.update(_aim if playing else {}, dt)
 	hud.set_readout(player.size, player.grid_step(), player.snap_step(), player.fly, player.feet)
 	hud.set_measure(tools.measure_text())
 	touch.set_fly(player.fly)
+	_keep_focus()
 	_autosave_t += dt
 	if _autosave_t > AUTOSAVE_SECONDS:
 		_autosave_t = 0.0
@@ -180,10 +340,32 @@ func _process(dt: float) -> void:
 	_update_mouse_mode()
 
 
+## Slow orbit around the model behind the splash and title screens.
+func _orbit(dt: float) -> void:
+	_orbit_t += dt * 0.08
+	var r := 18.0
+	player.feet = Vector3(sin(_orbit_t) * r, 2.5, cos(_orbit_t) * r)
+	player.yaw = atan2(player.feet.x, player.feet.z)
+	player.pitch = -0.14
+
+
+## A controller always needs something focused in an open menu, or A and the D-pad do nothing.
+func _keep_focus() -> void:
+	if Actions.last_device != "controller" or cmap.visible:
+		return
+	if hud.menu_open:
+		UiTheme.keep_focus(hud.menu_control())
+	elif tutorial != null and tutorial.is_open_card():
+		tutorial.keep_focus()
+	elif hud.panel_open:
+		UiTheme.keep_focus(hud.panel_control())
+
+
 func _gameplay_input() -> void:
 	if wheel.visible:
 		wheel.aim(Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down"))
-		if not _wheel_from_button and Input.is_action_just_released(&"tool_wheel"):
+		var released: bool = not _wheel_from_button and Input.is_action_just_released(&"tool_wheel")
+		if released or Input.is_action_just_pressed(&"ui_accept"):
 			var i: int = wheel.close(true)
 			if i >= 0:
 				tools.set_tool(i)
@@ -233,27 +415,55 @@ func _gameplay_input() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if state == "title":
+		if event.is_action_pressed(&"controller_map") and not cmap.visible:
+			cmap.open()
+			get_viewport().set_input_as_handled()
+		return
+	if state != "play" or cmap.visible:
+		return  # the splash and the controls map handle their own input
+	if event.is_action_pressed(&"controller_map"):
+		hud.set_panel(false)
+		_cmap_from_menu = hud.menu_open
+		hud.set_menu(false)
+		wheel.close(false)
+		cmap.open()
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed(&"ui_cancel"):
+		var closed := true
+		if hud.menu_open:
+			hud.set_menu(false)
+		elif hud.panel_open:
+			hud.set_panel(false)
+		elif wheel.visible:
+			wheel.close(false)
+		else:
+			closed = false  # B with nothing open is crouch / fly down; Esc falls through to the menu
+		if closed:
+			get_viewport().set_input_as_handled()
+			return
 	if event.is_action_pressed(&"menu"):
-		if not started:
+		if tutorial != null and tutorial.is_open_card():
 			return
 		if hud.panel_open:
 			hud.set_panel(false)
 		else:
 			hud.set_menu(not hud.menu_open)
 		get_viewport().set_input_as_handled()
-	elif event.is_action_pressed(&"model_panel") and started:
+	elif event.is_action_pressed(&"model_panel"):
 		hud.toggle_panel()
 		get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and wheel != null and wheel.visible and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+	elif event is InputEventMouseMotion and wheel.visible and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		wheel.point(event.relative)
-	elif event is InputEventMouseButton and event.pressed and started and not hud.panel_open and not hud.menu_open \
+	elif event is InputEventMouseButton and event.pressed and not modal_open() \
 			and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and Actions.last_device == "keyboard":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED  # first click on the view grabs the mouse
 		get_viewport().set_input_as_handled()
 
 
 func _update_mouse_mode() -> void:
-	var want_free: bool = not started or hud.panel_open or hud.menu_open or Actions.last_device == "touch" \
+	var want_free: bool = state != "play" or modal_open() or Actions.last_device == "touch" \
 		or (wheel.visible and _wheel_from_button)
 	if want_free and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -286,10 +496,12 @@ func _on_device_changed(kind: String) -> void:
 			InputMap.action_add_event(action, mb)
 	if tools != null:
 		_show_tool()
+	if state == "play":
+		hud.set_menu_items(_menu_items())  # prompts in the menu follow the device
 
 
 func _on_touch_pressed(name: String) -> void:
-	if not started:
+	if state != "play":
 		return
 	match name:
 		"primary":
@@ -308,14 +520,8 @@ func _on_touch_released(name: String) -> void:
 
 func _on_hud_request(action: String, arg: Variant) -> void:
 	match action:
-		"start":
-			started = true
-			hud.hide_start()
-			player.input_enabled = true
-			if Actions.last_device == "keyboard":
-				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		"open_wheel":
-			if started:
+			if state == "play":
 				_wheel_from_button = true
 				wheel.open(tools.index)
 		"undo":
@@ -331,8 +537,19 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			hud.toggle_panel()
 		"menu":
 			hud.set_menu(not hud.menu_open)
+		"controls":
+			_cmap_from_menu = hud.menu_open
+			hud.set_menu(false)
+			hud.set_panel(false)
+			cmap.open()
 		"resume":
 			hud.set_menu(false)
+		"restart_training":
+			hud.set_menu(false)
+			_start_mode("training")
+		"title":
+			_autosave()
+			_show_title()
 		"save":
 			_save()
 		"open_saved":
@@ -345,17 +562,6 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 				hud.toast(err)
 				return
 			_open(d, last_saved.ends_with(".fpasm"))
-			hud.set_menu(false)
-		"sample_part":
-			var p = ClassDB.instantiate(&"CadPart")
-			p.make_sample()
-			_open(p, false)
-			hud.set_menu(false)
-		"sample_assembly":
-			var a = ClassDB.instantiate(&"CadAssembly")
-			a.make_sample()
-			player.set_size(0.05)  # the pin plate is 200 mm across
-			_open(a, true)
 			hud.set_menu(false)
 		"export_step":
 			_export("step")

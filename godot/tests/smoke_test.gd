@@ -74,21 +74,104 @@ func _run() -> void:
 	var t: Transform3D = asm.component(1).transform
 	_check(absf(t.origin.y - (-0.020)) < 1e-6, "component placement converts to Y-up")
 
-	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main"]:
+	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main",
+			"ui_theme", "controller_map", "splash", "title", "tutorial"]:
 		var s: Script = load("res://scripts/%s.gd" % script)
 		_check(s != null and s.can_instantiate(), "script %s compiles" % script)
+
+	var course = ClassDB.instantiate(&"CadPart")
+	course.make_training()
+	_check(course.rebuild().ok and course.body_count() == 5, "training course rebuilds")
 
 	if not root.has_node("Actions"):  # autoloads may be skipped in --script mode
 		var actions: Node = load("res://scripts/actions.gd").new()
 		actions.name = "Actions"
 		root.add_child(actions)
+	# Start from a clean save so the title offers Training first.
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://settings.cfg"))
+
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
-	for i in 10:
-		await process_frame
+	await _frames(5)
 	_check(main.doc != null and main.view != null, "main scene runs")
+	_check(main.state == "splash", "launch shows the splash cards")
+
+	await _pad(JOY_BUTTON_START)
+	await _frames(5)
+	_check(main.state == "title" and main.title.visible, "Start skips the splash to the title screen")
+
+	await _frames(3)
+	await _pad(JOY_BUTTON_A)
+	await _frames(5)
+	_check(main.state == "play" and main.mode == "training" and main.tutorial != null,
+		"A on the focused title entry starts Training")
+	_check(main.tutorial.step == 0, "training opens on its first objective")
+
+	for i in 3:  # look around, a bit at a time like a real stick
+		main.player.yaw += 1.5
+		await _frames(2)
+	await _seconds(1.6)
+	_check(main.tutorial.step == 1, "looking around completes objective 1")
+	main.player.feet = Vector3(0, 0.05, 9)  # stand on the walk marker
+	await _seconds(1.6)
+	_check(main.tutorial.step == 2, "reaching the marker completes objective 2")
+
+	await _pad(JOY_BUTTON_START)
+	await _frames(4)
+	_check(main.hud.menu_open, "Start opens the pause menu")
+	var focused: Control = root.get_viewport().gui_get_focus_owner()
+	_check(focused is Button and (focused as Button).text == "Resume", "the pause menu focuses Resume")
+	await _pad(JOY_BUTTON_A)
+	await _frames(4)
+	_check(not main.hud.menu_open, "A presses the focused menu button (Resume)")
+
+	await _pad(JOY_BUTTON_START)
+	await _frames(4)
+	await _pad(JOY_BUTTON_B)
+	await _frames(4)
+	_check(not main.hud.menu_open, "B closes the pause menu")
+
+	await _pad(JOY_BUTTON_BACK)
+	await _frames(6)
+	_check(main.cmap.visible, "View opens the controls map")
+	_check(main.cmap.art_ready(), "the controller art rasterizes and its labels parse")
+	await _pad(JOY_BUTTON_B)
+	await _frames(4)
+	_check(not main.cmap.visible, "B closes the controls map")
+
+	main.tutorial._complete()
+	await _frames(4)
+	focused = root.get_viewport().gui_get_focus_owner()
+	_check(focused is Button and main.tutorial.is_open_card(), "the training complete card takes focus")
+	await _pad(JOY_BUTTON_A)
+	await _frames(4)
+	_check(main.tutorial == null and main.mode == "free", "A on the complete card keeps building")
+	_check(load("res://scripts/tutorial.gd").is_done(), "finishing training is remembered")
+
 	main.queue_free()
 	await process_frame
 
 	print("%d failures" % _failures)
 	quit(1 if _failures > 0 else 0)
+
+
+func _frames(n: int) -> void:
+	for i in n:
+		await process_frame
+
+
+func _seconds(t: float) -> void:
+	await create_timer(t).timeout
+
+
+## Presses and releases a controller button the way a real pad would.
+func _pad(button: JoyButton) -> void:
+	for pressed in [true, false]:
+		var e := InputEventJoypadButton.new()
+		e.device = 0
+		e.button_index = button
+		e.pressed = pressed
+		e.pressure = 1.0 if pressed else 0.0
+		Input.parse_input_event(e)
+		await process_frame
+		await process_frame
