@@ -174,6 +174,19 @@ func _run() -> void:
 	_check(main.tutorial == null and main.mode == "free", "A on the complete card keeps building")
 	_check(load("res://scripts/tutorial.gd").is_done(), "finishing training is remembered")
 
+	main._open_wheel(true)
+	await _frames(2)
+	var screen: Vector2 = root.get_viewport().get_visible_rect().size
+	var wheel_ok: bool = main.wheel.size.is_equal_approx(screen)
+	var mean := Vector2.ZERO
+	for b in main.wheel._slots:
+		mean += b.position + b.size / 2.0
+	mean /= maxi(1, main.wheel._slots.size())
+	_check(wheel_ok and mean.distance_to(screen / 2.0) < 2.0,
+		"the tool wheel fills the screen and is centred (%s, slots around %s)" % [main.wheel.size, mean])
+	_check(main.touch.size.is_equal_approx(screen), "touch controls cover the screen")
+	main.wheel.close(false)
+
 	# ---- the CAD workflow in the game: plane → sketch → dimension → finish → extrude ----
 	main._start_mode("new")
 	await _frames(3)

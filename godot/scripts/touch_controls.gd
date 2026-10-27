@@ -20,7 +20,7 @@ var _stick_knob := Panel.new()
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)  # in the tree already: offsets must follow too
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_stick_base.size = Vector2(120, 120)
 	_stick_knob.size = Vector2(50, 50)
