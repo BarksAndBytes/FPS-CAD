@@ -21,6 +21,8 @@ var _tool_name := Label.new()
 var _tool_key := Label.new()
 var _hint := Label.new()
 var _readout := Label.new()
+var _status := Label.new()
+var _status_box: PanelContainer
 var _aim := Label.new()
 var _cross := Label.new()
 var _toast := Label.new()
@@ -73,12 +75,15 @@ func _ready() -> void:
 	chip.mouse_filter = Control.MOUSE_FILTER_STOP
 	chip.gui_input.connect(_on_chip_input)
 	left.add_child(chip)
-	for l in [_hint, _readout]:
+	for l in [_hint, _status, _readout]:
 		var b := _box(BG)
 		l.add_theme_font_size_override("font_size", 13)
 		l.add_theme_color_override("font_color", MUTED)
 		b.add_child(l)
 		left.add_child(b)
+		if l == _status:
+			_status_box = b
+			b.visible = false
 
 	# Top right: buttons for mouse and touch
 	var right := HBoxContainer.new()
@@ -199,6 +204,13 @@ func set_tool(t: Dictionary, option: String) -> void:
 	_hint.text = "%s %s   ·   %s %s%s" % [Actions.prompt(&"primary"), t.pri, Actions.prompt(&"secondary"), t.alt, opt]
 
 
+## A second line under the tool hint, used for the sketch's state. Empty hides it.
+func set_status(text: String, color: Color = MUTED) -> void:
+	_status_box.visible = text != ""
+	_status.text = text
+	_status.add_theme_color_override("font_color", color)
+
+
 func set_readout(size: float, grid: float, snap: float, fly: bool, feet: Vector3) -> void:
 	_readout.text = "%s tall · grid %s · snap %s · %s\nX %s   Y %s   Z %s" % [
 		length(1.75 * size), length(grid), length(snap), "FLY" if fly else "WALK",
@@ -300,7 +312,17 @@ func refresh_panel() -> void:
 			err.add_theme_color_override("font_color", Color("e0775f"))
 			_params.add_child(err)
 		var params: Dictionary = current.params
-		_add_fields(current.id, params, "")
+		if current.type == "sketch":
+			_sketch_summary(current)
+		elif current.type in ["extrude", "revolve", "sweep", "loft"] and (params.has("sketch") or params.has("sketches")):
+			var edit := Button.new()
+			edit.text = "Edit %s" % current.name
+			var fid: String = current.id
+			edit.pressed.connect(func(): request.emit("edit_feature", fid))
+			_params.add_child(edit)
+			_add_fields(current.id, params, "")
+		else:
+			_add_fields(current.id, params, "")
 		var del := Button.new()
 		del.text = "Delete %s" % current.name
 		del.pressed.connect(func(): request.emit("delete_feature", current.id))
@@ -337,13 +359,32 @@ func refresh_panel() -> void:
 		focus.call_deferred("grab_focus")
 
 
+func _sketch_summary(f: Dictionary) -> void:
+	for v in doc.sketch_views():
+		if v.id != f.id:
+			continue
+		var l := UiTheme.text("On %s · %s · %d closed profile%s%s" % [v.plane_name, v.message, v.regions,
+			"" if v.regions == 1 else "s", " · used" if v.consumed else ""], 14, MUTED)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD
+		_params.add_child(l)
+	var edit := Button.new()
+	edit.text = "Edit sketch"
+	var fid: String = f.id
+	edit.pressed.connect(func(): request.emit("edit_sketch", fid))
+	_params.add_child(edit)
+
+
+## Keys that are references or choices, edited through the feature panel instead of as numbers.
+const SKIP_KEYS := ["target", "edges", "kind", "sketch", "path", "sketches", "direction", "end", "axis", "angle", "planeName"]
+
+
 func _add_fields(id: String, params: Dictionary, prefix: String) -> void:
 	for key in params:
 		var v: Variant = params[key]
 		if v is Dictionary:
 			_add_fields(id, v, prefix + key + ".")
 			continue
-		if v is Array or key == "target" or key == "edges" or key == "kind":
+		if v is Array or v is bool or key in SKIP_KEYS:
 			continue
 		var shown: String = v if v is String else ("%.4f" % (float(v) * (1000.0 if units == "mm" else 1.0))).rstrip("0").rstrip(".")
 		var row := _field(prefix + key, shown)

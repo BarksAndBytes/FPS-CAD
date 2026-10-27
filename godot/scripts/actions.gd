@@ -17,10 +17,10 @@ var last_device := "keyboard"
 
 func _ready() -> void:
 	# Movement and looking
-	_keys(&"move_forward", [KEY_W, KEY_UP]); _axis(&"move_forward", JOY_AXIS_LEFT_Y, -1.0)
-	_keys(&"move_back", [KEY_S, KEY_DOWN]); _axis(&"move_back", JOY_AXIS_LEFT_Y, 1.0)
-	_keys(&"move_left", [KEY_A, KEY_LEFT]); _axis(&"move_left", JOY_AXIS_LEFT_X, -1.0)
-	_keys(&"move_right", [KEY_D, KEY_RIGHT]); _axis(&"move_right", JOY_AXIS_LEFT_X, 1.0)
+	_keys(&"move_forward", [KEY_W]); _axis(&"move_forward", JOY_AXIS_LEFT_Y, -1.0)
+	_keys(&"move_back", [KEY_S]); _axis(&"move_back", JOY_AXIS_LEFT_Y, 1.0)
+	_keys(&"move_left", [KEY_A]); _axis(&"move_left", JOY_AXIS_LEFT_X, -1.0)
+	_keys(&"move_right", [KEY_D]); _axis(&"move_right", JOY_AXIS_LEFT_X, 1.0)
 	_axis(&"look_left", JOY_AXIS_RIGHT_X, -1.0)
 	_axis(&"look_right", JOY_AXIS_RIGHT_X, 1.0)
 	_axis(&"look_up", JOY_AXIS_RIGHT_Y, -1.0)
@@ -54,6 +54,15 @@ func _ready() -> void:
 	# so without these A and B do nothing in menus.
 	_button(&"ui_accept", JOY_BUTTON_A)
 	_button(&"ui_cancel", JOY_BUTTON_B)
+	# Arrow keys belong to menus and the feature panel (WASD walks); the D-pad navigates too.
+	for pair in [[&"ui_up", JOY_BUTTON_DPAD_UP], [&"ui_down", JOY_BUTTON_DPAD_DOWN],
+			[&"ui_left", JOY_BUTTON_DPAD_LEFT], [&"ui_right", JOY_BUTTON_DPAD_RIGHT]]:
+		var has_pad := false
+		for e in InputMap.action_get_events(pair[0]):
+			if e is InputEventJoypadButton and e.button_index == pair[1]:
+				has_pad = true
+		if not has_pad:
+			_button(pair[0], pair[1])
 	_keys(&"model_panel", [KEY_TAB])
 	_keys(&"controller_map", [KEY_F1]); _button(&"controller_map", JOY_BUTTON_BACK)
 	_keys(&"menu", [KEY_ESCAPE]); _button(&"menu", JOY_BUTTON_START)
@@ -85,7 +94,7 @@ func prompt(action: StringName) -> String:
 		&"shrink": "D-pad ↓", &"undo": "D-pad ←", &"redo": "D-pad →", &"model_panel": "View",
 		&"menu": "Menu", &"precision_aim": "R3", &"sprint_toggle": "L3", &"controller_map": "View",
 		&"ui_accept": "A", &"ui_cancel": "B", &"move": "Left stick", &"look": "Right stick",
-		&"inspect_panel": "Y",
+		&"inspect_panel": "Y", &"sketch_tools": "RB", &"normal_to": "Y",
 	}
 	const KEYS := {
 		&"primary": "LMB", &"secondary": "RMB", &"tool_wheel": "Q", &"context_wheel": "E",
@@ -93,7 +102,7 @@ func prompt(action: StringName) -> String:
 		&"shrink": "−", &"undo": "Ctrl+Z", &"redo": "Ctrl+Shift+Z", &"model_panel": "Tab",
 		&"menu": "Esc", &"precision_aim": "Alt", &"sprint_toggle": "Shift", &"toggle_fly": "F",
 		&"controller_map": "F1", &"ui_accept": "Enter", &"ui_cancel": "Esc", &"move": "WASD",
-		&"look": "Mouse", &"inspect_panel": "Tab",
+		&"look": "Mouse", &"inspect_panel": "Tab", &"sketch_tools": "Q", &"normal_to": "I",
 	}
 	const TOUCH := {
 		&"primary": "Fire", &"secondary": "Alt", &"tool_wheel": "Tool", &"jump": "Jump",

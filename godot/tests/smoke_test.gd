@@ -75,9 +75,35 @@ func _run() -> void:
 	_check(absf(t.origin.y - (-0.020)) < 1e-6, "component placement converts to Y-up")
 
 	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main",
-			"ui_theme", "controller_map", "splash", "title", "tutorial"]:
+			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units"]:
 		var s: Script = load("res://scripts/%s.gd" % script)
 		_check(s != null and s.can_instantiate(), "script %s compiles" % script)
+
+	# Sketch → extrude through the bindings alone.
+	var blank = ClassDB.instantiate(&"CadPart")
+	blank.new_blank("Bindings", "mm")
+	var plane: Dictionary = blank.standard_plane("front")
+	var basis: Dictionary = blank.plane_basis(plane.plane)
+	_check(plane.name == "Front" and basis.normal.is_equal_approx(Vector3(0, 0, 1)), "Front plane faces +Z in Godot space")
+	var rect := {plane = plane.plane, planeName = "Front", points = [
+		{id = "b", x = 0.9, y = 0.0}, {id = "c", x = 1.1, y = 0.6}, {id = "d", x = 0.0, y = 0.5}],
+		entities = [{id = "l1", kind = "line", pts = ["o", "b"]}, {id = "l2", kind = "line", pts = ["b", "c"]},
+			{id = "l3", kind = "line", pts = ["c", "d"]}, {id = "l4", kind = "line", pts = ["d", "o"]}],
+		constraints = [{id = "h1", kind = "horizontal", refs = ["l1"]}, {id = "v2", kind = "vertical", refs = ["l2"]},
+			{id = "h3", kind = "horizontal", refs = ["l3"]}, {id = "v4", kind = "vertical", refs = ["l4"]},
+			{id = "w", kind = "distance", refs = ["l1"], value = 1.0}, {id = "h", kind = "distance", refs = ["l2"], value = "500 mm"}]}
+	var solved: Dictionary = blank.solve_sketch(rect)
+	_check(solved.ok and solved.dof == 0, "solve_sketch squares up a dimensioned rectangle (%s)" % solved.message)
+	var sk_id: String = blank.add_sketch(solved.sketch)
+	blank.checkpoint()
+	var ins: Dictionary = blank.insert_feature("extrude", "add", {sketch = sk_id, depth = 0.2})
+	_check(ins.ok and absf(blank.mass_properties().volume - 0.1) < 1e-6, "insert_feature extrudes the sketch")
+	blank.update_feature(ins.id, "", {depth = 0.4})
+	_check(absf(blank.mass_properties().volume - 0.2) < 1e-6, "update_feature changes the preview")
+	blank.abandon()
+	_check(blank.body_count() == 0 and blank.latest_unused_sketch() == sk_id, "abandon removes the preview")
+	var aimed: Dictionary = blank.pick_sketch(Vector3(0.5, 0.25, 5), Vector3(0, 0, -1), 20.0, 0.02, false)
+	_check(aimed.get("feature_id", "") == sk_id and aimed.region == 0, "pick_sketch finds the profile")
 
 	var course = ClassDB.instantiate(&"CadPart")
 	course.make_training()
@@ -147,6 +173,72 @@ func _run() -> void:
 	await _frames(4)
 	_check(main.tutorial == null and main.mode == "free", "A on the complete card keeps building")
 	_check(load("res://scripts/tutorial.gd").is_done(), "finishing training is remembered")
+
+	# ---- the CAD workflow in the game: plane → sketch → dimension → finish → extrude ----
+	main._start_mode("new")
+	await _frames(3)
+	_check(main.mode == "new" and main.doc.get_features().is_empty() and main.tools.tool().id == "sketch",
+		"New part opens blank with the Sketch tool")
+	var top: Dictionary = main.doc.standard_plane("top")
+	main._on_sketch_requested(top.plane, top.name, "")
+	await _frames(2)
+	_check(main.sketcher.active and main.hud.menu_open == false, "sketch mode opens on the Top plane")
+	main.sketcher.set_tool_id("rect")
+	main.sketcher.click_at(Vector2(0, 0))
+	main.sketcher.click_at(Vector2(1, 0.5))
+	_check(main.sketcher.count("line") == 4 and main.sketcher.status.ok and main.sketcher.status.dof == 2,
+		"a rectangle from the origin leaves width and height free (%s)" % main.sketcher.status.get("message", ""))
+	main.sketcher.set_dimension("2000", "distance", ["l1"])
+	main.sketcher.ask_dimension("distance", ["l2"], 0.5)
+	await _frames(2)
+	_check(main.numpad.visible, "the number pad opens for a dimension")
+	for k in ["2", "5", "0", "OK"]:
+		main.numpad._key(k)
+	await _frames(2)
+	_check(not main.numpad.visible and main.sketcher.defined(), "two dimensions fully define the rectangle")
+	_check(not main.sketcher.set_dimension("1000", "distance", ["l3"]), "a conflicting dimension is refused")
+	await _pad(JOY_BUTTON_X)
+	await _frames(3)
+	var feats: Array = main.doc.get_features()
+	_check(not main.sketcher.active and feats.size() == 1 and feats[0].type == "sketch", "X finishes the sketch into the history")
+	_check(main.tools.tool().id == "extrude", "finishing a sketch readies Extrude")
+	var sid: String = feats[0].id
+	main._on_feature_requested("extrude", sid, "add")
+	await _frames(2)
+	_check(main.dialog.visible and main.doc.body_count() == 1, "the extrude panel opens with a live preview")
+	main.dialog.set_value("depth", 0.25)
+	main.dialog.focus = 0
+	await _pad(JOY_BUTTON_DPAD_RIGHT)
+	await _frames(2)
+	_check(absf(float(main.dialog.values.depth) - 0.5) < 1e-9, "D-pad right adds a snap step to the depth")
+	await _pad(JOY_BUTTON_A)
+	await _frames(3)
+	_check(not main.dialog.visible and absf(main.doc.mass_properties().volume - 0.25) < 1e-6,
+		"A accepts: 2 m × 250 mm × 500 mm extrude (%.4f m³)" % main.doc.mass_properties().volume)
+
+	main._on_sketch_requested({}, "", sid)
+	await _frames(2)
+	_check(main.sketcher.active and main.sketcher.edit_id == sid, "a finished sketch opens again for editing")
+	main.sketcher.set_dimension("3000", "distance", ["l1"])
+	main.sketcher.finish()
+	await _frames(2)
+	_check(absf(main.doc.mass_properties().volume - 0.375) < 1e-6, "editing the sketch drives the extrude")
+
+	main._start_mode("new")
+	await _frames(2)
+	var front: Dictionary = main.doc.standard_plane("front")
+	main._on_sketch_requested(front.plane, front.name, "")
+	main.sketcher.set_tool_id("rect")
+	main.sketcher.click_at(Vector2(0.5, 0))
+	main.sketcher.click_at(Vector2(1, 1))
+	main.sketcher.finish()
+	var rid: String = main.doc.latest_unused_sketch()
+	main._on_feature_requested("revolve", rid, "add")
+	await _frames(2)
+	main.dialog.accept()
+	await _frames(2)
+	_check(absf(main.doc.mass_properties().volume - PI * 0.75) < 1e-4,
+		"a revolve about the sketch's Y axis makes a tube (%.4f m³)" % main.doc.mass_properties().volume)
 
 	main.queue_free()
 	await process_frame

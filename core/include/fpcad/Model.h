@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "fpcad/Document.h"
+#include "fpcad/Sketch.h"
 
 class TopoDS_Shape;
 
@@ -72,6 +73,27 @@ struct FaceDrive {
   double value = 0;   // current value in metres
 };
 
+// A sketch as the game draws it: world-space line segments (pairs of points).
+struct SketchView {
+  std::string featureId;
+  std::string name;
+  std::string planeName;
+  bool consumed = false;  // used by a later feature (hidden by default, like most CAD tools)
+  bool ok = true;
+  int dof = 0;
+  int regions = 0;        // closed profiles
+  std::string message;
+  std::vector<Vec3> segments;
+  std::vector<Vec3> constructionSegments;
+};
+
+struct SketchHit {
+  std::string featureId;
+  int region = -1;        // closed profile under the point, or -1 when near a line only
+  Vec3 point{};
+  double distance = 0;
+};
+
 class PartModel {
 public:
   explicit PartModel(PartDocument doc = {});
@@ -106,6 +128,26 @@ public:
 
   // Corner points of one face (for measure snapping), metres.
   std::vector<Vec3> faceVertices(int body, int face) const;
+
+  // ----- Sketches -----
+
+  // Solves a sketch against the part's variables (for live editing before it is committed).
+  SolveResult solve(Sketch& s) const;
+
+  // Every sketch feature after the last rebuild.
+  std::vector<SketchView> sketchViews() const;
+
+  // A plane on the picked face when it is flat; origin is the part origin projected onto it.
+  std::optional<SketchPlane> planeFromHit(const PickHit& hit, std::string* name = nullptr) const;
+
+  // Ray against sketches: inside a closed profile, or within tolerance·distance of a line.
+  std::optional<SketchHit> pickSketch(const Vec3& origin, const Vec3& direction, double maxDistance,
+                                      double tolerance, bool includeConsumed = false) const;
+
+  bool isConsumed(const std::string& featureId) const;
+
+  // The newest sketch no feature uses yet, or "".
+  std::string latestUnusedSketch() const;
 
   // Evaluated variables (SI) after the last rebuild.
   const std::map<std::string, double>& variables() const;

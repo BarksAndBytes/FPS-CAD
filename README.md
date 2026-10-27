@@ -7,9 +7,10 @@ keyboard and mouse as an equal on PC. Everything runs locally: no accounts, serv
 Parts and assemblies keep their full editable history in native files (`.fpprt`, `.fpasm`) and
 export to STEP, IGES, STL and 3MF.
 
-> Status: **Phase 0 — foundations.** The CAD core, native files, exports and a playable Godot
-> project are in place. Sketching, mates solving and drawings come in later phases. See
-> [docs/PHASE0.md](docs/PHASE0.md).
+> Status: **Phase 1 — the CAD workflow.** Pick a plane or a flat face, sketch with relations and
+> dimensions, then extrude, revolve, sweep or loft, all in the part's history. Mates solving and
+> drawings come in later phases. See [docs/PHASE0.md](docs/PHASE0.md) and
+> [docs/SKETCHING.md](docs/SKETCHING.md).
 
 ## What is here
 
@@ -42,9 +43,10 @@ Full instructions, including Windows and Android: [docs/BUILDING.md](docs/BUILDI
 
 ## Controls
 
-New players start with **Training** on the title screen: an eleven-step course that teaches
-moving, jumping, shrinking through a 30 cm tunnel, the tool wheel, push/pull, placing a box,
-measuring and the controls map. Press View (F1) at any time for the full map:
+New players start with **Training** on the title screen: a fourteen-step course that teaches
+moving, jumping, shrinking through a 30 cm tunnel, the tool wheel, push/pull, sketching a
+rectangle on a face, finishing the sketch, extruding it, measuring and the controls map.
+**New part** opens a blank part with the Sketch tool ready. Press View (F1) at any time for the full map:
 
 ![Controller map](godot/ui/controller_map.svg)
 
@@ -63,6 +65,13 @@ measuring and the controls map. Press View (F1) at any time for the full map:
 | View | F1 | Controls map (controller, keyboard and touch pages) |
 | Menu | Esc | Pause menu: controls, save, open, export, exit to title |
 | — | F | Fly through walls |
+| X | Enter | Finish the sketch |
+| Y (sketching) | I | Look straight at the sketch plane |
+
+The wheel has two pages (LB / E switches while it is open): **Model** — Select, Sketch, Extrude,
+Revolve, Sweep, Loft, Push/Pull, Measure, Delete — and **Direct** — Box, Cylinder, Sphere, Move.
+In sketch mode the wheel holds the sketch tools. The full sketch and feature-panel controls are
+in [docs/SKETCHING.md](docs/SKETCHING.md) and on the controls map's fourth page.
 
 ## The CLI
 

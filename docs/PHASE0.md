@@ -18,7 +18,9 @@ offline.
 | Native `.fpprt` / `.fpasm` files | Done | ZIP + JSON, cached B-rep, safe writes, format version check |
 | Assemblies: nested components, instances, virtual parts | Done | Mates are stored, not solved yet (Phase 3) |
 | Export STEP (AP242/AP214), IGES, STL, 3MF with read-back validation | Done | Volume within 0.01% (exact) or 1% (mesh) |
-| Headless core tests | Done | 97 checks pass on Linux |
+| Headless core tests | Done | 154 checks pass on Linux |
+| Sketches with constraint solver; extrude, revolve, sweep, loft from sketches (Phase 1) | Done | Core-tested by volume; see `docs/SKETCHING.md` |
+| Sketch mode, feature panel with live preview, wheel pages (Phase 1) | Written | Smoke-tested headless; needs a playtest |
 | Godot extension (`CadPart`, `CadAssembly`) | Done | Builds on Linux, Windows and Android arm64 in CI; loads in Godot 4.7.2 |
 | First-person player: walk with exact collision, fly, self-scaling 0.1 mm to 1 km | Written | Needs a playtest |
 | Tool wheel, 8 tools, context option, HUD, model panel, file menu | Written | Needs a playtest |

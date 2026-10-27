@@ -5,19 +5,31 @@ extends Node
 
 signal changed  # the document changed; redraw it
 signal tool_switched(index: int)
+signal sketch_requested(plane: Dictionary, plane_name: String, edit_id: String)
+signal feature_requested(type: String, sketch_id: String, op: String)
 
+## Two wheel pages: the history-based CAD workflow first, then direct modelling.
+const PAGES := ["Model", "Direct"]
 const TOOLS := [
-	{id = "select", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
-	{id = "push", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
-	{id = "box", name = "Box", pri = "place box", alt = "copy size from target", opt = ["add", "cut", "new body"]},
-	{id = "cylinder", name = "Cylinder", pri = "place cylinder", alt = "copy size from target", opt = ["add", "cut", "new body"]},
-	{id = "sphere", name = "Sphere", pri = "place sphere", alt = "copy size from target", opt = ["add", "cut", "new body"]},
-	{id = "move", name = "Move", pri = "grab / drop", alt = "duplicate & grab", opt = []},
-	{id = "measure", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
-	{id = "delete", name = "Delete", pri = "delete target", alt = "undo", opt = []},
+	{id = "select", page = "Model", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
+	{id = "sketch", page = "Model", name = "Sketch", pri = "sketch on this face or plane", alt = "edit the sketch you aim at",
+		opt = ["aimed face", "Top plane", "Front plane", "Right plane"]},
+	{id = "extrude", page = "Model", name = "Extrude", pri = "extrude the sketch", alt = "extrude as a cut", opt = []},
+	{id = "revolve", page = "Model", name = "Revolve", pri = "revolve the sketch", alt = "revolve as a cut", opt = []},
+	{id = "sweep", page = "Model", name = "Sweep", pri = "sweep the sketch along a path", alt = "sweep as a cut", opt = []},
+	{id = "loft", page = "Model", name = "Loft", pri = "loft the sketch to another", alt = "loft as a cut", opt = []},
+	{id = "push", page = "Model", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
+	{id = "measure", page = "Model", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
+	{id = "delete", page = "Model", name = "Delete", pri = "delete target", alt = "undo", opt = []},
+	{id = "box", page = "Direct", name = "Box", pri = "place box", alt = "copy size from target", opt = ["add", "cut", "new body"]},
+	{id = "cylinder", page = "Direct", name = "Cylinder", pri = "place cylinder", alt = "copy size from target", opt = ["add", "cut", "new body"]},
+	{id = "sphere", page = "Direct", name = "Sphere", pri = "place sphere", alt = "copy size from target", opt = ["add", "cut", "new body"]},
+	{id = "move", page = "Direct", name = "Move", pri = "grab / drop", alt = "duplicate & grab", opt = []},
 ]
-const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete"]
+const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft"]
+const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
 const OPS := {"add": "add", "cut": "cut", "new body": "new-body"}
+const STANDARD_PLANES := {"Top plane": "top", "Front plane": "front", "Right plane": "right"}
 
 var doc: RefCounted  # CadPart or CadAssembly
 var is_assembly := false
@@ -26,6 +38,7 @@ var player: Node3D   # player.gd
 var hud: CanvasLayer # hud.gd
 
 var index := 0
+var page := 0
 var options := {}          # tool id -> option index
 var selected := ""         # feature id (part) or component id (assembly)
 var aim := {}              # the current crosshair hit
@@ -40,6 +53,34 @@ var _measure_b: Variant = null
 
 func tool() -> Dictionary:
 	return TOOLS[index]
+
+
+## TOOLS indices on the current wheel page, in slot order.
+func page_indices() -> Array:
+	var out := []
+	for i in TOOLS.size():
+		if TOOLS[i].page == PAGES[page]:
+			out.append(i)
+	return out
+
+
+func page_tools() -> Array:
+	return page_indices().map(func(i): return TOOLS[i])
+
+
+func flip_page() -> void:
+	page = (page + 1) % PAGES.size()
+
+
+func index_of(id: String) -> int:
+	for i in TOOLS.size():
+		if TOOLS[i].id == id:
+			return i
+	return -1
+
+
+func set_tool_id(id: String) -> void:
+	set_tool(index_of(id))
 
 
 func option() -> String:
@@ -58,6 +99,7 @@ func reset() -> void:
 	options = {}
 	selected = ""
 	aim = {}
+	page = 0
 	set_tool(0)
 
 
@@ -67,9 +109,12 @@ func set_tool(i: int) -> void:
 	if not _grab.is_empty():
 		_drop()
 	index = i
+	page = PAGES.find(TOOLS[i].page)
 	_push_hit = {}
 	_hold_time = -1.0
 	view.show_ghost("", Vector3.ZERO, {})
+	view.show_plane({}, 0.0)
+	view.highlight_sketch("")
 	view.clear_highlight()
 	tool_switched.emit(i)
 
@@ -178,6 +223,25 @@ func _act(primary: bool, repeat: bool) -> void:
 				if biggest > 0.0:
 					player.set_size(biggest / (1.75 * 1.6))  # the part fills a comfortable view
 					hud.toast("Sized to %s" % hit.feature_name)
+		"sketch":
+			if primary:
+				var pick := _sketch_plane(hit, on_feature)
+				if pick.is_empty():
+					hud.toast("That face is curved. Aim at a flat face, or pick a plane with %s" % Actions.prompt(&"context_wheel"))
+					return
+				sketch_requested.emit(pick.plane, pick.name, "")
+			else:
+				var s := _aimed_sketch(true)
+				if s.is_empty():
+					hud.toast("Aim at a sketch's lines to edit it")
+					return
+				sketch_requested.emit({}, "", s.feature_id)
+		"extrude", "revolve", "sweep", "loft":
+			var sid := _feature_sketch()
+			if sid == "":
+				hud.toast("Draw a sketch first: pick Sketch from the wheel")
+				return
+			feature_requested.emit(tool().id, sid, "add" if primary else "cut")
 		"push":
 			if not repeat:
 				if not on_feature:
@@ -259,12 +323,42 @@ func _act(primary: bool, repeat: bool) -> void:
 				if doc.undo():
 					changed.emit()
 				return
-			if on_feature:
-				var r: Dictionary = doc.delete_feature(hit.feature_id)
+			var target: String = hit.feature_id if on_feature else ""
+			if target == "":
+				target = _aimed_sketch(false).get("feature_id", "")
+			if target != "":
+				var r: Dictionary = doc.delete_feature(target)
 				hud.toast(r.message)
-				if hit.feature_id == selected:
+				if target == selected:
 					selected = ""
 				changed.emit()
+
+
+## The plane a new sketch goes on: the aimed flat face, the ground (Top plane), or the standard
+## plane chosen with the tool option. Empty when the aimed face is not flat.
+func _sketch_plane(hit: Dictionary, on_feature: bool) -> Dictionary:
+	var opt := option()
+	if STANDARD_PLANES.has(opt):
+		var sp: Dictionary = doc.standard_plane(STANDARD_PLANES[opt])
+		return {plane = sp.plane, name = sp.name}
+	if on_feature:
+		var fp: Dictionary = doc.plane_from_hit(hit)
+		return {} if fp.is_empty() else {plane = fp.plane, name = fp.name}
+	var top: Dictionary = doc.standard_plane("top")
+	return {plane = top.plane, name = top.name}
+
+
+## The sketch whose lines or regions are under the crosshair.
+func _aimed_sketch(include_used: bool) -> Dictionary:
+	if is_assembly or doc == null:
+		return {}
+	return doc.pick_sketch(player.eye_position(), player.aim_direction(), player.camera.far, 0.02, include_used)
+
+
+## The sketch a feature tool works on: the one aimed at, else the newest unused one.
+func _feature_sketch() -> String:
+	var s := _aimed_sketch(false)
+	return s.feature_id if not s.is_empty() else doc.latest_unused_sketch()
 
 
 func _target_id(hit: Dictionary) -> String:
@@ -352,10 +446,35 @@ func _update_preview(hit: Dictionary) -> void:
 	var id: String = tool().id
 	var label := ""
 	view.show_ghost("", Vector3.ZERO, {})
+	view.show_plane({}, 0.0)
+	view.highlight_sketch("")
 	if not is_assembly:
 		view.highlight_component(-1)
 	var on_feature: bool = not hit.is_empty() and not hit.get("ground", false)
+	var face_plane := false
 	match id:
+		"sketch":
+			if not is_assembly:
+				var opt := option()
+				if STANDARD_PLANES.has(opt):
+					var sp: Dictionary = doc.standard_plane(STANDARD_PLANES[opt])
+					view.show_plane(doc.plane_basis(sp.plane), 3.0 * player.size)
+					label = "New sketch on the %s plane" % sp.name
+				elif on_feature:
+					face_plane = true
+					label = "New sketch on this face of %s" % hit.get("feature_name", "")
+				else:
+					var tp: Dictionary = doc.standard_plane("top")
+					view.show_plane(doc.plane_basis(tp.plane), 3.0 * player.size)
+					label = "New sketch on the Top plane"
+				var aimed := _aimed_sketch(true)
+				if not aimed.is_empty():
+					label += "  ·  %s edit %s" % [Actions.prompt(&"secondary"), aimed.get("name", "sketch")]
+		"extrude", "revolve", "sweep", "loft":
+			if not is_assembly:
+				var sid := _feature_sketch()
+				view.highlight_sketch(sid)
+				label = ("%s %s" % [tool().name, _sketch_name(sid)]) if sid != "" else "No sketch to use yet"
 		"select", "delete":
 			if on_feature:
 				label = ("Delete " if id == "delete" else "") + hit.get("component_name", hit.get("feature_name", ""))
@@ -389,6 +508,8 @@ func _update_preview(hit: Dictionary) -> void:
 	# Highlights: the face being pushed, or the feature/component under the crosshair.
 	if is_assembly:
 		view.highlight_component(hit.get("component", -1) if on_feature and id in ["select", "move"] else -1)
+	elif face_plane:
+		view.highlight(hit.body, "", hit.face, s_size())
 	elif id == "push" and (on_feature or not _push_hit.is_empty()):
 		var h2: Dictionary = _push_hit if not _push_hit.is_empty() else hit
 		view.highlight(h2.get("body", -1), "", h2.get("face", -1), s_size())
@@ -399,6 +520,13 @@ func _update_preview(hit: Dictionary) -> void:
 	else:
 		view.clear_highlight()
 	hud.set_aim(label, on_feature)
+
+
+func _sketch_name(id: String) -> String:
+	for v in doc.sketch_views():
+		if v.id == id:
+			return v.name
+	return "sketch"
 
 
 func s_size() -> float:
