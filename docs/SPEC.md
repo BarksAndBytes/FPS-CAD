@@ -39,17 +39,26 @@ network calls for modeling, saving or export.
 | Left bumper (hold) | Context wheel (snap modes, mate types, options) |
 | A / B | Jump or fly up / crouch, fly down, back |
 | A / B in menus | Select / back |
-| X / Y | Finish operation / inspect target parameters (model panel) |
+| X / Y | Finish sketch / inspect target parameters; in sketch mode Y looks straight at the plane |
 | D-pad up / down | Grow / shrink (x2 per tap, hold for smooth) |
 | D-pad left / right | Undo / redo |
 | View / Menu | Controls map / pause menu |
 
+## Modelling workflow
+
+Standard history-based CAD: choose a plane (Top / Front / Right or any flat face), draw a sketch,
+constrain it, then build a feature from it. Sketches are `sketch` features (plane, points,
+lines / circles / arcs, constraints) solved by the core; `extrude`, `revolve`, `sweep` and `loft`
+reference them by id, so editing a sketch's dimension rebuilds everything after it. Feature
+parameters are set in a property panel with a live preview. Direct tools (push/pull, boxes,
+cylinders, spheres) remain for quick blocking-out. Details: [`docs/SKETCHING.md`](SKETCHING.md).
+
 ## Onboarding
 
 Launch shows three skippable splash cards (studio, technology, "best played with a controller"),
-then the title screen over an orbiting model: Training, Free build, Assembly sandbox, Controls,
-Quit. Training runs on the core's `trainingCourse()` part and checks real game state for each of
-its eleven objectives. Completion is stored in `user://settings.cfg`.
+then the title screen over an orbiting model: Training, New part, Free build, Assembly sandbox,
+Controls, Quit. Training runs on the core's `trainingCourse()` part and checks real game state
+for each of its fourteen objectives, including sketching on a face and extruding it. Completion is stored in `user://settings.cfg`.
 
 ## Native file layout (`.fpprt`)
 
