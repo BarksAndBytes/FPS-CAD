@@ -1,7 +1,7 @@
 extends CanvasLayer
 ## Title screen: the game's name over a slowly orbiting model, and the main menu.
 
-signal chosen(id: String)  # "training", "free", "assembly", "controls", "quit"
+signal chosen(id: String)  # "training", "new", "free", "assembly", "controls", "quit"
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 
@@ -48,7 +48,8 @@ func _ready() -> void:
 	_menu.add_theme_constant_override("separation", 10)
 	col.add_child(_menu)
 	for spec in [
-		["training", "Training", "Learn to move, resize yourself and use the tools"],
+		["training", "Training", "Learn to move, resize yourself, sketch and extrude"],
+		["new", "New part", "A blank part: pick a plane, sketch, then extrude, revolve, sweep or loft"],
 		["free", "Free build", "Walk and edit the sample pavilion"],
 		["assembly", "Assembly sandbox", "A plate with four pins, built from two parts"],
 		["controls", "Controls", "Controller, keyboard and touch maps"],
@@ -75,7 +76,7 @@ func _ready() -> void:
 	_footer = UiTheme.text("", 15, UiTheme.MUTED)
 	_footer.autowrap_mode = TextServer.AUTOWRAP_WORD
 	col.add_child(_footer)
-	var version := UiTheme.text("v0.1 · Phase 0 build · files stay on this device", 13, UiTheme.MUTED.darkened(0.25))
+	var version := UiTheme.text("v0.2 · sketch-based modelling · files stay on this device", 13, UiTheme.MUTED.darkened(0.25))
 	col.add_child(version)
 	visible = false
 

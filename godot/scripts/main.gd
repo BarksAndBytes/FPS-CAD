@@ -4,7 +4,9 @@ extends Node3D
 ## the title screen and the training course. Owns gameplay input, files and autosave.
 ## Everything runs locally; files live in the app's user:// folder.
 ##
-## States: "splash" → "title" → "play". Play modes: "training", "free", "assembly".
+## States: "splash" → "title" → "play". Play modes: "training", "new", "free", "assembly".
+## Inside play, sketch mode (sketcher.gd) takes the tools while a sketch is open, and the
+## feature panel (feature_dialog.gd) takes the D-pad and buttons while a feature is set up.
 
 const PROJECTS := "user://projects"
 const EXPORTS := "user://exports"
@@ -13,6 +15,7 @@ const AUTOSAVE_SECONDS := 120.0
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const ToolsScript := preload("res://scripts/tools.gd")
 const Tutorial := preload("res://scripts/tutorial.gd")
+const Sketcher := preload("res://scripts/sketcher.gd")
 
 var doc: RefCounted
 var is_assembly := false
@@ -30,6 +33,9 @@ var cmap: CanvasLayer
 var title: CanvasLayer
 var splash: CanvasLayer
 var tutorial: Node3D
+var sketcher: Node3D
+var dialog: CanvasLayer
+var numpad: CanvasLayer
 
 var _aim := {}
 var _autosave_t := 0.0
@@ -66,14 +72,26 @@ func _ready() -> void:
 	tools.hud = hud
 	tools.changed.connect(_on_model_changed)
 	tools.tool_switched.connect(func(_i): _show_tool())
+	tools.sketch_requested.connect(_on_sketch_requested)
+	tools.feature_requested.connect(_on_feature_requested)
+	sketcher = Sketcher.new()
+	sketcher.game = self
+	add_child(sketcher)
+	sketcher.ended.connect(_on_sketch_ended)
+	sketcher.changed.connect(_show_tool)
+	numpad = preload("res://scripts/number_pad.gd").new()
+	add_child(numpad)
+	dialog = preload("res://scripts/feature_dialog.gd").new()
+	dialog.game = self
+	add_child(dialog)
+	dialog.closed.connect(_on_dialog_closed)
 
 	wheel = preload("res://scripts/tool_wheel.gd").new()
 	var wheel_layer := CanvasLayer.new()
 	wheel_layer.layer = 5
 	add_child(wheel_layer)
 	wheel_layer.add_child(wheel)
-	wheel.setup(ToolsScript.TOOLS)
-	wheel.picked.connect(func(i): tools.set_tool(i))
+	wheel.picked.connect(_wheel_pick)
 
 	touch = preload("res://scripts/touch_controls.gd").new()
 	hud.add_child(touch)
@@ -114,6 +132,7 @@ func _load_background() -> void:
 
 
 func _show_title() -> void:
+	_close_editors()
 	splash = null
 	state = "title"
 	mode = ""
@@ -134,6 +153,7 @@ func _show_title() -> void:
 func _start_mode(m: String) -> void:
 	state = "play"
 	mode = m
+	_close_editors()
 	title.visible = false
 	hud.visible = true
 	player.fly = false
@@ -152,6 +172,11 @@ func _start_mode(m: String) -> void:
 			add_child(tutorial)
 			tutorial.finished.connect(_on_tutorial_finished)
 			tutorial.start()
+		"new":
+			d = ClassDB.instantiate(&"CadPart")
+			d.new_blank("Part 1", "mm")
+			_open(d, false)
+			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
 		"assembly":
 			d = ClassDB.instantiate(&"CadAssembly")
 			d.make_sample()
@@ -163,13 +188,19 @@ func _start_mode(m: String) -> void:
 			_open(d, false)
 			_spawn(Vector3(0, 0, 14), 0.0, 1.0)
 	tools.reset()
+	if m == "new":
+		tools.set_tool_id("sketch")
+		hud.toast("A blank part. Aim at the ground and press %s to start a sketch on the Top plane" % Actions.prompt(&"primary"))
 	hud.set_menu_items(_menu_items())
 	if Actions.last_device == "keyboard":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _menu_items() -> Array:
-	var items := [["Resume", "resume"], ["Controls", "controls"]]
+	var items := [["Resume", "resume"]]
+	if sketcher != null and sketcher.active:
+		items += [["Finish sketch", "finish_sketch"], ["Discard sketch", "discard_sketch"]]
+	items.append(["Controls", "controls"])
 	if mode == "training":
 		items.append(["Restart training", "restart_training"])
 	items += [
@@ -250,6 +281,69 @@ func _on_model_changed() -> void:
 		hud.refresh_panel()
 
 
+## For the feature panel and other helpers: redraw after the document changed.
+func on_model_changed() -> void:
+	_on_model_changed()
+
+
+## Leaves sketch mode and the feature panel without keeping their changes.
+func _close_editors() -> void:
+	if numpad != null and numpad.visible:
+		numpad.close()
+	if dialog != null and dialog.visible:
+		dialog.cancel()
+	if sketcher != null and sketcher.active:
+		sketcher.discard()
+
+
+# ---------- sketches and features ----------
+
+func _on_sketch_requested(plane: Dictionary, plane_name: String, edit_id: String) -> void:
+	if not sketcher.begin(plane, plane_name, edit_id):
+		hud.toast("That sketch can no longer be opened")
+		return
+	view.hidden_sketch = edit_id
+	view.refresh()
+	view.show_plane({}, 0.0)
+	view.clear_highlight()
+	hud.set_menu_items(_menu_items())
+	_show_tool()
+	hud.toast("Sketching on %s · %s finishes · %s looks straight at it" % [
+		sketcher.sketch.get("planeName", "the plane"), Actions.prompt(&"finish"), Actions.prompt(&"normal_to")])
+
+
+func _on_sketch_ended(feature_id: String, committed: bool) -> void:
+	view.hidden_sketch = ""
+	_on_model_changed()
+	hud.set_menu_items(_menu_items())
+	hud.set_status("")
+	if committed and feature_id != "":
+		# Like a desktop CAD tool: finishing a sketch leads straight to making it solid.
+		tools.set_tool_id("extrude")
+		hud.toast("Sketch done. Extrude is ready: aim at the sketch and press %s" % Actions.prompt(&"primary"))
+	else:
+		hud.toast("Sketch closed without changes")
+		_show_tool()
+
+
+func _on_feature_requested(type: String, sketch_id: String, op: String) -> void:
+	if dialog.open_new(type, sketch_id, op):
+		_show_tool()
+
+
+func _on_dialog_closed(ok: bool, feature_id: String) -> void:
+	if ok:
+		var fname := "Feature"
+		for f in doc.get_features():
+			if f.id == feature_id:
+				fname = f.name
+		hud.toast("%s updated" % fname if dialog.editing else "%s added" % fname)
+	else:
+		hud.toast("Cancelled")
+	_on_model_changed()
+	_show_tool()
+
+
 func _doc_name() -> String:
 	var n: String = doc.get_assembly_name() if is_assembly else doc.get_part_name()
 	return n.to_lower().replace(" ", "-").validate_filename()
@@ -310,7 +404,7 @@ func _aim_hit() -> Dictionary:
 ## True while something covers the view and should get the controller instead of the player.
 func modal_open() -> bool:
 	var tutorial_card: bool = tutorial != null and tutorial.is_open_card()
-	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card
+	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible
 
 
 func _process(dt: float) -> void:
@@ -325,10 +419,16 @@ func _process(dt: float) -> void:
 		return
 	var playing: bool = not modal_open()
 	player.input_enabled = playing and not wheel.visible
+	player.limited = dialog.visible
 	_aim = _aim_hit()
-	if playing:
+	if playing and not dialog.visible:
 		_gameplay_input()
-	tools.update(_aim if playing else {}, dt)
+	if sketcher.active:
+		if playing:
+			sketcher.update()
+		hud.set_status(sketcher.status_text(), Color("f2f5f8") if sketcher.defined() else Color("7cc4ff"))
+	else:
+		tools.update(_aim if playing and not dialog.visible else {}, dt)
 	hud.set_readout(player.size, player.grid_step(), player.snap_step(), player.fly, player.feet)
 	hud.set_measure(tools.measure_text())
 	touch.set_fly(player.fly)
@@ -353,7 +453,9 @@ func _orbit(dt: float) -> void:
 func _keep_focus() -> void:
 	if Actions.last_device != "controller" or cmap.visible:
 		return
-	if hud.menu_open:
+	if numpad.visible:
+		numpad.keep_focus()
+	elif hud.menu_open:
 		UiTheme.keep_focus(hud.menu_control())
 	elif tutorial != null and tutorial.is_open_card():
 		tutorial.keep_focus()
@@ -361,18 +463,54 @@ func _keep_focus() -> void:
 		UiTheme.keep_focus(hud.panel_control())
 
 
+## The tools the wheel shows: sketch tools in sketch mode, else the current page of tools.
+func _wheel_tools() -> Array:
+	if sketcher.active:
+		return Sketcher.TOOLS
+	return tools.page_tools()
+
+
+func _wheel_current() -> int:
+	if sketcher.active:
+		return sketcher.index
+	return tools.page_indices().find(tools.index)
+
+
+func _open_wheel(from_button: bool) -> void:
+	_wheel_from_button = from_button
+	var page := "SKETCH" if sketcher.active else String(ToolsScript.PAGES[tools.page]).to_upper()
+	wheel.setup(_wheel_tools(), page, "" if sketcher.active else "%s other page" % Actions.prompt(&"context_wheel"))
+	wheel.open(_wheel_current())
+
+
+func _wheel_pick(i: int) -> void:
+	if i < 0:
+		return
+	if sketcher.active:
+		sketcher.set_tool(i)
+		_show_tool()
+		return
+	var indices: Array = tools.page_indices()
+	if i < indices.size():
+		tools.set_tool(indices[i])
+
+
 func _gameplay_input() -> void:
 	if wheel.visible:
 		wheel.aim(Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down"))
+		if Input.is_action_just_pressed(&"context_wheel") and not sketcher.active:
+			tools.flip_page()
+			_open_wheel(_wheel_from_button)
+			return
 		var released: bool = not _wheel_from_button and Input.is_action_just_released(&"tool_wheel")
 		if released or Input.is_action_just_pressed(&"ui_accept"):
-			var i: int = wheel.close(true)
-			if i >= 0:
-				tools.set_tool(i)
+			_wheel_pick(wheel.close(true))
 		return
 	if Input.is_action_just_pressed(&"tool_wheel"):
-		_wheel_from_button = false
-		wheel.open(tools.index)
+		_open_wheel(false)
+		return
+	if sketcher.active:
+		_sketch_input()
 		return
 	# The click that captures the mouse should not also fire the tool.
 	var mouse_free: bool = Actions.last_device == "keyboard" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
@@ -389,7 +527,7 @@ func _gameplay_input() -> void:
 		_show_tool()
 	for i in 9:
 		if Input.is_action_just_pressed(StringName("tool_%d" % (i + 1))):
-			tools.set_tool(i)
+			_wheel_pick(i)
 	if Input.is_action_just_pressed(&"redo"):
 		if doc.has_method("redo") and doc.redo():
 			_on_model_changed()
@@ -409,7 +547,35 @@ func _gameplay_input() -> void:
 		hud.toast(r.message)
 		_on_model_changed()
 	if Input.is_action_just_pressed(&"finish"):
-		hud.toast("Sketch mode arrives in Phase 1")
+		hud.toast("Nothing to finish. Pick Sketch from the wheel to start a sketch")
+	if Input.is_action_just_pressed(&"screenshot"):
+		_screenshot()
+
+
+## Input while a sketch is open: the triggers draw, X finishes, Y looks straight at the plane,
+## the D-pad's left and right undo and redo inside the sketch.
+func _sketch_input() -> void:
+	var mouse_free: bool = Actions.last_device == "keyboard" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
+	if Input.is_action_just_pressed(&"primary") and not mouse_free:
+		sketcher.press(true)
+	if Input.is_action_just_pressed(&"secondary") and not mouse_free:
+		sketcher.press(false)
+	if Input.is_action_just_pressed(&"context_wheel"):
+		sketcher.cycle_option()
+		_show_tool()
+	for i in 9:
+		if Input.is_action_just_pressed(StringName("tool_%d" % (i + 1))):
+			_wheel_pick(i)
+	if Input.is_action_just_pressed(&"finish"):
+		sketcher.finish()
+	if Input.is_action_just_pressed(&"inspect"):
+		sketcher.look_normal_to()
+	if Input.is_action_just_pressed(&"redo"):
+		if sketcher.redo():
+			hud.toast("Redo (sketch)")
+	elif Input.is_action_just_pressed(&"undo") and not Input.is_key_pressed(KEY_SHIFT):
+		if sketcher.undo():
+			hud.toast("Undo (sketch)")
 	if Input.is_action_just_pressed(&"screenshot"):
 		_screenshot()
 
@@ -420,8 +586,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			cmap.open()
 			get_viewport().set_input_as_handled()
 		return
-	if state != "play" or cmap.visible:
-		return  # the splash and the controls map handle their own input
+	if state != "play" or cmap.visible or numpad.visible:
+		return  # the splash, the controls map and the number pad handle their own input
+	if dialog.visible and not hud.menu_open:
+		if dialog.handle(event):
+			get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed(&"controller_map"):
 		hud.set_panel(false)
 		_cmap_from_menu = hud.menu_open
@@ -438,6 +608,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			hud.set_panel(false)
 		elif wheel.visible:
 			wheel.close(false)
+		elif sketcher.active and sketcher.has_pending() and event.is_action_pressed(&"crouch"):
+			sketcher.cancel_pending()  # B drops the line or shape being drawn
 		else:
 			closed = false  # B with nothing open is crouch / fly down; Esc falls through to the menu
 		if closed:
@@ -464,7 +636,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _update_mouse_mode() -> void:
 	var want_free: bool = state != "play" or modal_open() or Actions.last_device == "touch" \
-		or (wheel.visible and _wheel_from_button)
+		or (wheel.visible and _wheel_from_button) or dialog.visible
 	if want_free and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -479,6 +651,17 @@ func _screenshot() -> void:
 # ---------- UI requests ----------
 
 func _show_tool() -> void:
+	if sketcher != null and sketcher.active:
+		var t: Dictionary = sketcher.tool().duplicate()
+		t.name = "Sketch · " + t.name
+		hud.set_tool(t, sketcher.option())
+		hud.set_status(sketcher.status_text())
+		return
+	if dialog != null and dialog.visible:
+		hud.set_tool({name = "Feature", pri = "change the focused value", alt = "change it back"}, "")
+		hud.set_status("")
+		return
+	hud.set_status("")
 	hud.set_tool(tools.tool(), tools.option())
 
 
@@ -501,16 +684,21 @@ func _on_device_changed(kind: String) -> void:
 
 
 func _on_touch_pressed(name: String) -> void:
-	if state != "play":
+	if state != "play" or dialog.visible:
 		return
 	match name:
 		"primary":
-			tools.press(true)
+			if sketcher.active:
+				sketcher.press(true)
+			else:
+				tools.press(true)
 		"secondary":
-			tools.press(false)
+			if sketcher.active:
+				sketcher.press(false)
+			else:
+				tools.press(false)
 		"wheel":
-			_wheel_from_button = true
-			wheel.open(tools.index)
+			_open_wheel(true)
 
 
 func _on_touch_released(name: String) -> void:
@@ -521,15 +709,32 @@ func _on_touch_released(name: String) -> void:
 func _on_hud_request(action: String, arg: Variant) -> void:
 	match action:
 		"open_wheel":
-			if state == "play":
-				_wheel_from_button = true
-				wheel.open(tools.index)
+			if state == "play" and not dialog.visible:
+				_open_wheel(true)
 		"undo":
-			if doc.has_method("undo") and doc.undo():
+			if sketcher.active:
+				sketcher.undo()
+			elif doc.has_method("undo") and doc.undo():
 				_on_model_changed()
 		"redo":
-			if doc.has_method("redo") and doc.redo():
+			if sketcher.active:
+				sketcher.redo()
+			elif doc.has_method("redo") and doc.redo():
 				_on_model_changed()
+		"finish_sketch":
+			hud.set_menu(false)
+			sketcher.finish()
+		"discard_sketch":
+			hud.set_menu(false)
+			sketcher.discard()
+		"edit_sketch":
+			hud.set_panel(false)
+			_on_sketch_requested({}, "", arg)
+		"edit_feature":
+			hud.set_panel(false)
+			for f in doc.get_features():
+				if f.id == arg and dialog.open_edit(f):
+					_show_tool()
 		"fly":
 			player.fly = not player.fly
 			hud.toast("Fly on · through walls" if player.fly else "Walking")
@@ -546,6 +751,7 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			hud.set_menu(false)
 		"restart_training":
 			hud.set_menu(false)
+			_close_editors()
 			_start_mode("training")
 		"title":
 			_autosave()
@@ -561,6 +767,7 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			if err != "":
 				hud.toast(err)
 				return
+			_close_editors()
 			_open(d, last_saved.ends_with(".fpasm"))
 			hud.set_menu(false)
 		"export_step":

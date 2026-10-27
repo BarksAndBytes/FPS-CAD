@@ -1,6 +1,7 @@
 extends Control
 ## Radial tool wheel, opened like a weapon wheel. Point with the right stick or the mouse while
-## the button is held and release to pick, or tap a slot on a touch screen.
+## the button is held and release to pick, or tap a slot on a touch screen. The wheel has pages
+## (Model and Direct tools); main.gd fills it with the page to show, or the sketch tools.
 
 signal picked(index: int)
 
@@ -14,6 +15,7 @@ var _vec := Vector2.ZERO
 var _slots: Array[Button] = []
 var _title := Label.new()
 var _detail := Label.new()
+var _page := Label.new()
 
 
 func _ready() -> void:
@@ -25,7 +27,7 @@ func _ready() -> void:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dim)
-	for l in [_title, _detail]:
+	for l in [_title, _detail, _page]:
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(l)
@@ -33,10 +35,13 @@ func _ready() -> void:
 	_detail.add_theme_font_size_override("font_size", 13)
 	_detail.add_theme_color_override("font_color", Color("9ba7b6"))
 	_detail.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_page.add_theme_font_size_override("font_size", 14)
+	_page.add_theme_color_override("font_color", Color("ff8a3d"))
 
 
-func setup(tool_list: Array) -> void:
+func setup(tool_list: Array, page_title := "", page_hint := "") -> void:
 	tools = tool_list
+	_page.text = page_title + ("   ·   " + page_hint if page_hint != "" else "")
 	for b in _slots:
 		b.queue_free()
 	_slots.clear()
@@ -63,6 +68,8 @@ func _layout() -> void:
 	_title.size = Vector2(180, 28)
 	_detail.position = c + Vector2(-80, 4)
 	_detail.size = Vector2(160, 40)
+	_page.position = c + Vector2(-200, -r - SLOT * 0.5 - 36)
+	_page.size = Vector2(400, 24)
 
 
 func open(current_index: int) -> void:
@@ -116,6 +123,8 @@ func _refresh() -> void:
 	for i in _slots.size():
 		var b := _slots[i]
 		b.modulate = Color("ff8a3d") if i == hover else (Color(1, 1, 1, 1) if i == current else Color(0.85, 0.88, 0.92, 0.9))
-	var t: Dictionary = tools[hover if hover >= 0 else current]
+	if tools.is_empty():
+		return
+	var t: Dictionary = tools[hover if hover >= 0 else clampi(current, 0, tools.size() - 1)]
 	_title.text = t.name.to_upper()
 	_detail.text = "%s\n%s" % [t.pri, t.alt]

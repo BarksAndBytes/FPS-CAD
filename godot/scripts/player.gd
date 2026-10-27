@@ -31,6 +31,9 @@ var fly := false
 var sprint_toggled := false
 var precision := false
 var input_enabled := true
+## While a feature panel is open the player can still walk and look, but the D-pad, A and the
+## size keys belong to the panel.
+var limited := false
 var look_from_touch := Vector2.ZERO
 var move_from_touch := Vector2.ZERO
 var touch_up := false
@@ -84,7 +87,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look(event.relative * MOUSE_SENS * (PRECISION if precision else 1.0))
-	elif event is InputEventMouseButton and event.pressed:
+	elif event is InputEventMouseButton and event.pressed and not limited:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			scale_by(1.15)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -108,6 +111,14 @@ func _process(dt: float) -> void:
 
 
 func _read_actions(dt: float) -> void:
+	# Stick look with a squared response curve for fine aiming near the centre.
+	var stick := Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down")
+	stick = stick.normalized() * pow(stick.length(), 2.0) if stick.length() > 0.0 else stick
+	var k := STICK_LOOK * dt * (PRECISION if precision else 1.0)
+	_look(stick * k + look_from_touch)
+	look_from_touch = Vector2.ZERO
+	if limited:
+		return
 	if Input.is_action_just_pressed(&"toggle_fly"):
 		fly = not fly
 	if Input.is_action_just_pressed(&"sprint_toggle"):
@@ -118,12 +129,6 @@ func _read_actions(dt: float) -> void:
 		_jump_queued = true
 	if Input.is_action_just_pressed(&"reset_size"):
 		set_size(1.0)
-	# Stick look with a squared response curve for fine aiming near the centre.
-	var stick := Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down")
-	stick = stick.normalized() * pow(stick.length(), 2.0) if stick.length() > 0.0 else stick
-	var k := STICK_LOOK * dt * (PRECISION if precision else 1.0)
-	_look(stick * k + look_from_touch)
-	look_from_touch = Vector2.ZERO
 	# D-pad / keys: a tap doubles or halves, holding scales smoothly.
 	_grow_held = _held(&"grow", _grow_held, dt, 2.0)
 	_shrink_held = _held(&"shrink", _shrink_held, dt, 0.5)
@@ -166,7 +171,7 @@ func _move(dt: float) -> void:
 	if fly:
 		var look := -camera.global_transform.basis.z
 		var up := 0.0
-		if input_enabled:
+		if input_enabled and not limited:
 			up = float(Input.is_action_pressed(&"jump") or touch_up) - float(Input.is_action_pressed(&"crouch") or touch_down)
 		feet += (look * mv.y + right * mv.x + Vector3.UP * up) * speed * dt
 		_vy = 0.0
