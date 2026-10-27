@@ -32,6 +32,7 @@ var _params := VBoxContainer.new()
 var _tree := VBoxContainer.new()
 var _menu := PanelContainer.new()
 var _menu_col := VBoxContainer.new()
+var _menu_buttons := {}  # action -> Button
 var _fly_btn := Button.new()
 var _toast_t := 0.0
 var _feature_id := ""
@@ -49,8 +50,8 @@ func _ready() -> void:
 	for side in ["left", "right", "top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + side, 16)
 	if safe.size.x > 0 and OS.has_feature("mobile"):
-		margin.add_theme_constant_override("margin_left", maxi(16, safe.position.x))
-		margin.add_theme_constant_override("margin_top", maxi(16, safe.position.y))
+		margin.add_theme_constant_override("margin_left", maxi(16, int(UiTheme.from_window_px(self, safe.position.x))))
+		margin.add_theme_constant_override("margin_top", maxi(16, int(UiTheme.from_window_px(self, safe.position.y))))
 	root.add_child(margin)
 
 	# Top left: tool chip, hint, readout
@@ -435,20 +436,34 @@ func _build_menu(root: Control) -> void:
 
 ## Rebuilds the pause menu: items are [label, action] pairs sent through the request signal.
 func set_menu_items(items: Array) -> void:
+	_menu_buttons.clear()
 	for c in _menu_col.get_children():
 		_menu_col.remove_child(c)
 		c.queue_free()
 	_menu_col.add_child(UiTheme.title("PAUSED", 22))
+	# Two columns on short screens (phones), so every entry fits without scrolling.
+	var grid := GridContainer.new()
+	grid.columns = 2 if UiTheme.short_screen(self) else 1
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
+	_menu_col.add_child(grid)
 	for spec in items:
 		var b := Button.new()
 		b.text = spec[0]
-		b.custom_minimum_size = Vector2(0, 46)
+		b.custom_minimum_size = Vector2(250 if grid.columns == 2 else 0, 44)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var action: String = spec[1]
 		b.pressed.connect(func(): request.emit(action, null))
-		_menu_col.add_child(b)
+		grid.add_child(b)
+		_menu_buttons[action] = b
 	var note := UiTheme.text("%s select   ·   %s back   ·   files stay on this device" % [
 		Actions.prompt(&"ui_accept"), Actions.prompt(&"ui_cancel")], 13, MUTED)
 	_menu_col.add_child(note)
+
+
+func focus_menu_action(action: String) -> void:
+	if _menu_buttons.has(action):
+		(_menu_buttons[action] as Button).grab_focus.call_deferred()
 
 
 func menu_control() -> Control:

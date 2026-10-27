@@ -883,7 +883,7 @@ func _label(i: int) -> Label3D:
 		l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		l.no_depth_test = true
 		l.fixed_size = true
-		l.pixel_size = 0.0008
+		l.pixel_size = 0.0008 * preload("res://scripts/ui_theme.gd").ui_scale
 		l.font_size = 30
 		l.outline_size = 10
 		l.modulate = COLOR_DIM

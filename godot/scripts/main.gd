@@ -46,6 +46,7 @@ var _cmap_from_menu := false
 
 func _ready() -> void:
 	UiTheme.apply()
+	UiTheme.apply_scale(get_tree(), UiTheme.saved_scale_choice())
 	for dir in [PROJECTS, EXPORTS, RECOVERY.get_base_dir()]:
 		DirAccess.make_dir_recursive_absolute(dir)
 	if OS.has_feature("mobile"):
@@ -201,6 +202,7 @@ func _menu_items() -> Array:
 	if sketcher != null and sketcher.active:
 		items += [["Finish sketch", "finish_sketch"], ["Discard sketch", "discard_sketch"]]
 	items.append(["Controls", "controls"])
+	items.append(["Interface size: " + UiTheme.scale_label(UiTheme.saved_scale_choice()), "ui_scale"])
 	if mode == "training":
 		items.append(["Restart training", "restart_training"])
 	items += [
@@ -749,6 +751,14 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			cmap.open()
 		"resume":
 			hud.set_menu(false)
+		"ui_scale":
+			var choices: Array = UiTheme.SCALE_CHOICES
+			var next: float = choices[(choices.find(UiTheme.saved_scale_choice()) + 1) % choices.size()]
+			UiTheme.apply_scale(get_tree(), next, true)
+			await get_tree().process_frame  # let the layout settle at the new size
+			hud.set_menu_items(_menu_items())
+			hud.focus_menu_action("ui_scale")
+			hud.toast("Interface size " + UiTheme.scale_label(next))
 		"restart_training":
 			hud.set_menu(false)
 			_close_editors()

@@ -10,6 +10,9 @@ var _root := Control.new()
 var _menu := VBoxContainer.new()
 var _footer := Label.new()
 var _buttons := {}
+var _logo: Label
+var _gap := Control.new()
+var _margin := MarginContainer.new()
 
 
 func _ready() -> void:
@@ -26,7 +29,7 @@ func _ready() -> void:
 	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(shade)
 
-	var margin := MarginContainer.new()
+	var margin := _margin
 	margin.set_anchors_preset(Control.PRESET_LEFT_WIDE)
 	margin.offset_right = 520
 	var safe := DisplayServer.get_display_safe_area()
@@ -39,11 +42,11 @@ func _ready() -> void:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 6)
 	margin.add_child(col)
-	col.add_child(UiTheme.title("FPS-CAD", 76))
+	_logo = UiTheme.title("FPS-CAD", 76)
+	col.add_child(_logo)
 	col.add_child(UiTheme.text("Parametric CAD you play in first person", 18, UiTheme.MUTED))
-	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(0, 28)
-	col.add_child(gap)
+	_gap.custom_minimum_size = Vector2(0, 28)
+	col.add_child(_gap)
 
 	_menu.add_theme_constant_override("separation", 10)
 	col.add_child(_menu)
@@ -79,10 +82,26 @@ func _ready() -> void:
 	var version := UiTheme.text("v0.2 · sketch-based modelling · files stay on this device", 13, UiTheme.MUTED.darkened(0.25))
 	col.add_child(version)
 	visible = false
+	get_viewport().size_changed.connect(_fit)
+
+
+## Phones in landscape (or a large interface size) leave little height: tighten the layout.
+func _fit() -> void:
+	var short := UiTheme.short_screen(self)
+	_logo.add_theme_font_size_override("font_size", 52 if short else 76)
+	_gap.custom_minimum_size.y = 6 if short else 28
+	_margin.add_theme_constant_override("margin_top", 16 if short else 48)
+	_margin.add_theme_constant_override("margin_bottom", 12 if short else 32)
+	_menu.add_theme_constant_override("separation", 6 if short else 10)
+	for b in _buttons.values():
+		(b as Button).custom_minimum_size.y = 42 if short else 56
+		(b as Button).add_theme_font_size_override("font_size", 19 if short else 22)
+	_footer.visible = not short or Actions.last_device != "touch"
 
 
 func show_title(done: bool) -> void:
 	tutorial_done = done
+	_fit()
 	(_buttons.training as Button).text = "Training" if done else "Training  ·  start here"
 	visible = true
 	focus_default()

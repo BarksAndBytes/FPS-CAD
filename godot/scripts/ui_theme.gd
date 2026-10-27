@@ -13,8 +13,69 @@ const MUTED := Color("9ba7b6")
 const ACCENT := Color("ff8a3d")
 const ACCENT_INK := Color("1d1206")
 
+const SETTINGS := "user://settings.cfg"
+## Interface size choices for the pause menu. 0 means automatic (sized for the screen's density).
+const SCALE_CHOICES := [0.0, 1.0, 1.25, 1.5, 1.75, 2.0]
+
 static var display_font: Font
 static var body_font: Font
+static var ui_scale := 1.0
+
+
+## The interface scale that makes text a comfortable physical size on this screen. The layout is
+## designed at 1600 × 900; a phone shows that across a few inches, held about half as far away as
+## a monitor, so its text is scaled up to roughly match a desktop's apparent size.
+static func auto_scale() -> float:
+	if not OS.has_feature("mobile"):
+		return 1.0
+	var screen := Vector2(DisplayServer.screen_get_size())
+	var dpi := float(DisplayServer.screen_get_dpi())
+	if dpi <= 0.0 or screen.x <= 0.0:
+		return 1.5
+	var long_side := maxf(screen.x, screen.y)
+	var short_side := minf(screen.x, screen.y)
+	var base := minf(long_side / 1600.0, short_side / 900.0)  # what the stretch mode already applies
+	return clampf(0.0052 * dpi / base, 1.0, 1.6)
+
+
+static func saved_scale_choice() -> float:
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS)
+	return float(cfg.get_value("display", "ui_scale", 0.0))
+
+
+## Applies (and remembers) an interface size choice; 0 = automatic. Returns the scale in use.
+static func apply_scale(tree: SceneTree, choice: float, save := false) -> float:
+	ui_scale = auto_scale() if choice <= 0.0 else choice
+	tree.root.content_scale_factor = ui_scale
+	if save:
+		var cfg := ConfigFile.new()
+		cfg.load(SETTINGS)
+		cfg.set_value("display", "ui_scale", choice)
+		cfg.save(SETTINGS)
+	return ui_scale
+
+
+static func scale_label(choice: float) -> String:
+	if choice <= 0.0:
+		return "Auto (%d%%)" % roundi(auto_scale() * 100.0)
+	return "%d%%" % roundi(choice * 100.0)
+
+
+## True when the visible area is short (a phone in landscape, or a large interface size), so
+## menus should use their compact layouts.
+static func short_screen(node: Node) -> bool:
+	var vp := node.get_viewport()
+	return vp != null and vp.get_visible_rect().size.y < 760.0
+
+
+## Converts a length in window pixels (safe-area insets) to interface units.
+static func from_window_px(node: Node, px: float) -> float:
+	var vp := node.get_viewport()
+	var win := float(DisplayServer.window_get_size().x)
+	if vp == null or win <= 0.0:
+		return px
+	return px * vp.get_visible_rect().size.x / win
 
 
 static func apply() -> void:

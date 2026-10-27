@@ -187,6 +187,21 @@ func _run() -> void:
 	_check(main.touch.size.is_equal_approx(screen), "touch controls cover the screen")
 	main.wheel.close(false)
 
+	# A phone-sized interface: larger text, and the pause menu switches to two columns to fit.
+	var ui = load("res://scripts/ui_theme.gd")
+	ui.apply_scale(self, 1.75)
+	await _frames(2)
+	main.hud.set_menu_items(main._menu_items())
+	main.hud.set_menu(true)
+	await _frames(2)
+	var tall: float = main.hud.menu_control().size.y
+	var room: float = root.get_viewport().get_visible_rect().size.y
+	_check(root.content_scale_factor == 1.75 and tall <= room,
+		"at 175%% the pause menu fits the screen (%.0f of %.0f)" % [tall, room])
+	main.hud.set_menu(false)
+	ui.apply_scale(self, 1.0)
+	await _frames(2)
+
 	# ---- the CAD workflow in the game: plane → sketch → dimension → finish → extrude ----
 	main._start_mode("new")
 	await _frames(3)

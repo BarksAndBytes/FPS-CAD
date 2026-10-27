@@ -6,6 +6,7 @@ extends Control
 signal action_pressed(name: String)   # "primary", "secondary", "wheel"
 signal action_released(name: String)
 
+const UiTheme := preload("res://scripts/ui_theme.gd")
 const STICK_RADIUS := 60.0
 const LOOK_SENS := 0.0055
 
@@ -74,7 +75,7 @@ func _layout() -> void:
 	var safe := DisplayServer.get_display_safe_area()
 	var right_pad := pad
 	if safe.size.x > 0:
-		right_pad = maxf(pad, DisplayServer.screen_get_size().x - safe.end.x)
+		right_pad = maxf(pad, UiTheme.from_window_px(self, DisplayServer.window_get_size().x - safe.end.x))
 	_buttons.primary.position = Vector2(s.x - right_pad - 84, s.y - pad - 84)
 	_buttons.secondary.position = Vector2(s.x - right_pad - 84 + 11, s.y - pad - 84 - 74)
 	_buttons.jump.position = Vector2(s.x - right_pad - 84 - 78, s.y - pad - 62)
