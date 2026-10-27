@@ -46,12 +46,25 @@
 #include <gp_Pln.hxx>
 
 #include "fpcad/Expression.h"
+#include "fpcad/Sketch.h"
+#include "SketchGeom.h"
+
+#include <BRepBndLib.hxx>
+#include <BRepOffsetAPI_MakePipe.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRep_Builder.hxx>
+#include <Bnd_Box.hxx>
+#include <TopoDS_Compound.hxx>
+#include <gp_Ax1.hxx>
 
 namespace fpcad {
 namespace {
 
 using FaceTags = NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher>;
 using ShapeIndex = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
+
+constexpr double kPi = 3.14159265358979323846;
 
 struct FeatureError : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -126,8 +139,15 @@ bool hasSolid(const TopoDS_Shape& s) {
 
 }  // namespace
 
+struct SketchState {
+  Sketch sketch;
+  SolveResult solve;
+  SketchGeometry geom;
+};
+
 struct PartModel::Impl {
   PartDocument doc;
+  std::map<std::string, SketchState> sketches;  // by feature id, filled during rebuild
   RebuildReport report;
   std::vector<TopoDS_Shape> bodies;
   std::vector<FaceTags> tags;          // per body: face -> owner index
@@ -212,7 +232,159 @@ struct PartModel::Impl {
     return mf.Face();
   }
 
+  SketchValueFn valueFn() const {
+    return [this](const Json& v, Quantity q) { return value(v, q); };
+  }
+
+  // Solves a sketch feature, writes the solved positions back into the history and builds its
+  // geometry. Throws when the sketch's dimensions conflict.
+  void processSketch(Feature& f) {
+    SketchState st;
+    st.sketch = Sketch::fromJson(f.params);
+    st.solve = solveSketch(st.sketch, valueFn());
+    if (st.solve.ok) {
+      Json solved = st.sketch.toJson();
+      for (auto& [k, v] : f.params.items())
+        if (!solved.contains(k)) solved[k] = v;  // keep any extra keys
+      f.params = solved;
+    }
+    st.geom = buildSketchGeometry(st.sketch);
+    sketches[f.id] = std::move(st);
+    const SketchState& done = sketches[f.id];
+    if (!done.solve.ok) throw FeatureError("sketch: " + done.solve.message);
+  }
+
+  const SketchState& sketchRef(const Json& params, const char* key) const {
+    if (!params.contains(key) || !params.at(key).is_string()) throw FeatureError(std::string("choose a sketch (") + key + ")");
+    std::string id = params.at(key).get<std::string>();
+    auto it = sketches.find(id);
+    if (it == sketches.end()) {
+      const Feature* f = doc.find(id);
+      throw FeatureError(f ? f->name + " must come before this feature" : "the sketch no longer exists");
+    }
+    return it->second;
+  }
+
+  static TopoDS_Shape compoundOf(const std::vector<TopoDS_Face>& faces) {
+    if (faces.size() == 1) return faces[0];
+    TopoDS_Compound c;
+    BRep_Builder bb;
+    bb.MakeCompound(c);
+    for (auto& f : faces) bb.Add(c, f);
+    return c;
+  }
+
+  const std::vector<TopoDS_Face>& profileOf(const SketchState& st) const {
+    if (st.geom.regions.empty()) {
+      std::string why = st.geom.problems.empty() ? "" : ": " + st.geom.problems.front();
+      throw FeatureError("the sketch has no closed profile" + why);
+    }
+    return st.geom.regions;
+  }
+
+  // Length that reaches through everything built so far, for "through all".
+  double throughAllLength(const SketchState& st) const {
+    Bnd_Box box;
+    for (auto& b : bodies) BRepBndLib::Add(b, box);
+    for (auto& f : st.geom.regions) BRepBndLib::Add(f, box);
+    if (box.IsVoid()) return 1.0;
+    double x0, y0, z0, x1, y1, z1;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    return 2.0 * std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0)) + 1.0;
+  }
+
+  // Direction an extrude grows in: the sketch normal, or its reverse.
+  static gp_Dir extrudeDir(const SketchState& st, const Json& p) {
+    gp_Dir n = sketchAxes(st.sketch.plane).Direction();
+    return p.value("direction", std::string("normal")) == "reverse" ? n.Reversed() : n;
+  }
+
+  TopoDS_Shape sketchExtrude(const Feature& f) const {
+    const Json& p = f.params;
+    const SketchState& st = sketchRef(p, "sketch");
+    TopoDS_Shape prof = compoundOf(profileOf(st));
+    std::string dirMode = p.value("direction", std::string("normal"));
+    bool symmetric = dirMode == "symmetric";
+    gp_Vec dir(extrudeDir(st, p));
+    double depth = p.value("end", std::string("blind")) == "through_all" ? throughAllLength(st) : positive(p, "depth");
+    double offset = p.contains("offset") ? get(p, "offset") : 0.0;
+    double shift = offset - (symmetric ? depth / 2 : 0.0);
+    if (std::abs(shift) > 1e-15) {
+      gp_Trsf t;
+      t.SetTranslation(dir * shift);
+      prof = BRepBuilderAPI_Transform(prof, t, true).Shape();
+    }
+    return BRepPrimAPI_MakePrism(prof, dir * depth).Shape();
+  }
+
+  TopoDS_Shape sketchRevolve(const Feature& f) const {
+    const Json& p = f.params;
+    const SketchState& st = sketchRef(p, "sketch");
+    TopoDS_Shape prof = compoundOf(profileOf(st));
+    const SketchPlane& pl = st.sketch.plane;
+    std::string axis = p.value("axis", std::string("y"));
+    Vec3d o, d;
+    if (axis == "x" || axis == "y") {
+      o = pl.origin;
+      d = axis == "x" ? pl.xdir : pl.ydir();
+    } else {
+      const SketchEntity* e = st.sketch.entity(axis);
+      if (!e || e->kind != "line") throw FeatureError("the revolve axis must be a line in the sketch");
+      const SketchPoint* a = st.sketch.point(e->pts[0]);
+      const SketchPoint* b = st.sketch.point(e->pts[1]);
+      o = pl.toWorld(a->x, a->y);
+      Vec3d w = pl.toWorld(b->x, b->y);
+      d = {w[0] - o[0], w[1] - o[1], w[2] - o[2]};
+    }
+    gp_Ax1 ax(gp_Pnt(o[0], o[1], o[2]), gp_Dir(d[0], d[1], d[2]));
+    double angle = p.contains("angle") ? get(p, "angle", Quantity::Angle) : 2 * kPi;
+    if (!(angle > 1e-9)) throw FeatureError("the revolve angle must be greater than zero");
+    if (p.value("direction", std::string("normal")) == "reverse") ax.Reverse();
+    if (angle >= 2 * kPi - 1e-9) {
+      BRepPrimAPI_MakeRevol rev(prof, ax);
+      if (!rev.IsDone()) throw FeatureError("revolve failed: the profile may cross the axis");
+      return rev.Shape();
+    }
+    BRepPrimAPI_MakeRevol rev(prof, ax, angle);
+    if (!rev.IsDone()) throw FeatureError("revolve failed: the profile may cross the axis");
+    return rev.Shape();
+  }
+
+  TopoDS_Shape sketchSweep(const Feature& f) const {
+    const Json& p = f.params;
+    const SketchState& prof = sketchRef(p, "sketch");
+    const SketchState& path = sketchRef(p, "path");
+    TopoDS_Wire spine;
+    if (!path.geom.paths.empty()) spine = path.geom.paths.front();
+    else if (!path.geom.loops.empty()) spine = path.geom.loops.front();
+    else throw FeatureError("the path sketch has no connected chain of lines or arcs");
+    BRepOffsetAPI_MakePipe pipe(spine, compoundOf(profileOf(prof)));
+    pipe.Build();
+    if (!pipe.IsDone()) throw FeatureError("sweep failed: the profile may be too large for the path's bends");
+    return pipe.Shape();
+  }
+
+  TopoDS_Shape sketchLoft(const Feature& f) const {
+    const Json& p = f.params;
+    const Json& ids = p.value("sketches", Json::array());
+    if (!ids.is_array() || ids.size() < 2) throw FeatureError("a loft needs at least two sketches");
+    BRepOffsetAPI_ThruSections loft(true, p.value("ruled", false));
+    for (auto& id : ids) {
+      Json ref = {{"s", id}};
+      const SketchState& st = sketchRef(ref, "s");
+      if (st.geom.loops.empty()) throw FeatureError("every loft section needs one closed loop");
+      loft.AddWire(st.geom.loops.front());
+    }
+    loft.Build();
+    if (!loft.IsDone()) throw FeatureError("loft failed: the sections may be twisted or mismatched");
+    return loft.Shape();
+  }
+
   TopoDS_Shape toolShape(const Feature& f) const {
+    if (f.type == "extrude" && f.params.contains("sketch")) return sketchExtrude(f);
+    if (f.type == "revolve") return sketchRevolve(f);
+    if (f.type == "sweep") return sketchSweep(f);
+    if (f.type == "loft") return sketchLoft(f);
     const Json& p = f.params;
     if (f.type == "box") {
       double w = positive(p, "w"), d = positive(p, "d"), h = positive(p, "h");
@@ -376,6 +548,7 @@ struct PartModel::Impl {
     tags.clear();
     owners.clear();
     pickers.clear();
+    sketches.clear();
     evaluateVariables(r);
     for (auto& f : doc.features) {
       FeatureStatus st{f.id, true, {}};
@@ -386,7 +559,8 @@ struct PartModel::Impl {
       }
       try {
         int self = ownerIndex(f.id);
-        if (f.type == "fillet" || f.type == "chamfer") applyEdgeFeature(f, self);
+        if (f.type == "sketch") processSketch(f);
+        else if (f.type == "fillet" || f.type == "chamfer") applyEdgeFeature(f, self);
         else applyBoolean(f, toolShape(f), self);
       } catch (const Standard_Failure& e) {
         st.ok = false;
@@ -574,6 +748,23 @@ std::optional<Drive> driveFor(const Feature& f, const gp_Dir& n, const gp_Ax3* p
 std::optional<FaceDrive> PartModel::faceDrive(const PickHit& hit) const {
   const Feature* f = d_->doc.find(hit.featureId);
   if (!f) return std::nullopt;
+  if (f->type == "extrude" && f->params.contains("sketch")) {
+    // The end face drives the depth; the start face moves the start offset.
+    try {
+      if (f->params.value("end", std::string("blind")) == "through_all") return std::nullopt;
+      const SketchState& st = d_->sketchRef(f->params, "sketch");
+      gp_Dir dir = Impl::extrudeDir(st, f->params);
+      double a = gp_Dir(hit.normal[0], hit.normal[1], hit.normal[2]).Dot(dir);
+      bool sym = f->params.value("direction", std::string("normal")) == "symmetric";
+      FaceDrive fd;
+      fd.featureId = f->id;
+      fd.value = d_->get(f->params, "depth");
+      if (a > 0.9) { fd.param = "+depth"; fd.label = sym ? "end face · depth (both sides)" : "end face · depth"; return fd; }
+      if (a < -0.9) { fd.param = "-depth"; fd.label = sym ? "end face · depth (both sides)" : "start face · depth"; return fd; }
+    } catch (...) {
+    }
+    return std::nullopt;
+  }
   try {
     // A cut's faces bound empty space: seen from the tool body their normal points the other way.
     gp_Dir n(hit.normal[0], hit.normal[1], hit.normal[2]);
@@ -642,6 +833,13 @@ bool PartModel::pushPull(const PickHit& hit, double delta, std::string* message)
     else if (t == "p-w") grow(p["profile"], "w", -1, "cx");
     else if (t == "p+h") grow(p["profile"], "h", +1, "cy");
     else if (t == "p-h") grow(p["profile"], "h", -1, "cy");
+    else if ((t == "+depth" || t == "-depth") && p.contains("sketch")) {
+      bool sym = p.value("direction", std::string("normal")) == "symmetric";
+      double cur = d_->get(p, "depth");
+      double next = std::max(kMin, cur + (sym ? 2 * delta : delta));
+      p["depth"] = next;
+      if (t == "-depth" && !sym) p["offset"] = (p.contains("offset") ? d_->get(p, "offset") : 0.0) - (next - cur);
+    }
     else if (t == "+depth" || t == "-depth") {
       gp_Ax3 ax = d_->sketchPlane(p.at("plane"));
       bool sym = p.value("symmetric", false);
@@ -704,6 +902,127 @@ std::vector<Vec3> PartModel::faceVertices(int b, int face) const {
     out.push_back({p.X(), p.Y(), p.Z()});
   }
   return out;
+}
+
+// ----- Sketches -----
+
+SolveResult PartModel::solve(Sketch& s) const { return solveSketch(s, d_->valueFn()); }
+
+bool PartModel::isConsumed(const std::string& id) const {
+  bool after = false;
+  for (auto& f : d_->doc.features) {
+    if (f.id == id) { after = true; continue; }
+    if (!after || f.suppressed) continue;
+    const Json& p = f.params;
+    for (const char* k : {"sketch", "path"})
+      if (p.contains(k) && p.at(k).is_string() && p.at(k).get<std::string>() == id) return true;
+    if (p.contains("sketches") && p.at("sketches").is_array())
+      for (auto& v : p.at("sketches"))
+        if (v.is_string() && v.get<std::string>() == id) return true;
+  }
+  return false;
+}
+
+std::string PartModel::latestUnusedSketch() const {
+  for (auto it = d_->doc.features.rbegin(); it != d_->doc.features.rend(); ++it)
+    if (it->type == "sketch" && !it->suppressed && !isConsumed(it->id)) return it->id;
+  return {};
+}
+
+std::vector<SketchView> PartModel::sketchViews() const {
+  std::vector<SketchView> out;
+  for (auto& f : d_->doc.features) {
+    if (f.type != "sketch") continue;
+    auto it = d_->sketches.find(f.id);
+    if (it == d_->sketches.end()) continue;
+    const SketchState& st = it->second;
+    SketchView v;
+    v.featureId = f.id;
+    v.name = f.name;
+    v.planeName = st.sketch.planeName;
+    v.consumed = isConsumed(f.id);
+    v.ok = st.solve.ok;
+    v.dof = st.solve.dof;
+    v.message = st.solve.message;
+    v.regions = static_cast<int>(st.geom.regions.size());
+    for (auto& pl : sketchPolylines(st.sketch)) {
+      auto& dst = pl.construction ? v.constructionSegments : v.segments;
+      for (size_t i = 0; i + 1 < pl.points.size(); ++i) {
+        Vec3d a = st.sketch.plane.toWorld(pl.points[i][0], pl.points[i][1]);
+        Vec3d b = st.sketch.plane.toWorld(pl.points[i + 1][0], pl.points[i + 1][1]);
+        dst.push_back(a);
+        dst.push_back(b);
+      }
+    }
+    out.push_back(std::move(v));
+  }
+  return out;
+}
+
+std::optional<SketchPlane> PartModel::planeFromHit(const PickHit& hit, std::string* name) const {
+  if (hit.body < 0 || hit.body >= bodyCount()) return std::nullopt;
+  const ShapeIndex& faces = d_->faceIndex[static_cast<size_t>(hit.body)];
+  if (hit.face < 0 || hit.face >= faces.Extent()) return std::nullopt;
+  TopoDS_Face face = TopoDS::Face(faces(hit.face + 1));
+  if (BRepAdaptor_Surface(face).GetType() != GeomAbs_Plane) return std::nullopt;
+  Vec3d n = hit.normal;
+  double len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+  if (len < 1e-12) return std::nullopt;
+  for (auto& c : n) c /= len;
+  SketchPlane pl;
+  pl.normal = n;
+  // The part origin projected onto the face's plane keeps sketch coordinates meaningful.
+  double k = hit.point[0] * n[0] + hit.point[1] * n[1] + hit.point[2] * n[2];
+  pl.origin = {n[0] * k, n[1] * k, n[2] * k};
+  Vec3d axis = std::abs(n[0]) < 0.9 ? Vec3d{1, 0, 0} : Vec3d{0, 1, 0};
+  double d = axis[0] * n[0] + axis[1] * n[1] + axis[2] * n[2];
+  pl.xdir = {axis[0] - d * n[0], axis[1] - d * n[1], axis[2] - d * n[2]};
+  pl = SketchPlane::fromJson(pl.toJson());  // normalises xdir
+  if (name) {
+    const Feature* f = d_->doc.find(hit.featureId);
+    *name = "Face of " + (f ? f->name : std::string("the part"));
+  }
+  return pl;
+}
+
+std::optional<SketchHit> PartModel::pickSketch(const Vec3& o, const Vec3& dir, double maxDistance, double tolerance,
+                                               bool includeConsumed) const {
+  std::optional<SketchHit> best;
+  for (auto& [id, st] : d_->sketches) {
+    if (!includeConsumed && isConsumed(id)) continue;
+    const SketchPlane& pl = st.sketch.plane;
+    const Vec3d& n = pl.normal;
+    double denom = dir[0] * n[0] + dir[1] * n[1] + dir[2] * n[2];
+    if (std::abs(denom) < 1e-12) continue;
+    double t = ((pl.origin[0] - o[0]) * n[0] + (pl.origin[1] - o[1]) * n[1] + (pl.origin[2] - o[2]) * n[2]) / denom;
+    if (t < 0 || t > maxDistance || (best && t >= best->distance)) continue;
+    Vec3 p{o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t};
+    auto q = pl.toPlane(p);
+    int region = -1;
+    for (size_t i = 0; i < st.geom.regionOutlines.size() && region < 0; ++i) {
+      if (!pointInPolygon(st.geom.regionOutlines[i], q[0], q[1])) continue;
+      bool inHole = false;
+      for (auto& h : st.geom.regionHoles[i]) inHole = inHole || pointInPolygon(h, q[0], q[1]);
+      if (!inHole) region = static_cast<int>(i);
+    }
+    bool near = false;
+    if (region < 0) {
+      double tol = tolerance * std::max(t, 1e-6);
+      for (auto& pl2 : sketchPolylines(st.sketch)) {
+        for (size_t i = 0; i + 1 < pl2.points.size() && !near; ++i) {
+          auto a = pl2.points[i], b = pl2.points[i + 1];
+          double dx = b[0] - a[0], dy = b[1] - a[1];
+          double L2 = dx * dx + dy * dy;
+          double s = L2 > 0 ? std::clamp(((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / L2, 0.0, 1.0) : 0.0;
+          near = std::hypot(a[0] + s * dx - q[0], a[1] + s * dy - q[1]) < tol;
+        }
+        if (near) break;
+      }
+    }
+    if (region < 0 && !near) continue;
+    best = SketchHit{id, region, p, t};
+  }
+  return best;
 }
 
 }  // namespace fpcad
