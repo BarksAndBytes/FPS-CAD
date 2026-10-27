@@ -1005,21 +1005,21 @@ std::optional<SketchHit> PartModel::pickSketch(const Vec3& o, const Vec3& dir, d
       for (auto& h : st.geom.regionHoles[i]) inHole = inHole || pointInPolygon(h, q[0], q[1]);
       if (!inHole) region = static_cast<int>(i);
     }
-    bool near = false;
+    bool nearLine = false;
     if (region < 0) {
       double tol = tolerance * std::max(t, 1e-6);
       for (auto& pl2 : sketchPolylines(st.sketch)) {
-        for (size_t i = 0; i + 1 < pl2.points.size() && !near; ++i) {
+        for (size_t i = 0; i + 1 < pl2.points.size() && !nearLine; ++i) {
           auto a = pl2.points[i], b = pl2.points[i + 1];
           double dx = b[0] - a[0], dy = b[1] - a[1];
           double L2 = dx * dx + dy * dy;
           double s = L2 > 0 ? std::clamp(((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / L2, 0.0, 1.0) : 0.0;
-          near = std::hypot(a[0] + s * dx - q[0], a[1] + s * dy - q[1]) < tol;
+          nearLine = std::hypot(a[0] + s * dx - q[0], a[1] + s * dy - q[1]) < tol;
         }
-        if (near) break;
+        if (nearLine) break;
       }
     }
-    if (region < 0 && !near) continue;
+    if (region < 0 && !nearLine) continue;
     best = SketchHit{id, region, p, t};
   }
   return best;

@@ -228,11 +228,11 @@ func show_page(i: int) -> void:
 	if page == 3:
 		for row in SKETCH:
 			if row[0] == "":
-				for i in 3:
-					_list.add_child(UiTheme.title(row[2] if i == 2 else "", 15, UiTheme.MUTED))
+				for col in 3:
+					_list.add_child(UiTheme.title(row[2] if col == 2 else "", 15, UiTheme.MUTED))
 				continue
-			for i in 2:
-				var k := UiTheme.title(row[i], 17, UiTheme.ACCENT)
+			for col in 2:
+				var k := UiTheme.title(row[col], 17, UiTheme.ACCENT)
 				k.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 				k.custom_minimum_size = Vector2(170, 0)
 				_list.add_child(k)
