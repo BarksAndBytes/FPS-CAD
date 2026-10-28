@@ -4,6 +4,7 @@ extends Node3D
 ## with size so movement feels the same at 0.1 mm and at 1 km.
 
 signal size_changed(size: float)
+signal growth_blocked  # walking: growing further would push the body into a part
 
 const TALL := 1.75        # metres at 1:1
 const EYE := 1.62
@@ -45,6 +46,7 @@ var _jump_queued := false
 var _grow_held := 0.0
 var _shrink_held := 0.0
 var _scale_hold := 0.0  # touch buttons: +1 grow, -1 shrink
+var _blocked_at := -10000
 
 ## Sketch view: the camera looks straight down a plane's normal with the plane's X axis to the
 ## right and its Y axis up. Moving pans across the plane and size is the zoom (distance).
@@ -245,6 +247,13 @@ func _held(action: StringName, held: float, dt: float, tap_factor: float) -> flo
 func _update_size(dt: float) -> void:
 	if _scale_hold != 0.0:
 		scale_by(exp(1.4 * dt * _scale_hold))
+	if target_size > size * 1.0001 and not fly and not view_lock:
+		var room := room_to_grow()
+		if target_size > room:
+			target_size = maxf(room, size)  # never shrink the player because of it
+			if Time.get_ticks_msec() - _blocked_at > 1200:
+				_blocked_at = Time.get_ticks_msec()
+				growth_blocked.emit()
 	var before := size
 	var a := log(size)
 	var b := log(target_size)
@@ -292,6 +301,29 @@ func _move(dt: float) -> void:
 		_on_ground = true
 	else:
 		_on_ground = feet.y - floor_y < 0.02 * size and _vy <= 0.0
+
+
+## The largest size the walking player can grow to here without its body entering a part: the
+## head stays under the nearest ceiling and the body clear of nearby walls. Faces seen from
+## inside a part do not count, as in _blocked, so a player already inside one is not trapped.
+func room_to_grow() -> float:
+	if not cast.is_valid():
+		return MAX_SIZE
+	var limit := MAX_SIZE
+	var base := feet + Vector3(0, 0.02 * size, 0)
+	var up: Dictionary = cast.call(base, Vector3.UP, TALL * target_size * 1.1 + 1e-6)
+	if not up.is_empty() and up.normal.y < 0.0:
+		limit = minf(limit, (up.distance + 0.02 * size) / (TALL * 1.03))
+	# Walls, sampled at heights through the body the player would grow into.
+	var height := TALL * minf(target_size, limit)
+	for f in [0.35, 0.65, 0.95]:
+		var o := feet + Vector3(0, maxf(height * f, STEP * size), 0)
+		for i in 8:
+			var dir := Vector3(cos(TAU * i / 8.0), 0, sin(TAU * i / 8.0))
+			var hit: Dictionary = cast.call(o, dir, RADIUS * target_size * 1.2 + 1e-6)
+			if not hit.is_empty() and hit.normal.dot(dir) < 0.0:
+				limit = minf(limit, hit.distance / (RADIUS * 1.1))
+	return maxf(limit, MIN_SIZE)
 
 
 func _floor_at(probe: Vector3) -> float:

@@ -67,6 +67,7 @@ func _ready() -> void:
 	player = preload("res://scripts/player.gd").new()
 	add_child(player)
 	player.cast = _cast
+	player.growth_blocked.connect(_on_growth_blocked)
 	player.input_enabled = false
 	tools = ToolsScript.new()
 	add_child(tools)
@@ -236,6 +237,12 @@ func _spawn(feet: Vector3, yaw: float, size: float) -> void:
 	player.pitch = -0.12
 	player.size = size
 	player.target_size = size
+
+
+func _on_growth_blocked() -> void:
+	if state == "play":
+		hud.toast("No room to grow here · step into the open, or turn on Fly to pass through parts")
+		Input.start_joy_vibration(0, 0.25, 0.1, 0.08)
 
 
 func _on_update_checked(message: String) -> void:

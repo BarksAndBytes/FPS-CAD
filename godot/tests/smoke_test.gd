@@ -163,6 +163,22 @@ func _run() -> void:
 	await _seconds(1.6)
 	_check(main.tutorial.step == 2, "reaching the marker completes objective 2")
 
+	# Growing while walking stops where the body would enter a part: inside the 30 cm crawl
+	# tunnel the player cannot grow taller than the tunnel. Flying lifts the limit.
+	main.player.size = 0.1
+	main.player.target_size = 0.1
+	main.player.feet = Vector3(0, 0, 0)
+	await _frames(2)
+	main.player.set_size(1.0)
+	await _seconds(0.8)
+	var grown: float = main.player.size * 1.75
+	_check(grown < 0.3 and grown > 0.2, "growing inside the tunnel stops under its 30 cm ceiling (%.0f mm tall)" % (grown * 1000.0))
+	main.player.feet = Vector3(0, 0.05, 9)
+	await _frames(2)
+	main.player.set_size(1.0)
+	await _seconds(0.8)
+	_check(main.player.size > 0.95, "in the open the player grows back to full size")
+
 	await _pad(JOY_BUTTON_START)
 	await _frames(4)
 	_check(main.hud.menu_open, "Start opens the pause menu")
