@@ -75,7 +75,7 @@ func _run() -> void:
 	_check(absf(t.origin.y - (-0.020)) < 1e-6, "component placement converts to Y-up")
 
 	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main",
-			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units"]:
+			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info"]:
 		var s: Script = load("res://scripts/%s.gd" % script)
 		_check(s != null and s.can_instantiate(), "script %s compiles" % script)
 
@@ -104,6 +104,15 @@ func _run() -> void:
 	_check(blank.body_count() == 0 and blank.latest_unused_sketch() == sk_id, "abandon removes the preview")
 	var aimed: Dictionary = blank.pick_sketch(Vector3(0.5, 0.25, 5), Vector3(0, 0, -1), 20.0, 0.02, false)
 	_check(aimed.get("feature_id", "") == sk_id and aimed.region == 0, "pick_sketch finds the profile")
+
+	# Update checks: the decision logic, without touching the network.
+	var up = load("res://scripts/updater.gd")
+	var newer: Dictionary = up.evaluate({build = 12, apk = "https://example.invalid/a.apk", signing = "release"}, 11)
+	_check(newer.newer, "a higher build number is offered as an update")
+	_check(not up.evaluate({build = 11, apk = "x", signing = "release"}, 11).newer, "the same build is not an update")
+	_check(not up.evaluate({build = 13, apk = "x", signing = "debug"}, 11).newer, "a debug-signed build is not offered (it could not install over this one)")
+	_check(not up.evaluate("nonsense", 11).newer and not up.evaluate({build = 13}, 11).newer, "unreadable update information is ignored")
+	_check(not up.supported(), "local and desktop builds never check for updates")
 
 	var course = ClassDB.instantiate(&"CadPart")
 	course.make_training()

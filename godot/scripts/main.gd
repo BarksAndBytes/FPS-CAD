@@ -36,6 +36,8 @@ var tutorial: Node3D
 var sketcher: Node3D
 var dialog: CanvasLayer
 var numpad: CanvasLayer
+var updater: Node
+var _update_checked := false
 
 var _aim := {}
 var _autosave_t := 0.0
@@ -107,6 +109,11 @@ func _ready() -> void:
 	add_child(title)
 	title.chosen.connect(_on_title_chosen)
 
+	updater = preload("res://scripts/updater.gd").new()
+	add_child(updater)
+	updater.update_available.connect(_on_update_available)
+	updater.checked.connect(_on_update_checked)
+
 	hud.request.connect(_on_hud_request)
 	Actions.device_changed.connect(_on_device_changed)
 	_on_device_changed(Actions.last_device)
@@ -149,6 +156,9 @@ func _show_title() -> void:
 		_load_background()
 	player.fly = true
 	title.show_title(Tutorial.is_done())
+	if not _update_checked:
+		_update_checked = true
+		updater.check_on_launch()
 
 
 func _start_mode(m: String) -> void:
@@ -203,6 +213,11 @@ func _menu_items() -> Array:
 		items += [["Finish sketch", "finish_sketch"], ["Discard sketch", "discard_sketch"]]
 	items.append(["Controls", "controls"])
 	items.append(["Interface size: " + UiTheme.scale_label(UiTheme.saved_scale_choice()), "ui_scale"])
+	if updater != null and updater.supported():
+		if not updater.latest.is_empty():
+			items.insert(1, ["Update to build %d" % int(updater.latest.get("build", 0)), "update"])
+		items.append(["Check for updates", "check_updates"])
+		items.append(["Update checks at launch: " + ("On" if updater.enabled() else "Off"), "toggle_update_checks"])
 	if mode == "training":
 		items.append(["Restart training", "restart_training"])
 	items += [
@@ -222,8 +237,22 @@ func _spawn(feet: Vector3, yaw: float, size: float) -> void:
 	player.target_size = size
 
 
+func _on_update_checked(message: String) -> void:
+	if hud.visible:
+		hud.toast(message)
+
+
+func _on_update_available(info: Dictionary) -> void:
+	title.show_update(info)
+	if state == "play":
+		hud.set_menu_items(_menu_items())
+		hud.toast("Update available: build %d · in the pause menu" % int(info.get("build", 0)))
+
+
 func _on_title_chosen(id: String) -> void:
 	match id:
+		"update":
+			updater.download()
 		"controls":
 			cmap.open()
 		"quit":
@@ -752,6 +781,16 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			cmap.open()
 		"resume":
 			hud.set_menu(false)
+		"update":
+			_autosave()
+			updater.download()
+		"check_updates":
+			hud.toast("Checking for updates…")
+			updater.check(true)
+		"toggle_update_checks":
+			updater.set_enabled(not updater.enabled())
+			hud.set_menu_items(_menu_items())
+			hud.focus_menu_action("toggle_update_checks")
 		"ui_scale":
 			var choices: Array = UiTheme.SCALE_CHOICES
 			var next: float = choices[(choices.find(UiTheme.saved_scale_choice()) + 1) % choices.size()]

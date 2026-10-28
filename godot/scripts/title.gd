@@ -1,7 +1,7 @@
 extends CanvasLayer
 ## Title screen: the game's name over a slowly orbiting model, and the main menu.
 
-signal chosen(id: String)  # "training", "new", "free", "assembly", "controls", "quit"
+signal chosen(id: String)  # "update", "training", "new", "free", "assembly", "controls", "quit"
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 
@@ -51,6 +51,7 @@ func _ready() -> void:
 	_menu.add_theme_constant_override("separation", 10)
 	col.add_child(_menu)
 	for spec in [
+		["update", "Update available", "Downloads the newer build; tap it when it finishes to install it over this one"],
 		["training", "Training", "Learn to move, resize yourself, sketch and extrude"],
 		["new", "New part", "A blank part: pick a plane, sketch, then extrude, revolve, sweep or loft"],
 		["free", "Free build", "Walk and edit the sample pavilion"],
@@ -72,6 +73,8 @@ func _ready() -> void:
 		b.focus_entered.connect(func(): _describe(desc))
 		_menu.add_child(b)
 		_buttons[id] = b
+	(_buttons.update as Button).visible = false
+	(_buttons.update as Button).add_theme_color_override("font_color", UiTheme.ACCENT)
 
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -79,7 +82,8 @@ func _ready() -> void:
 	_footer = UiTheme.text("", 15, UiTheme.MUTED)
 	_footer.autowrap_mode = TextServer.AUTOWRAP_WORD
 	col.add_child(_footer)
-	var version := UiTheme.text("v0.2 · sketch-based modelling · files stay on this device", 13, UiTheme.MUTED.darkened(0.25))
+	var version := UiTheme.text("v%s · %s · files stay on this device" % [
+		preload("res://scripts/build_info.gd").VERSION, preload("res://scripts/updater.gd").version_text()], 13, UiTheme.MUTED.darkened(0.25))
 	col.add_child(version)
 	visible = false
 	get_viewport().size_changed.connect(_fit)
@@ -105,6 +109,13 @@ func show_title(done: bool) -> void:
 	(_buttons.training as Button).text = "Training" if done else "Training  ·  start here"
 	visible = true
 	focus_default()
+
+
+## Shows the update entry at the top of the menu.
+func show_update(info: Dictionary) -> void:
+	var b: Button = _buttons.update
+	b.text = "Update to build %d" % int(info.get("build", 0))
+	b.visible = true
 
 
 func focus_default() -> void:

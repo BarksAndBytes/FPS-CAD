@@ -2,6 +2,11 @@ name: Android APK
 
 # Builds an installable debug APK and publishes it as the "android-dev" pre-release, so the
 # latest build can be downloaded straight to a phone from the repository's Releases page.
+#
+# Every build is signed with the same key (repository secrets ANDROID_KEYSTORE_BASE64 and
+# ANDROID_KEYSTORE_PASSWORD, alias "fpscad"), and its version code is the workflow's run number,
+# so a new build installs over the old one as an update. The release also carries latest.json,
+# which the app reads to offer updates (godot/scripts/updater.gd).
 
 on:
   push:
@@ -91,6 +96,40 @@ jobs:
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
 
+      - name: Signing key and build number
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASS" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "SIGN_KS=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "SIGN_ALIAS=fpscad" >> "$GITHUB_ENV"
+            echo "SIGN_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
+            echo "SIGN_KIND=release" >> "$GITHUB_ENV"
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD are not set: signing with a throwaway debug key, so this build cannot update an installed one."
+            echo "SIGN_KS=$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" >> "$GITHUB_ENV"
+            echo "SIGN_ALIAS=androiddebugkey" >> "$GITHUB_ENV"
+            echo "SIGN_PASS=android" >> "$GITHUB_ENV"
+            echo "SIGN_KIND=debug" >> "$GITHUB_ENV"
+          fi
+          BUILD=${{ github.run_number }}
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+          # Android installs a build over another only when its version code is not lower.
+          sed -i "s|^version/code=.*|version/code=$BUILD|; s|^version/name=.*|version/name=\"0.2.$BUILD\"|" godot/export_presets.cfg
+          cat > godot/scripts/build_info.gd <<EOF
+          extends RefCounted
+          ## Written by CI for each published build.
+          const BUILD := $BUILD
+          const COMMIT := "${GITHUB_SHA::7}"
+          const BRANCH := "${GITHUB_REF_NAME}"
+          const VERSION := "0.2.$BUILD"
+          EOF
+          sed -i 's/^          //' godot/scripts/build_info.gd
+          cat godot/scripts/build_info.gd
+          grep -E "^version/" godot/export_presets.cfg
+
       - name: Export the APK
         run: |
           GODOT=./Godot_v${GODOT_VERSION}-stable_linux.x86_64
@@ -105,12 +144,21 @@ jobs:
           BT="$ANDROID_SDK_ROOT/build-tools/$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
           python3 tools/dedupe_apk.py export/android/FPS-CAD.apk export/android/deduped.apk
           tools/ci_run.sh "$BT/zipalign" -f -p 4 export/android/deduped.apk export/android/aligned.apk
-          tools/ci_run.sh "$BT/apksigner" sign --ks "$GODOT_ANDROID_KEYSTORE_DEBUG_PATH" --ks-pass pass:android \
-            --ks-key-alias androiddebugkey --key-pass pass:android --out export/android/FPS-CAD.apk export/android/aligned.apk
-          tools/ci_run.sh "$BT/apksigner" verify --print-certs export/android/FPS-CAD.apk
+          tools/ci_run.sh "$BT/apksigner" sign --ks "$SIGN_KS" --ks-pass env:SIGN_PASS \
+            --ks-key-alias "$SIGN_ALIAS" --key-pass env:SIGN_PASS --out export/android/FPS-CAD.apk export/android/aligned.apk
+          tools/ci_run.sh "$BT/apksigner" verify --print-certs export/android/FPS-CAD.apk | tee export/android/certs.txt
+          echo "CERT_SHA256=$(grep -m1 'SHA-256 digest' export/android/certs.txt | awk '{print $NF}')" >> "$GITHUB_ENV"
           unzip -l export/android/FPS-CAD.apk | grep -E "lib/arm64-v8a/.*\.so" | tee export/android/libs.txt
           grep -q libfpcad export/android/libs.txt || { echo "::error::the APK is missing the CAD extension"; exit 1; }
           cp export/android/FPS-CAD.apk "export/android/FPS-CAD-${GITHUB_SHA::7}.apk"
+          APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/android-dev/FPS-CAD-${GITHUB_SHA::7}.apk"
+          python3 - "$APK_URL" > export/android/latest.json <<'PY'
+          import json, os, sys
+          print(json.dumps({"build": int(os.environ["BUILD"]), "version": "0.2." + os.environ["BUILD"],
+                            "commit": os.environ["GITHUB_SHA"][:7], "branch": os.environ["GITHUB_REF_NAME"],
+                            "signing": os.environ["SIGN_KIND"], "apk": sys.argv[1]}, indent=2))
+          PY
+          cat export/android/latest.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -122,11 +170,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete android-dev --cleanup-tag --yes || true
-          gh release create android-dev "export/android/FPS-CAD-${GITHUB_SHA::7}.apk" \
+          if [ "$SIGN_KIND" = release ]; then
+            SIGN_NOTE="Signed with the FPS-CAD key (certificate SHA-256 \`$CERT_SHA256\`): it installs over any earlier build signed with the same key as an update, keeping your files. The app checks for newer builds on launch."
+          else
+            SIGN_NOTE="Signed with a throwaway debug key because the signing secrets are not set, so uninstall any other build first."
+          fi
+          gh release create android-dev "export/android/FPS-CAD-${GITHUB_SHA::7}.apk" export/android/latest.json \
             --prerelease --target "$GITHUB_SHA" \
-            --title "Android development build (${GITHUB_SHA::7})" \
-            --notes "Debug build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a phone.
+            --title "Android build ${BUILD} (${GITHUB_SHA::7})" \
+            --notes "Build ${BUILD} (version 0.2.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a phone.
 
           Install: open this page on the phone, download the APK, and allow installs from your browser when Android asks. Android 10 or newer, 64-bit (arm64). Pair an Xbox controller over Bluetooth first, or use the on-screen controls.
 
-          This build is signed with a throwaway debug key, so uninstall it before installing a build signed with a different key."
+          $SIGN_NOTE"
