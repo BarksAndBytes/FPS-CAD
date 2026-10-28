@@ -18,8 +18,13 @@ by a feature hide, as in most CAD tools; edit them from the model panel (Tab / Y
 
 ## Sketch mode
 
-The crosshair ray meets the sketch plane at the cursor. Points snap to existing points, the
-sketch origin and the grid (your snap step, which follows your size).
+Entering a sketch swings the camera to look straight down the plane's normal, with the sketch's
+X axis pointing right and its Y axis up, like a desktop CAD tool's sketch view. Editing an
+existing sketch also centres and zooms on its geometry. Finishing or discarding the sketch takes
+you back to where you were standing.
+
+The crosshair (screen centre) is the cursor. Points snap to existing points, the sketch origin
+and the grid (your snap step, which follows the zoom).
 
 | Controller | Keyboard and mouse | Action |
 | --- | --- | --- |
@@ -27,7 +32,9 @@ sketch origin and the grid (your snap step, which follows your size).
 | RT | Left click | Place a point / pick geometry |
 | LT, B | Right click | End the line chain, drop the shape being drawn |
 | LB | E | Tool option (construction geometry, arc direction, dimension or relation type) |
-| Y | I | Look straight at the sketch |
+| Left stick / right stick (fine) | WASD / mouse | Pan across the sketch; the view stays square to it |
+| D-pad ↑ / ↓ | Scroll, = / − | Zoom in / out |
+| Y | I | Switch between the sketch view and free look (walk or fly around it) |
 | D-pad ← / → | Ctrl+Z / Ctrl+Shift+Z | Undo / redo inside the sketch |
 | X | Enter | Finish (Menu → Discard sketch leaves without changes) |
 

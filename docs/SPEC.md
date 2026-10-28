@@ -39,7 +39,7 @@ network calls for modeling, saving or export.
 | Left bumper (hold) | Context wheel (snap modes, mate types, options) |
 | A / B | Jump or fly up / crouch, fly down, back |
 | A / B in menus | Select / back |
-| X / Y | Finish sketch / inspect target parameters; in sketch mode Y looks straight at the plane |
+| X / Y | Finish sketch / inspect target parameters; in sketch mode Y switches between the sketch view and free look |
 | D-pad up / down | Grow / shrink (x2 per tap, hold for smooth) |
 | D-pad left / right | Undo / redo |
 | View / Menu | Controls map / pause menu |

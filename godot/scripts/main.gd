@@ -310,8 +310,9 @@ func _on_sketch_requested(plane: Dictionary, plane_name: String, edit_id: String
 	view.clear_highlight()
 	hud.set_menu_items(_menu_items())
 	_show_tool()
-	hud.toast("Sketching on %s · %s finishes · %s looks straight at it" % [
-		sketcher.sketch.get("planeName", "the plane"), Actions.prompt(&"finish"), Actions.prompt(&"normal_to")])
+	hud.toast("Sketching on %s · move to pan, %s / %s zoom · %s finishes · %s free look" % [
+		sketcher.sketch.get("planeName", "the plane"), Actions.prompt(&"grow"), Actions.prompt(&"shrink"),
+		Actions.prompt(&"finish"), Actions.prompt(&"normal_to")])
 
 
 func _on_sketch_ended(feature_id: String, committed: bool) -> void:
@@ -554,7 +555,7 @@ func _gameplay_input() -> void:
 		_screenshot()
 
 
-## Input while a sketch is open: the triggers draw, X finishes, Y looks straight at the plane,
+## Input while a sketch is open: the triggers draw, X finishes, Y switches between the sketch view and free look,
 ## the D-pad's left and right undo and redo inside the sketch.
 func _sketch_input() -> void:
 	var mouse_free: bool = Actions.last_device == "keyboard" and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
@@ -571,7 +572,7 @@ func _sketch_input() -> void:
 	if Input.is_action_just_pressed(&"finish"):
 		sketcher.finish()
 	if Input.is_action_just_pressed(&"inspect"):
-		sketcher.look_normal_to()
+		sketcher.toggle_view()
 	if Input.is_action_just_pressed(&"redo"):
 		if sketcher.redo():
 			hud.toast("Redo (sketch)")

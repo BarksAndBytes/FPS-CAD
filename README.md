@@ -66,7 +66,7 @@ rectangle on a face, finishing the sketch, extruding it, measuring and the contr
 | Menu | Esc | Pause menu: controls, save, open, export, exit to title |
 | — | F | Fly through walls |
 | X | Enter | Finish the sketch |
-| Y (sketching) | I | Look straight at the sketch plane |
+| Y (sketching) | I | Sketch view ↔ free look (sketches open square to the plane, X right, Y up) |
 
 The wheel has two pages (LB / E switches while it is open): **Model** — Select, Sketch, Extrude,
 Revolve, Sweep, Loft, Push/Pull, Measure, Delete — and **Direct** — Box, Cylinder, Sphere, Move.

@@ -58,6 +58,7 @@ var _hover := {}
 var _lines := MeshInstance3D.new()
 var _grid := MeshInstance3D.new()
 var _labels: Array[Label3D] = []
+var _pose := {}  # where the player was before the sketch, restored when it closes
 
 
 func _ready() -> void:
@@ -113,6 +114,8 @@ func begin(plane: Dictionary, plane_name: String, edit: String = "") -> bool:
 	_index()
 	active = true
 	visible = true
+	_pose = game.player.pose()
+	_enter_sketch_view(edit != "")
 	return true
 
 
@@ -149,6 +152,9 @@ func discard() -> void:
 func _close() -> void:
 	active = false
 	visible = false
+	if not _pose.is_empty():
+		game.player.restore_pose(_pose)
+		_pose = {}
 	_pending.clear()
 	_picks.clear()
 	for l in _labels:
@@ -961,27 +967,52 @@ func _aim_label() -> String:
 	return "%s, %s" % [game.hud.length(_cursor.x), game.hud.length(_cursor.y)]
 
 
-## Flies the player to look straight at the sketch, from the side they are on.
-func look_normal_to() -> void:
+## Swings the camera to look straight down the sketch plane's normal, with the plane's X axis
+## pointing right and its Y axis up, like a desktop CAD tool's sketch view. When frame is true
+## (editing a sketch), it centres on and zooms to the existing geometry; otherwise it centres on
+## where the player was aiming.
+func _enter_sketch_view(frame: bool) -> void:
 	var p: Node3D = game.player
-	var centre := Vector2.ZERO
-	for id in _pts:
-		centre += _pts[id]
-	centre /= _pts.size()
-	var extent := 0.0
-	for id in _pts:
-		extent = maxf(extent, centre.distance_to(_pts[id]))
-	for e in sketch.entities:
-		if e.kind == "circle":
-			extent = maxf(extent, centre.distance_to(_pts.get(e.pts[0], Vector2.ZERO)) + float(e.r))
-	var target := _w(centre)
-	var n := _n
-	if (p.eye_position() - target).dot(n) < 0.0:
-		n = -n
-	var dist := maxf(extent * 2.6, 2.5 * p.size)
-	p.fly = true
-	p.feet = target + n * dist - Vector3(0, p.EYE * p.size, 0)
-	p.pitch = clampf(asin(clampf(-n.y, -1.0, 1.0)), -1.55, 1.55)
-	if absf(n.y) < 0.999:
-		p.yaw = atan2(n.x, n.z)
-	game.hud.toast("Looking straight at the sketch · flying")
+	var target := _plane_point_ahead()
+	if frame and _pts.size() > 1:
+		var lo := Vector2(INF, INF)
+		var hi := Vector2(-INF, -INF)
+		for id in _pts:
+			lo = lo.min(_pts[id])
+			hi = hi.max(_pts[id])
+		for e in sketch.entities:
+			if e.kind == "circle":
+				var c: Vector2 = _pts.get(e.pts[0], Vector2.ZERO)
+				lo = lo.min(c - Vector2.ONE * float(e.r))
+				hi = hi.max(c + Vector2.ONE * float(e.r))
+		target = _w((lo + hi) / 2.0)
+		var extent := maxf((hi - lo).length() / 2.0, 1e-4)
+		# The view's half-height is about 3 player sizes at the sketch-view distance.
+		p.set_size(extent * 1.3 / 3.0)
+	p.lock_view(target, _x, _y, _n)
+
+
+## Where the crosshair meets the plane, or the point on the plane nearest the eye if the player
+## looks away from it or it is very far.
+func _plane_point_ahead() -> Vector3:
+	var p: Node3D = game.player
+	var eye: Vector3 = p.eye_position()
+	var dir: Vector3 = p.aim_direction()
+	var nearest := eye - _n * (eye - _o).dot(_n)
+	var denom := dir.dot(_n)
+	if absf(denom) > 1e-6:
+		var t := (_o - eye).dot(_n) / denom
+		if t > 0.0 and t < 40.0 * float(p.size):
+			return eye + dir * t
+	return nearest
+
+
+## Y in sketch mode: switch between the sketch view and free first-person look.
+func toggle_view() -> void:
+	var p: Node3D = game.player
+	if p.view_lock:
+		p.unlock_view()
+		game.hud.toast("Free look: walk or fly around · %s returns to the sketch view" % Actions.prompt(&"normal_to"))
+	else:
+		p.lock_view(_plane_point_ahead(), _x, _y, _n)
+		game.hud.toast("Sketch view")

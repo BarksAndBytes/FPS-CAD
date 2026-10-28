@@ -46,6 +46,16 @@ var _grow_held := 0.0
 var _shrink_held := 0.0
 var _scale_hold := 0.0  # touch buttons: +1 grow, -1 shrink
 
+## Sketch view: the camera looks straight down a plane's normal with the plane's X axis to the
+## right and its Y axis up. Moving pans across the plane and size is the zoom (distance).
+var view_lock := false
+var _lock_target := Vector3.ZERO  # point on the plane at the centre of the view
+var _lock_basis := Basis.IDENTITY  # columns: plane X, plane Y, plane normal
+const LOCK_DISTANCE := 2.6        # camera distance from the plane, in player heights
+const BLEND_TIME := 0.35
+var _blend_from := Transform3D.IDENTITY
+var _blend_t := 1.0
+
 
 func _ready() -> void:
 	camera = Camera3D.new()
@@ -82,10 +92,64 @@ func hold_scale(direction: float) -> void:
 	_scale_hold = direction
 
 
+## Locks the view onto a plane (Godot-space axes), centred on target.
+func lock_view(target: Vector3, xdir: Vector3, ydir: Vector3, normal: Vector3) -> void:
+	_start_blend()
+	view_lock = true
+	_lock_basis = Basis(xdir.normalized(), ydir.normalized(), normal.normalized())
+	_lock_target = target
+	_sync_locked()
+
+
+## Leaves the sketch view for free first-person look, flying where the camera is.
+func unlock_view() -> void:
+	if not view_lock:
+		return
+	view_lock = false
+	fly = true
+	var n := _lock_basis.z
+	pitch = clampf(asin(clampf(-n.y, -1.0, 1.0)), -1.55, 1.55)
+	if absf(n.y) < 0.999:
+		yaw = atan2(n.x, n.z)
+	_start_blend()
+
+
+## Where the player stood and looked, to come back to after a sketch.
+func pose() -> Dictionary:
+	return {feet = feet, yaw = yaw, pitch = pitch, size = target_size, fly = fly}
+
+
+func restore_pose(p: Dictionary) -> void:
+	_start_blend()
+	view_lock = false
+	feet = p.feet
+	yaw = p.yaw
+	pitch = p.pitch
+	fly = p.fly
+	set_size(p.size)
+
+
+func _start_blend() -> void:
+	if camera != null and camera.is_inside_tree():
+		_blend_from = camera.transform
+		_blend_t = 0.0
+
+
+func _sync_locked() -> void:
+	var eye := _lock_target + _lock_basis.z * LOCK_DISTANCE * EYE * size
+	feet = eye - Vector3(0, EYE * size, 0)
+
+
+func _pan(delta: Vector2) -> void:
+	_lock_target += (_lock_basis.x * delta.x + _lock_basis.y * delta.y) * size
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not input_enabled:
 		return
-	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and view_lock:
+		_pan(Vector2(event.relative.x, -event.relative.y) * 0.0035 * (PRECISION if precision else 1.0))
+	elif event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look(event.relative * MOUSE_SENS * (PRECISION if precision else 1.0))
 	elif event is InputEventMouseButton and event.pressed and not limited:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
@@ -104,13 +168,39 @@ func _process(dt: float) -> void:
 	if input_enabled:
 		_read_actions(dt)
 	_update_size(dt)
-	_move(dt)
 	global_position = Vector3.ZERO
-	camera.position = eye_position()
-	camera.rotation = Vector3(pitch, yaw, 0)
+	var want: Transform3D
+	if view_lock:
+		_move_locked(dt)
+		_sync_locked()
+		want = Transform3D(_lock_basis, eye_position())
+	else:
+		_move(dt)
+		want = Transform3D(Basis.from_euler(Vector3(pitch, yaw, 0)), eye_position())
+	if _blend_t < 1.0:
+		_blend_t = minf(1.0, _blend_t + dt / BLEND_TIME)
+		var k := ease(_blend_t, -2.0)  # ease in and out
+		want = _blend_from.interpolate_with(want, k)
+	camera.transform = want
+
+
+## Sketch view: left stick / WASD pan across the plane, the right stick pans finely.
+func _move_locked(dt: float) -> void:
+	if not input_enabled:
+		return
+	var mv := Input.get_vector(&"move_left", &"move_right", &"move_back", &"move_forward") + move_from_touch
+	var fine := Input.get_vector(&"look_left", &"look_right", &"look_down", &"look_up") * 0.4
+	var touch := Vector2(-look_from_touch.x, look_from_touch.y) * 0.6 / maxf(dt, 1e-3)
+	look_from_touch = Vector2.ZERO
+	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold")
+	var speed := 1.6 * (SPRINT if sprinting else 1.0) * (PRECISION if precision else 1.0)
+	_pan((mv.limit_length(1.0) + fine + touch) * speed * dt)
 
 
 func _read_actions(dt: float) -> void:
+	if view_lock:
+		_read_size_actions(dt)  # the sticks pan in _move_locked
+		return
 	# Stick look with a squared response curve for fine aiming near the centre.
 	var stick := Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down")
 	stick = stick.normalized() * pow(stick.length(), 2.0) if stick.length() > 0.0 else stick
@@ -127,6 +217,12 @@ func _read_actions(dt: float) -> void:
 		precision = not precision
 	if Input.is_action_just_pressed(&"jump") and not fly:
 		_jump_queued = true
+	_read_size_actions(dt)
+
+
+func _read_size_actions(dt: float) -> void:
+	if Input.is_action_just_pressed(&"precision_aim") and view_lock:
+		precision = not precision
 	if Input.is_action_just_pressed(&"reset_size"):
 		set_size(1.0)
 	# D-pad / keys: a tap doubles or halves, holding scales smoothly.

@@ -211,6 +211,17 @@ func _run() -> void:
 	main._on_sketch_requested(top.plane, top.name, "")
 	await _frames(2)
 	_check(main.sketcher.active and main.hud.menu_open == false, "sketch mode opens on the Top plane")
+	await _seconds(0.6)  # let the camera swing into the sketch view
+	var cam: Basis = main.player.camera.global_transform.basis
+	_check(main.player.view_lock and cam.x.is_equal_approx(Vector3(1, 0, 0)) and cam.y.is_equal_approx(Vector3(0, 0, -1))
+		and (-cam.z).is_equal_approx(Vector3(0, -1, 0)),
+		"the Top-plane sketch view looks straight down with sketch X right and Y up (%s)" % cam)
+	var view_y: float = main.player.camera.global_position.y
+	main.player.set_size(0.5)
+	await _seconds(0.6)
+	_check(main.player.camera.global_position.y < view_y * 0.75 and main.player.view_lock, "shrinking zooms the sketch view in")
+	main.player.set_size(1.0)
+	await _seconds(0.6)
 	main.sketcher.set_tool_id("rect")
 	main.sketcher.click_at(Vector2(0, 0))
 	main.sketcher.click_at(Vector2(1, 0.5))
@@ -229,6 +240,8 @@ func _run() -> void:
 	await _frames(3)
 	var feats: Array = main.doc.get_features()
 	_check(not main.sketcher.active and feats.size() == 1 and feats[0].type == "sketch", "X finishes the sketch into the history")
+	_check(not main.player.view_lock and main.player.feet.distance_to(Vector3(0, 0, 4)) < 0.5,
+		"finishing the sketch returns the player to where they stood")
 	_check(main.tools.tool().id == "extrude", "finishing a sketch readies Extrude")
 	var sid: String = feats[0].id
 	main._on_feature_requested("extrude", sid, "add")
@@ -256,6 +269,16 @@ func _run() -> void:
 	await _frames(2)
 	var front: Dictionary = main.doc.standard_plane("front")
 	main._on_sketch_requested(front.plane, front.name, "")
+	await _seconds(0.6)
+	cam = main.player.camera.global_transform.basis
+	_check(cam.x.is_equal_approx(Vector3(1, 0, 0)) and cam.y.is_equal_approx(Vector3(0, 1, 0)) and (-cam.z).is_equal_approx(Vector3(0, 0, -1)),
+		"the Front-plane sketch view faces the plane square-on (%s)" % cam)
+	main.sketcher.toggle_view()
+	await _frames(2)
+	_check(not main.player.view_lock and main.player.fly, "Y switches the sketch view to free look")
+	main.sketcher.toggle_view()
+	await _frames(2)
+	_check(main.player.view_lock, "Y returns to the sketch view")
 	main.sketcher.set_tool_id("rect")
 	main.sketcher.click_at(Vector2(0.5, 0))
 	main.sketcher.click_at(Vector2(1, 1))
