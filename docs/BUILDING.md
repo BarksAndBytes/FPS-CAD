@@ -90,7 +90,10 @@ The **Android APK** workflow publishes every push as the `android-dev` pre-relea
 `latest.json` (build number, commit, APK link). The version code is the workflow's run number,
 and every build is signed with the same key, so a newer build installs over an older one as an
 update without uninstalling. The app reads `latest.json` at launch and offers newer builds on
-the title screen and in the pause menu (`godot/scripts/updater.gd`).
+the title screen and in the pause menu (`godot/scripts/updater.gd`). Choosing one downloads the
+APK into the app's storage, checks its size and SHA-256 against `latest.json`, and opens
+Android's installer through Godot's FileProvider (`OS.shell_open` on the file). The app declares
+`REQUEST_INSTALL_PACKAGES`, so the first update asks the player to allow installs from FPS-CAD.
 
 The key lives in two repository secrets (Settings → Secrets and variables → Actions):
 

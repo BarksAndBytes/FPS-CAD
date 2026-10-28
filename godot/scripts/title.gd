@@ -51,7 +51,7 @@ func _ready() -> void:
 	_menu.add_theme_constant_override("separation", 10)
 	col.add_child(_menu)
 	for spec in [
-		["update", "Update available", "Downloads the newer build; tap it when it finishes to install it over this one"],
+		["update", "Update available", "Downloads the newer build and installs it over this one. Your files stay"],
 		["training", "Training", "Learn to move, resize yourself, sketch and extrude"],
 		["new", "New part", "A blank part: pick a plane, sketch, then extrude, revolve, sweep or loft"],
 		["free", "Free build", "Walk and edit the sample pavilion"],

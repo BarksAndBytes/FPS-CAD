@@ -113,6 +113,18 @@ func _run() -> void:
 	_check(not up.evaluate({build = 13, apk = "x", signing = "debug"}, 11).newer, "a debug-signed build is not offered (it could not install over this one)")
 	_check(not up.evaluate("nonsense", 11).newer and not up.evaluate({build = 13}, 11).newer, "unreadable update information is ignored")
 	_check(not up.supported(), "local and desktop builds never check for updates")
+	var apk_path := "user://smoke-update.apk"
+	var fa := FileAccess.open(apk_path, FileAccess.WRITE)
+	var blob := PackedByteArray()
+	blob.resize(4096)
+	blob.fill(7)
+	fa.store_buffer(blob)
+	fa.close()
+	var sha: String = FileAccess.get_sha256(apk_path)
+	_check(up.verify(apk_path, {size = 4096, sha256 = sha}) == "", "a downloaded update that matches its checksum is accepted")
+	_check(up.verify(apk_path, {size = 4096, sha256 = "00" + sha.substr(2)}) != "", "a damaged download is refused")
+	_check(up.verify(apk_path, {size = 9999, sha256 = sha}) != "", "a short download is refused")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(apk_path))
 
 	var course = ClassDB.instantiate(&"CadPart")
 	course.make_training()

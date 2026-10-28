@@ -154,9 +154,12 @@ jobs:
           APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/android-dev/FPS-CAD-${GITHUB_SHA::7}.apk"
           python3 - "$APK_URL" > export/android/latest.json <<'PY'
           import json, os, sys
+          import hashlib
+          apk = open("export/android/FPS-CAD.apk", "rb").read()
           print(json.dumps({"build": int(os.environ["BUILD"]), "version": "0.2." + os.environ["BUILD"],
                             "commit": os.environ["GITHUB_SHA"][:7], "branch": os.environ["GITHUB_REF_NAME"],
-                            "signing": os.environ["SIGN_KIND"], "apk": sys.argv[1]}, indent=2))
+                            "signing": os.environ["SIGN_KIND"], "apk": sys.argv[1],
+                            "size": len(apk), "sha256": hashlib.sha256(apk).hexdigest()}, indent=2))
           PY
           cat export/android/latest.json
 
@@ -171,7 +174,7 @@ jobs:
         run: |
           gh release delete android-dev --cleanup-tag --yes || true
           if [ "$SIGN_KIND" = release ]; then
-            SIGN_NOTE="Signed with the FPS-CAD key (certificate SHA-256 \`$CERT_SHA256\`): it installs over any earlier build signed with the same key as an update, keeping your files. The app checks for newer builds on launch."
+            SIGN_NOTE="Signed with the FPS-CAD key (certificate SHA-256 \`$CERT_SHA256\`): it installs over any earlier build signed with the same key as an update, keeping your files. The app checks for newer builds on launch and installs them itself."
           else
             SIGN_NOTE="Signed with a throwaway debug key because the signing secrets are not set, so uninstall any other build first."
           fi

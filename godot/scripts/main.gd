@@ -113,6 +113,7 @@ func _ready() -> void:
 	add_child(updater)
 	updater.update_available.connect(_on_update_available)
 	updater.checked.connect(_on_update_checked)
+	updater.before_install.connect(_autosave)
 
 	hud.request.connect(_on_hud_request)
 	Actions.device_changed.connect(_on_device_changed)
@@ -252,7 +253,7 @@ func _on_update_available(info: Dictionary) -> void:
 func _on_title_chosen(id: String) -> void:
 	match id:
 		"update":
-			updater.download()
+			updater.install()
 		"controls":
 			cmap.open()
 		"quit":
@@ -436,7 +437,7 @@ func _aim_hit() -> Dictionary:
 ## True while something covers the view and should get the controller instead of the player.
 func modal_open() -> bool:
 	var tutorial_card: bool = tutorial != null and tutorial.is_open_card()
-	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible
+	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or updater.busy()
 
 
 func _process(dt: float) -> void:
@@ -445,7 +446,7 @@ func _process(dt: float) -> void:
 	view.follow(player.camera.global_position, player.size)
 	if state != "play":
 		_orbit(dt)
-		if state == "title" and not cmap.visible and Actions.last_device == "controller":
+		if state == "title" and not cmap.visible and not updater.busy() and Actions.last_device == "controller":
 			title.keep_focus()
 		_update_mouse_mode()
 		return
@@ -618,8 +619,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			cmap.open()
 			get_viewport().set_input_as_handled()
 		return
-	if state != "play" or cmap.visible or numpad.visible:
-		return  # the splash, the controls map and the number pad handle their own input
+	if state != "play" or cmap.visible or numpad.visible or updater.busy():
+		return  # the splash, the controls map, the number pad and the updater handle their own input
 	if dialog.visible and not hud.menu_open:
 		if dialog.handle(event):
 			get_viewport().set_input_as_handled()
@@ -782,8 +783,9 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 		"resume":
 			hud.set_menu(false)
 		"update":
+			hud.set_menu(false)
 			_autosave()
-			updater.download()
+			updater.install()
 		"check_updates":
 			hud.toast("Checking for updates…")
 			updater.check(true)

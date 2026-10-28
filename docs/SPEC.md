@@ -19,7 +19,7 @@ network calls for modeling, saving or export.
 | Input | Xbox controller primary; keyboard and mouse equal on PC; touch fallback on Android |
 | Engine | Godot 4 + C++ GDExtension (`extension/`) over an engine-agnostic C++ core (`core/`) |
 | Kernel | Open CASCADE Technology 8.0.x, shared libraries (LGPL 2.1 with exception) |
-| Hosting | Fully local. No cloud services, telemetry or accounts. One exception: published Android builds fetch a public `latest.json` at launch to offer updates (nothing is sent; off switch in the pause menu) |
+| Hosting | Fully local. No cloud services, telemetry or accounts. One exception: published Android builds fetch a public `latest.json` at launch and can download and install a newer build in-app (nothing is sent; off switch in the pause menu) |
 | Android signing | Every published build is signed with the same FPS-CAD key and numbered by CI run, so new builds install over old ones as updates |
 | Native files | `.fpprt` part, `.fpasm` assembly, `.fpdrw` drawing (after 1.0), `.fppack` bundle |
 | Container | ZIP + pretty-printed JSON, cached B-rep, `formatVersion` integer, safe writes |
