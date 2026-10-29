@@ -68,9 +68,10 @@ rectangle on a face, finishing the sketch, extruding it, measuring and the contr
 | X | Enter | Finish the sketch |
 | Y (sketching) | I | Sketch view ↔ free look (sketches open square to the plane, X right, Y up) |
 
-The wheel has two pages (LB / E switches while it is open): **Model** — Select, Sketch, Extrude,
-Revolve, Sweep, Loft, Push/Pull, Measure, Delete — and **Direct** — Box, Cylinder, Sphere, Move.
-In sketch mode the wheel holds the sketch tools. The full sketch and feature-panel controls are
+The tool wheel groups tools: **Select**, **Sketch**, **Solids** (Extrude, Revolve, Sweep,
+Loft), **Modify** (Push/Pull, Move, Delete), **Primitives** (Box, Cylinder, Sphere) and
+**Measure**. Aiming at a group shows its tools branching out from it; let go (or press A) to open
+the branch, then aim and press A / RT to pick. B steps back. In sketch mode the wheel holds the sketch tools: Draw, Constrain and Delete. The full sketch and feature-panel controls are
 in [docs/SKETCHING.md](docs/SKETCHING.md) and on the controls map's fourth page.
 
 ## The CLI

@@ -8,23 +8,32 @@ signal tool_switched(index: int)
 signal sketch_requested(plane: Dictionary, plane_name: String, edit_id: String)
 signal feature_requested(type: String, sketch_id: String, op: String)
 
-## Two wheel pages: the history-based CAD workflow first, then direct modelling.
-const PAGES := ["Model", "Direct"]
+## How the tool wheel groups the tools: single tools and groups on the inner ring, a group's
+## tools branching out from it (tool_wheel.gd). Entries are tool ids or [group name, description,
+## [tool ids]].
+const WHEEL := [
+	"select",
+	"sketch",
+	["Solids", "Turn a sketch into a solid: extrude, revolve, sweep, loft", ["extrude", "revolve", "sweep", "loft"]],
+	["Modify", "Change what is there: push/pull faces, move, delete", ["push", "move", "delete"]],
+	["Primitives", "Place ready-made shapes", ["box", "cylinder", "sphere"]],
+	"measure",
+]
 const TOOLS := [
-	{id = "select", page = "Model", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
-	{id = "sketch", page = "Model", name = "Sketch", pri = "sketch on this face or plane", alt = "edit the sketch you aim at",
+	{id = "select", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
+	{id = "sketch", name = "Sketch", pri = "sketch on this face or plane", alt = "edit the sketch you aim at",
 		opt = ["aimed face", "Top plane", "Front plane", "Right plane"]},
-	{id = "extrude", page = "Model", name = "Extrude", pri = "extrude the sketch", alt = "extrude as a cut", opt = []},
-	{id = "revolve", page = "Model", name = "Revolve", pri = "revolve the sketch", alt = "revolve as a cut", opt = []},
-	{id = "sweep", page = "Model", name = "Sweep", pri = "sweep the sketch along a path", alt = "sweep as a cut", opt = []},
-	{id = "loft", page = "Model", name = "Loft", pri = "loft the sketch to another", alt = "loft as a cut", opt = []},
-	{id = "push", page = "Model", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
-	{id = "measure", page = "Model", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
-	{id = "delete", page = "Model", name = "Delete", pri = "delete target", alt = "undo", opt = []},
-	{id = "box", page = "Direct", name = "Box", pri = "place box", alt = "copy size from target", opt = ["add", "cut", "new body"]},
-	{id = "cylinder", page = "Direct", name = "Cylinder", pri = "place cylinder", alt = "copy size from target", opt = ["add", "cut", "new body"]},
-	{id = "sphere", page = "Direct", name = "Sphere", pri = "place sphere", alt = "copy size from target", opt = ["add", "cut", "new body"]},
-	{id = "move", page = "Direct", name = "Move", pri = "grab / drop", alt = "duplicate & grab", opt = []},
+	{id = "extrude", name = "Extrude", pri = "extrude the sketch", alt = "extrude as a cut", opt = []},
+	{id = "revolve", name = "Revolve", pri = "revolve the sketch", alt = "revolve as a cut", opt = []},
+	{id = "sweep", name = "Sweep", pri = "sweep the sketch along a path", alt = "sweep as a cut", opt = []},
+	{id = "loft", name = "Loft", pri = "loft the sketch to another", alt = "loft as a cut", opt = []},
+	{id = "push", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
+	{id = "measure", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
+	{id = "delete", name = "Delete", pri = "delete target", alt = "undo", opt = []},
+	{id = "box", name = "Box", pri = "place box", alt = "copy size from target", opt = ["add", "cut", "new body"]},
+	{id = "cylinder", name = "Cylinder", pri = "place cylinder", alt = "copy size from target", opt = ["add", "cut", "new body"]},
+	{id = "sphere", name = "Sphere", pri = "place sphere", alt = "copy size from target", opt = ["add", "cut", "new body"]},
+	{id = "move", name = "Move", pri = "grab / drop", alt = "duplicate & grab", opt = []},
 ]
 const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
@@ -38,7 +47,6 @@ var player: Node3D   # player.gd
 var hud: CanvasLayer # hud.gd
 
 var index := 0
-var page := 0
 var options := {}          # tool id -> option index
 var selected := ""         # feature id (part) or component id (assembly)
 var aim := {}              # the current crosshair hit
@@ -55,21 +63,23 @@ func tool() -> Dictionary:
 	return TOOLS[index]
 
 
-## TOOLS indices on the current wheel page, in slot order.
-func page_indices() -> Array:
+## The wheel's tree for tool_wheel.gd; tool values are TOOLS indices.
+func wheel_tree() -> Array:
 	var out := []
-	for i in TOOLS.size():
-		if TOOLS[i].page == PAGES[page]:
-			out.append(i)
+	for entry in WHEEL:
+		if entry is String:
+			out.append(_wheel_node(entry))
+		else:
+			var kids := []
+			for id in entry[2]:
+				kids.append(_wheel_node(id))
+			out.append({name = entry[0], desc = entry[1], children = kids})
 	return out
 
 
-func page_tools() -> Array:
-	return page_indices().map(func(i): return TOOLS[i])
-
-
-func flip_page() -> void:
-	page = (page + 1) % PAGES.size()
+func _wheel_node(id: String) -> Dictionary:
+	var i := index_of(id)
+	return {name = TOOLS[i].name, pri = TOOLS[i].pri, alt = TOOLS[i].alt, value = i}
 
 
 func index_of(id: String) -> int:
@@ -99,7 +109,6 @@ func reset() -> void:
 	options = {}
 	selected = ""
 	aim = {}
-	page = 0
 	set_tool(0)
 
 
@@ -109,7 +118,6 @@ func set_tool(i: int) -> void:
 	if not _grab.is_empty():
 		_drop()
 	index = i
-	page = PAGES.find(TOOLS[i].page)
 	_push_hit = {}
 	_hold_time = -1.0
 	view.show_ghost("", Vector3.ZERO, {})

@@ -16,6 +16,7 @@ const UiTheme := preload("res://scripts/ui_theme.gd")
 const ToolsScript := preload("res://scripts/tools.gd")
 const Tutorial := preload("res://scripts/tutorial.gd")
 const Sketcher := preload("res://scripts/sketcher.gd")
+const ToolWheel := preload("res://scripts/tool_wheel.gd")
 
 var doc: RefCounted
 var is_assembly := false
@@ -503,48 +504,64 @@ func _keep_focus() -> void:
 		UiTheme.keep_focus(hud.panel_control())
 
 
-## The tools the wheel shows: sketch tools in sketch mode, else the current page of tools.
-func _wheel_tools() -> Array:
-	if sketcher.active:
-		return Sketcher.TOOLS
-	return tools.page_tools()
+## The wheel's tree: sketch tools in sketch mode, else the modelling tools (tool_wheel.gd).
+func _wheel_tree() -> Array:
+	return sketcher.wheel_tree() if sketcher.active else tools.wheel_tree()
 
 
 func _wheel_current() -> int:
-	if sketcher.active:
-		return sketcher.index
-	return tools.page_indices().find(tools.index)
+	return sketcher.index if sketcher.active else tools.index
 
 
-func _open_wheel(from_button: bool) -> void:
+## Opens the wheel; from_button means it stays open until something is picked (touch, the HUD,
+## number keys) instead of closing when the wheel button is let go. group opens that group.
+func _open_wheel(from_button: bool, group := -1) -> void:
 	_wheel_from_button = from_button
-	var page := "SKETCH" if sketcher.active else String(ToolsScript.PAGES[tools.page]).to_upper()
-	wheel.setup(_wheel_tools(), page, "" if sketcher.active else "%s other page" % Actions.prompt(&"context_wheel"))
+	var title := "SKETCH TOOLS" if sketcher.active else "TOOLS"
+	var how := "aim, then %s" % Actions.prompt(&"ui_accept") if from_button else "aim, let go to choose"
+	wheel.setup(_wheel_tree(), title, how + "   ·   %s back" % Actions.prompt(&"ui_cancel"))
 	wheel.open(_wheel_current())
+	if group >= 0:
+		wheel.enter(group)
+		_wheel_from_button = true
 
 
-func _wheel_pick(i: int) -> void:
-	if i < 0:
+func _wheel_pick(value: int) -> void:
+	if value < 0:
 		return
 	if sketcher.active:
-		sketcher.set_tool(i)
+		sketcher.set_tool(value)
 		_show_tool()
+	else:
+		tools.set_tool(value)
+
+
+## Number keys pick the wheel's inner-ring entries: a tool directly, or a group's branch.
+func _wheel_shortcut(i: int) -> void:
+	var tree := _wheel_tree()
+	if i >= tree.size():
 		return
-	var indices: Array = tools.page_indices()
-	if i < indices.size():
-		tools.set_tool(indices[i])
+	if tree[i].has("children"):
+		_open_wheel(true, i)
+	else:
+		_wheel_pick(int(tree[i].value))
 
 
 func _gameplay_input() -> void:
 	if wheel.visible:
 		wheel.aim(Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down"))
-		if Input.is_action_just_pressed(&"context_wheel") and not sketcher.active:
-			tools.flip_page()
-			_open_wheel(_wheel_from_button)
+		if _wheel_from_button and Input.is_action_just_pressed(&"tool_wheel"):
+			wheel.close()
 			return
 		var released: bool = not _wheel_from_button and Input.is_action_just_released(&"tool_wheel")
-		if released or Input.is_action_just_pressed(&"ui_accept"):
-			_wheel_pick(wheel.close(true))
+		var pressed: bool = Input.is_action_just_pressed(&"ui_accept") \
+			or (Input.is_action_just_pressed(&"primary") and Actions.last_device != "keyboard")
+		if released or pressed:
+			var r: int = wheel.commit()
+			if r == ToolWheel.ENTERED:
+				_wheel_from_button = true  # a group opened: aim at its tools and press to pick
+			else:
+				_wheel_pick(r)
 		return
 	if Input.is_action_just_pressed(&"tool_wheel"):
 		_open_wheel(false)
@@ -567,7 +584,7 @@ func _gameplay_input() -> void:
 		_show_tool()
 	for i in 9:
 		if Input.is_action_just_pressed(StringName("tool_%d" % (i + 1))):
-			_wheel_pick(i)
+			_wheel_shortcut(i)
 	if Input.is_action_just_pressed(&"redo"):
 		if doc.has_method("redo") and doc.redo():
 			_on_model_changed()
@@ -605,7 +622,7 @@ func _sketch_input() -> void:
 		_show_tool()
 	for i in 9:
 		if Input.is_action_just_pressed(StringName("tool_%d" % (i + 1))):
-			_wheel_pick(i)
+			_wheel_shortcut(i)
 	if Input.is_action_just_pressed(&"finish"):
 		sketcher.finish()
 	if Input.is_action_just_pressed(&"inspect"):
@@ -647,7 +664,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif hud.panel_open:
 			hud.set_panel(false)
 		elif wheel.visible:
-			wheel.close(false)
+			wheel.back()
 		elif sketcher.active and sketcher.has_pending() and event.is_action_pressed(&"crouch"):
 			sketcher.cancel_pending()  # B drops the line or shape being drawn
 		else:

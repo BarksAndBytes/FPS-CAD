@@ -5,7 +5,7 @@ build a feature**. Everything is recorded in the part's history and re-solved on
 
 ## Starting a sketch
 
-Pick **Sketch** from the wheel (Model page).
+Pick **Sketch** from the tool wheel.
 
 | Controller | Keyboard and mouse | What happens |
 | --- | --- | --- |
@@ -28,7 +28,7 @@ and the grid (your snap step, which follows the zoom).
 
 | Controller | Keyboard and mouse | Action |
 | --- | --- | --- |
-| Hold RB | Hold Q | Sketch tools: Line, Rectangle, Circle, Arc, Dimension, Relation, Delete |
+| Hold RB | Hold Q | Sketch tools: **Draw** (Line, Rectangle, Circle, Arc), **Constrain** (Dimension, Relation), Delete |
 | RT | Left click | Place a point / pick geometry |
 | LT, B | Right click | End the line chain, drop the shape being drawn |
 | LB | E | Tool option (construction geometry, arc direction, dimension or relation type) |
@@ -55,7 +55,7 @@ defined. A change that would conflict with existing relations or dimensions is r
 
 ## Features
 
-Pick a feature tool, aim at a sketch (or just press RT to use the newest unused sketch). RT adds
+Pick a feature tool from the wheel's **Solids** group, aim at a sketch (or just press RT to use the newest unused sketch). RT adds
 material, LT starts the feature as a cut. A property panel opens and the feature appears as a
 live preview you can walk around.
 

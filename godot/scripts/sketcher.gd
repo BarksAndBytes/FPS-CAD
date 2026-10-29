@@ -172,6 +172,34 @@ func cancel_pending() -> void:
 
 # ---------- tools ----------
 
+## Sketch tools grouped for the tool wheel (values are TOOLS indices).
+const WHEEL := [
+	["Draw", "Lines, rectangles, circles and arcs", ["line", "rect", "circle", "arc"]],
+	["Constrain", "Dimensions and relations that hold the sketch", ["dimension", "relation"]],
+	"erase",
+]
+
+
+func wheel_tree() -> Array:
+	var out := []
+	for entry in WHEEL:
+		if entry is String:
+			out.append(_wheel_node(entry))
+		else:
+			var kids := []
+			for id in entry[2]:
+				kids.append(_wheel_node(id))
+			out.append({name = entry[0], desc = entry[1], children = kids})
+	return out
+
+
+func _wheel_node(id: String) -> Dictionary:
+	for i in TOOLS.size():
+		if TOOLS[i].id == id:
+			return {name = TOOLS[i].name, pri = TOOLS[i].pri, alt = TOOLS[i].alt, value = i}
+	return {}
+
+
 func tool() -> Dictionary:
 	return TOOLS[index]
 

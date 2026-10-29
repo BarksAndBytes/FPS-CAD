@@ -134,8 +134,9 @@ func _check_grow() -> bool:
 
 func _text_wheel() -> String:
 	if Actions.last_device == "touch":
-		return "Tap the tool name at the top left to open the tool wheel, then tap Push / Pull."
-	return "Hold %s to open the tool wheel, point at Push / Pull, then let go." % _p(&"tool_wheel")
+		return "Tap the tool name at the top left to open the tool wheel. Tap Modify: its tools branch out. Tap Push / Pull."
+	return "Hold %s to open the tool wheel and point at Modify: its tools branch out. Let go to open it, point at Push / Pull and press %s." % [
+		_p(&"tool_wheel"), _p(&"ui_accept")]
 
 
 func _check_wheel() -> bool:
@@ -163,8 +164,8 @@ func _check_sketch() -> bool:
 
 func _text_rect() -> String:
 	if Actions.last_device == "touch":
-		return "Open the tool wheel for the sketch tools and pick Rectangle. Tap Fire on one corner, then on the opposite corner."
-	return "The view now looks straight down at the sketch: move to pan, %s / %s to zoom. Hold %s for the sketch tools and pick Rectangle, then press %s on one corner and on the opposite corner." % [
+		return "Open the tool wheel for the sketch tools, tap Draw and pick Rectangle. Tap Fire on one corner, then on the opposite corner."
+	return "The view now looks straight down at the sketch: move to pan, %s / %s to zoom. Hold %s for the sketch tools, open Draw and pick Rectangle, then press %s on one corner and on the opposite corner." % [
 		_p(&"grow"), _p(&"shrink"), _p(&"tool_wheel"), _p(&"primary")]
 
 
@@ -208,7 +209,7 @@ func _count_type(t: String) -> int:
 
 
 func _text_measure() -> String:
-	return "Pick Measure. Press %s on one corner, then on another, to read the distance between them." % _p(&"primary")
+	return "Pick Measure from the wheel. Press %s on one corner, then on another, to read the distance between them." % _p(&"primary")
 
 
 func _check_measure() -> bool:

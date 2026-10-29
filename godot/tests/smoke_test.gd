@@ -222,7 +222,26 @@ func _run() -> void:
 	_check(wheel_ok and mean.distance_to(screen / 2.0) < 2.0,
 		"the tool wheel fills the screen and is centred (%s, slots around %s)" % [main.wheel.size, mean])
 	_check(main.touch.size.is_equal_approx(screen), "touch controls cover the screen")
-	main.wheel.close(false)
+	# Groups: aiming at Solids shows its branch, committing opens it, then a tool is picked.
+	var solids := -1
+	for i in main.wheel.tree.size():
+		if main.wheel.tree[i].name == "Solids":
+			solids = i
+	main.wheel._set_hover(solids)
+	_check(solids >= 0 and main.wheel._kids.size() == 4, "aiming at Solids shows its four tools branching out")
+	_check(main.wheel.commit() == load("res://scripts/tool_wheel.gd").ENTERED and main.wheel.visible and main.wheel.group == solids,
+		"choosing a group opens its branch and keeps the wheel open")
+	main.wheel.aim(Vector2.from_angle(main.wheel._kid_angle(solids, 1)))
+	var picked_value: int = main.wheel.commit()
+	main._wheel_pick(picked_value)
+	_check(not main.wheel.visible and main.tools.tool().id == "revolve", "aiming along the branch and choosing picks Revolve")
+	main._open_wheel(true)
+	main.wheel.enter(solids)
+	main.wheel.back()
+	_check(main.wheel.visible and main.wheel.group == -1, "back steps from a branch to the groups")
+	main.wheel.back()
+	_check(not main.wheel.visible, "back at the groups closes the wheel")
+	main.tools.set_tool(0)
 
 	# A phone-sized interface: larger text, and the pause menu switches to two columns to fit.
 	var ui = load("res://scripts/ui_theme.gd")
