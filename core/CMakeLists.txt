@@ -6,6 +6,8 @@ add_library(fpcad_core STATIC
   src/Assembly.cpp
   src/Sketch.cpp
   src/SketchGeom.cpp
+  src/Compare.cpp
+  src/Challenges.cpp
   src/Export.cpp)
 
 target_include_directories(fpcad_core PUBLIC include)

@@ -15,8 +15,17 @@
 #include "fpcad/Export.h"
 #include "fpcad/Expression.h"
 #include "fpcad/FileIO.h"
+#include <chrono>
+
 #include "fpcad/Model.h"
 #include "fpcad/Sketch.h"
+#include "fpcad/Challenges.h"
+#include "fpcad/Compare.h"
+#include "../src/CompareShapes.h"
+
+#include <BRepBuilderAPI_Transform.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Trsf.hxx>
 
 using namespace fpcad;
 
@@ -363,6 +372,94 @@ int main() {
     back.rebuild();
     CHECK(back.document().features[0].type == "sketch");
     CHECK(back.sketchViews().size() == 2);
+  });
+
+
+  run("challenge targets build, and copies match however they are made or turned", [] {
+    auto list = challenges();
+    CHECK(list.size() == 10);
+    for (auto& c : list) {
+      PartModel m(c.target);
+      auto r = m.rebuild();
+      for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s: %s\n", c.id.c_str(), st.message.c_str());
+      CHECK(r.ok && m.bodyCount() == 1);
+      CHECK(!c.callouts.empty() && !c.brief.empty());
+      // The same solid, turned about a skew axis and moved, is a match; built from itself.
+      gp_Trsf t;
+      t.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 2, 3)), 0.65);
+      gp_Trsf mv;
+      mv.SetTranslation(gp_Vec(0.4, -0.3, 0.2));
+      TopoDS_Shape turned = BRepBuilderAPI_Transform(m.body(0), mv * t, true).Shape();
+      auto t0 = std::chrono::steady_clock::now();
+      ShapeMatch sm = compareShapes(turned, m.body(0));
+      double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+      std::printf("    %-18s compared in %.0f ms%s\n", c.id.c_str(), ms, sm.match ? "" : ("  " + sm.message).c_str());
+      CHECK(sm.match);
+    }
+
+    PartModel block(list[0].target);
+    block.rebuild();
+    auto box = [](double w, double d, double h, double x = 0, double y = 0, double z = 0) {
+      Feature f;
+      f.type = "box";
+      f.params = {{"x", x}, {"y", y}, {"z", z}, {"w", w}, {"d", d}, {"h", h}};
+      return f;
+    };
+    // Built another way: lying on its side somewhere else.
+    PartDocument d1;
+    d1.add(box(0.05, 0.1, 0.075, 0.3, 0.2, 0.01));
+    PartModel m1(d1);
+    m1.rebuild();
+    CHECK(compareParts(m1, block).match);
+    // Built from two halves that meet: still one block.
+    PartDocument d2;
+    d2.add(box(0.1, 0.075, 0.02));
+    d2.add(box(0.1, 0.075, 0.03, 0, 0, 0.02));
+    PartModel m2(d2);
+    m2.rebuild();
+    CHECK(compareParts(m2, block).match);
+    // 5 mm short: not a match, and the hint says by how much.
+    PartDocument d3;
+    d3.add(box(0.1, 0.075, 0.045));
+    PartModel m3(d3);
+    m3.rebuild();
+    ShapeMatch short3 = compareParts(m3, block);
+    CHECK(!short3.match && std::abs(short3.volumeRatio - 0.9) < 1e-6);
+    CHECK(short3.message.find("90%") != std::string::npos);
+    PartModel nothing{PartDocument{}};
+    nothing.rebuild();
+    CHECK(compareParts(nothing, block).empty);
+
+    // The hole has to be in the right place, not just the right size.
+    PartModel plate(list[2].target);
+    plate.rebuild();
+    PartDocument d4;
+    d4.add(box(0.15, 0.1, 0.025));
+    Feature hole;
+    hole.type = "cylinder";
+    hole.op = BodyOp::Cut;
+    hole.params = {{"x", 0.03}, {"y", 0}, {"z", -0.001}, {"r", 0.025}, {"h", 0.027}};
+    d4.add(hole);
+    PartModel m4(d4);
+    m4.rebuild();
+    ShapeMatch off = compareParts(m4, plate);
+    CHECK(!off.match && !off.mirrored);
+
+    // A mirror image is recognised but does not pass: a block with a blind hole off two axes.
+    PartDocument d5;
+    d5.add(box(0.1, 0.06, 0.04));
+    Feature blind;
+    blind.type = "cylinder";
+    blind.op = BodyOp::Cut;
+    blind.params = {{"x", 0.02}, {"y", 0.01}, {"z", 0.03}, {"r", 0.006}, {"h", 0.02}};
+    d5.add(blind);
+    PartModel m5(d5);
+    m5.rebuild();
+    gp_Trsf mirror;
+    mirror.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)));
+    TopoDS_Shape flipped = BRepBuilderAPI_Transform(m5.body(0), mirror, true).Shape();
+    ShapeMatch mm = compareShapes(flipped, m5.body(0));
+    CHECK(!mm.match && mm.mirrored);
   });
 
   run("display mesh tags every face with its feature", [] {
