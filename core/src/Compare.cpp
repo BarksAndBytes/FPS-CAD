@@ -153,18 +153,18 @@ std::vector<gp_XYZ> farthestRadials(const TopoDS_Shape& s, const gp_XYZ& centre,
   TopTools_IndexedMapOfShape verts;
   TopExp::MapShapes(s, TopAbs_VERTEX, verts);
   std::vector<std::pair<double, gp_XYZ>> radial;
-  double far = 0;
+  double farthest = 0;
   for (int i = 1; i <= verts.Extent(); ++i) {
     gp_XYZ v = BRep_Tool::Pnt(TopoDS::Vertex(verts(i))).XYZ() - centre;
     v -= axis * v.Dot(axis);
     double r = v.Modulus();
     if (r < 1e-6 * size) continue;
     radial.push_back({r, v / r});
-    far = std::max(far, r);
+    farthest = std::max(farthest, r);
   }
   std::vector<gp_XYZ> out;
   for (auto& [r, d] : radial)
-    if (r > far * (1 - 1e-6) && out.size() < 24) out.push_back(d);
+    if (r > farthest * (1 - 1e-6) && out.size() < 24) out.push_back(d);
   return out;
 }
 
@@ -339,7 +339,7 @@ ShapeMatch compareShapes(const TopoDS_Shape& player, const TopoDS_Shape& target,
     }
     m.message = "Close: the size is right but something differs (best overlap " + percent(m.overlap) + ")";
   } catch (const Standard_Failure& e) {
-    m.message = std::string("Could not compare: ") + (e.GetMessageString() ? e.GetMessageString() : "geometry error");
+    m.message = std::string("Could not compare: ") + (e.what() ? e.what() : "geometry error");
   }
   return m;
 }
