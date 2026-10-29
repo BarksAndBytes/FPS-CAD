@@ -54,6 +54,17 @@ reference them by id, so editing a sketch's dimension rebuilds everything after 
 parameters are set in a property panel with a live preview. Direct tools (push/pull, boxes,
 cylinders, spheres) remain for quick blocking-out. Details: [`docs/SKETCHING.md`](SKETCHING.md).
 
+## Challenge mode
+
+A series of target parts to copy (`core/src/Challenges.cpp`), from a 100 × 75 × 50 block to a
+mounting bracket with holes on two faces; finishing one unlocks the next. The target is shown as a
+hologram with dimension callouts beside a blank part. After every change the core compares the two
+(`fpcad/Compare.h`): a copy passes when it is the same solid, whatever its position, orientation
+or the features that made it. The check uses volume, area and principal moments first (which also
+give hints such as "90 % of the target's volume"), then candidate rotations from principal axes,
+face normals, hole axes and farthest vertices, confirmed by an exact boolean. Mirror images are
+reported, not passed.
+
 ## Onboarding
 
 Launch shows three skippable splash cards (studio, technology, "best played with a controller"),

@@ -46,7 +46,9 @@ Full instructions, including Windows and Android: [docs/BUILDING.md](docs/BUILDI
 New players start with **Training** on the title screen: a fourteen-step course that teaches
 moving, jumping, shrinking through a 30 cm tunnel, the tool wheel, push/pull, sketching a
 rectangle on a face, finishing the sketch, extruding it, measuring and the controls map.
-**New part** opens a blank part with the Sketch tool ready. Press View (F1) at any time for the full map:
+**New part** opens a blank part with the Sketch tool ready.
+**Challenges** asks you to copy target parts, from a plain block to a mounting bracket: build it
+any way you like, in any orientation, and it passes when the geometry matches. Press View (F1) at any time for the full map:
 
 ![Controller map](godot/ui/controller_map.svg)
 
