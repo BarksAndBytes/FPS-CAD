@@ -79,6 +79,12 @@ public:
   godot::Dictionary update_feature(const godot::String& id, const godot::String& op, const godot::Dictionary& params);
   void abandon();
 
+  // Challenge mode
+  godot::Array challenge_list() const;                     // [{id, name, brief, hint}]
+  godot::Dictionary make_challenge(int index);             // loads that target into this part
+  godot::Dictionary compare_to(godot::Object* target) const;  // target: another CadPart
+  const fpcad::PartModel& model() const { return *model_; }
+
   // History
   bool undo();
   bool redo();

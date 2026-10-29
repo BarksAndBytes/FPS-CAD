@@ -8,6 +8,8 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 
 #include "convert.h"
+#include "fpcad/Challenges.h"
+#include "fpcad/Compare.h"
 #include "fpcad/Expression.h"
 #include "fpcad/Export.h"
 #include "fpcad/FileIO.h"
@@ -648,6 +650,66 @@ void CadPart::abandon() {
   model_->rebuild();
 }
 
+// ----- Challenge mode -----
+
+Array CadPart::challenge_list() const {
+  Array out;
+  for (auto& c : fpcad::challenges()) {
+    Dictionary d;
+    d["id"] = str(c.id);
+    d["name"] = str(c.name);
+    d["brief"] = str(c.brief);
+    d["hint"] = str(c.hint);
+    out.push_back(d);
+  }
+  return out;
+}
+
+Dictionary CadPart::make_challenge(int index) {
+  auto list = fpcad::challenges();
+  if (index < 0 || index >= int(list.size())) return Dictionary();
+  fpcad::Challenge& c = list[size_t(index)];
+  model_ = std::make_unique<fpcad::PartModel>(c.target);
+  undo_.clear();
+  redo_.clear();
+  Dictionary d;
+  d["index"] = index;
+  d["count"] = int(list.size());
+  d["id"] = str(c.id);
+  d["name"] = str(c.name);
+  d["brief"] = str(c.brief);
+  d["hint"] = str(c.hint);
+  Array callouts;
+  for (auto& k : c.callouts) {
+    Dictionary e;
+    e["a"] = toGodot(k.a);
+    e["b"] = toGodot(k.b);
+    e["text"] = str(k.text);
+    callouts.push_back(e);
+  }
+  d["callouts"] = callouts;
+  return d;
+}
+
+Dictionary CadPart::compare_to(Object* target) const {
+  Dictionary d;
+  const CadPart* t = Object::cast_to<CadPart>(target);
+  if (t == nullptr) {
+    d["match"] = false;
+    d["message"] = "no target part";
+    return d;
+  }
+  fpcad::ShapeMatch m = fpcad::compareParts(*model_, t->model());
+  d["match"] = m.match;
+  d["mirrored"] = m.mirrored;
+  d["empty"] = m.empty;
+  d["volume_ratio"] = m.volumeRatio;
+  d["area_ratio"] = m.areaRatio;
+  d["overlap"] = m.overlap;
+  d["message"] = str(m.message);
+  return d;
+}
+
 void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("make_sample"), &CadPart::make_sample);
   ClassDB::bind_method(D_METHOD("make_training"), &CadPart::make_training);
@@ -693,6 +755,9 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("insert_feature", "type", "op", "params"), &CadPart::insert_feature);
   ClassDB::bind_method(D_METHOD("update_feature", "id", "op", "params"), &CadPart::update_feature);
   ClassDB::bind_method(D_METHOD("abandon"), &CadPart::abandon);
+  ClassDB::bind_method(D_METHOD("challenge_list"), &CadPart::challenge_list);
+  ClassDB::bind_method(D_METHOD("make_challenge", "index"), &CadPart::make_challenge);
+  ClassDB::bind_method(D_METHOD("compare_to", "target"), &CadPart::compare_to);
   ClassDB::bind_method(D_METHOD("undo"), &CadPart::undo);
   ClassDB::bind_method(D_METHOD("redo"), &CadPart::redo);
   ClassDB::bind_method(D_METHOD("can_undo"), &CadPart::can_undo);

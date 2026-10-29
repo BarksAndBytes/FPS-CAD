@@ -75,7 +75,7 @@ func _run() -> void:
 	_check(absf(t.origin.y - (-0.020)) < 1e-6, "component placement converts to Y-up")
 
 	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main",
-			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info"]:
+			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info", "challenge"]:
 		var s: Script = load("res://scripts/%s.gd" % script)
 		_check(s != null and s.can_instantiate(), "script %s compiles" % script)
 
@@ -346,6 +346,30 @@ func _run() -> void:
 	await _frames(2)
 	_check(absf(main.doc.mass_properties().volume - PI * 0.75) < 1e-4,
 		"a revolve about the sketch's Y axis makes a tube (%.4f m³)" % main.doc.mass_properties().volume)
+
+	# ---- challenge mode: copy the target, any orientation, any method ----
+	var list: Array = ClassDB.instantiate(&"CadPart").challenge_list()
+	_check(list.size() == 10 and list[0].name == "Block", "ten challenges, starting with the block")
+	main._start_mode("challenge", 0)
+	await _frames(3)
+	_check(main.challenge != null and main.challenge.target != null and main.challenge.offset.x < 0.0,
+		"challenge 1 shows its target beside the build area")
+	var wrong: String = main.doc.add_primitive("box", Vector3(0.3, 0, 0.2), {w = 0.1, d = 0.075, h = 0.045}, "add")
+	main._on_model_changed()
+	await _frames(2)
+	_check(wrong != "" and not main.challenge.solved and String(main.challenge.last.get("message", "")).contains("90%"),
+		"a block 5 mm short does not pass, and the hint says 90%% (%s)" % main.challenge.last.get("message", ""))
+	main.doc.delete_feature(wrong)
+	var right: String = main.doc.add_primitive("box", Vector3(0.3, 0, 0.2), {w = 0.075, d = 0.05, h = 0.1}, "add")
+	main._on_model_changed()
+	await _frames(3)
+	_check(right != "" and main.challenge.solved and main.challenge.is_open_card(),
+		"the same block stood on end and moved elsewhere passes")
+	_check(load("res://scripts/challenge.gd").unlocked() >= 2, "passing unlocks the next challenge")
+	await _pad(JOY_BUTTON_A)
+	await _frames(4)
+	_check(main.mode == "challenge" and main.level == 1 and main.challenge != null and main.challenge.info.id == "puck",
+		"A on Next challenge opens challenge 2")
 
 	main.queue_free()
 	await process_frame

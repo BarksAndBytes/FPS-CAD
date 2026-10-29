@@ -430,6 +430,12 @@ func _snap_point(hit: Dictionary) -> Variant:
 	if option() == "free":
 		return p
 	var limit: float = 0.22 * player.size
+	if hit.has("snap_vertices"):  # the challenge target, measured like a part
+		var near_v: Variant = null
+		for v in hit.snap_vertices:
+			if v.distance_to(p) < limit and (near_v == null or v.distance_to(p) < near_v.distance_to(p)):
+				near_v = v
+		return near_v if near_v != null else p
 	if hit.get("ground", false):
 		var g := snapped_xz(p)
 		return g if g.distance_to(p) < limit else p
@@ -458,7 +464,7 @@ func _update_preview(hit: Dictionary) -> void:
 	view.highlight_sketch("")
 	if not is_assembly:
 		view.highlight_component(-1)
-	var on_feature: bool = not hit.is_empty() and not hit.get("ground", false)
+	var on_feature: bool = not hit.is_empty() and not hit.get("ground", false) and not hit.get("target", false)
 	var face_plane := false
 	match id:
 		"sketch":

@@ -4,7 +4,8 @@ extends Node3D
 ## the title screen and the training course. Owns gameplay input, files and autosave.
 ## Everything runs locally; files live in the app's user:// folder.
 ##
-## States: "splash" → "title" → "play". Play modes: "training", "new", "free", "assembly".
+## States: "splash" → "title" → "play". Play modes: "training", "new", "challenge", "free",
+## "assembly".
 ## Inside play, sketch mode (sketcher.gd) takes the tools while a sketch is open, and the
 ## feature panel (feature_dialog.gd) takes the D-pad and buttons while a feature is set up.
 
@@ -16,6 +17,7 @@ const UiTheme := preload("res://scripts/ui_theme.gd")
 const ToolsScript := preload("res://scripts/tools.gd")
 const Tutorial := preload("res://scripts/tutorial.gd")
 const Sketcher := preload("res://scripts/sketcher.gd")
+const Challenge := preload("res://scripts/challenge.gd")
 const ToolWheel := preload("res://scripts/tool_wheel.gd")
 
 var doc: RefCounted
@@ -34,6 +36,8 @@ var cmap: CanvasLayer
 var title: CanvasLayer
 var splash: CanvasLayer
 var tutorial: Node3D
+var challenge: Node3D
+var level := 0
 var sketcher: Node3D
 var dialog: CanvasLayer
 var numpad: CanvasLayer
@@ -147,6 +151,7 @@ func _show_title() -> void:
 	splash = null
 	state = "title"
 	mode = ""
+	_end_challenge()
 	if tutorial != null:
 		tutorial.queue_free()
 		tutorial = null
@@ -164,13 +169,14 @@ func _show_title() -> void:
 		updater.check_on_launch()
 
 
-func _start_mode(m: String) -> void:
+func _start_mode(m: String, challenge_index := 0) -> void:
 	state = "play"
 	mode = m
 	_close_editors()
 	title.visible = false
 	hud.visible = true
 	player.fly = false
+	_end_challenge()
 	if tutorial != null:
 		tutorial.queue_free()
 		tutorial = null
@@ -186,6 +192,18 @@ func _start_mode(m: String) -> void:
 			add_child(tutorial)
 			tutorial.finished.connect(_on_tutorial_finished)
 			tutorial.start()
+		"challenge":
+			level = challenge_index
+			d = ClassDB.instantiate(&"CadPart")
+			d.new_blank("My copy", "mm")
+			challenge = Challenge.new()
+			challenge.game = self
+			add_child(challenge)
+			challenge.finished.connect(_on_challenge_finished)
+			challenge.start(level)
+			_open(d, false)
+			var sp: Dictionary = challenge.spawn()
+			_spawn(sp.feet, sp.yaw, sp.size)
 		"new":
 			d = ClassDB.instantiate(&"CadPart")
 			d.new_blank("Part 1", "mm")
@@ -202,7 +220,7 @@ func _start_mode(m: String) -> void:
 			_open(d, false)
 			_spawn(Vector3(0, 0, 14), 0.0, 1.0)
 	tools.reset()
-	if m == "new":
+	if m == "new" or m == "challenge":
 		tools.set_tool_id("sketch")
 		hud.toast("A blank part. Aim at the ground and press %s to start a sketch on the Top plane" % Actions.prompt(&"primary"))
 	hud.set_menu_items(_menu_items())
@@ -223,6 +241,8 @@ func _menu_items() -> Array:
 		items.append(["Update checks at launch: " + ("On" if updater.enabled() else "Off"), "toggle_update_checks"])
 	if mode == "training":
 		items.append(["Restart training", "restart_training"])
+	if mode == "challenge":
+		items += [["Restart challenge", "restart_challenge"], ["Challenge list", "challenge_list"]]
 	items += [
 		["Save", "save"], ["Open last saved", "open_saved"],
 		["Export STEP", "export_step"], ["Export IGES", "export_iges"],
@@ -259,7 +279,12 @@ func _on_update_available(info: Dictionary) -> void:
 
 
 func _on_title_chosen(id: String) -> void:
+	if id.begins_with("challenge:"):
+		_start_mode("challenge", int(id.get_slice(":", 1)))
+		return
 	match id:
+		"challenges":
+			_show_levels()
 		"update":
 			updater.install()
 		"controls":
@@ -319,6 +344,36 @@ func _on_model_changed() -> void:
 	view.refresh()
 	if hud.panel_open:
 		hud.refresh_panel()
+	if challenge != null:
+		challenge.on_model_changed()
+
+
+func _end_challenge() -> void:
+	if challenge != null:
+		challenge.queue_free()
+		challenge = null
+
+
+func _on_challenge_finished(choice: String) -> void:
+	match choice:
+		"next":
+			_start_mode("challenge", level + 1)
+		"retry":
+			_start_mode("challenge", level)
+		"list":
+			_show_title()
+			_show_levels()
+		_:
+			_show_title()
+
+
+func _show_levels() -> void:
+	var list: Array = ClassDB.instantiate(&"CadPart").challenge_list()
+	var rows := []
+	for i in list.size():
+		rows.append({name = list[i].name, brief = list[i].brief, locked = i >= Challenge.unlocked(),
+			best = Challenge.best_time(list[i].id)})
+	title.show_levels(rows)
 
 
 ## For the feature panel and other helpers: redraw after the document changed.
@@ -434,6 +489,10 @@ func _aim_hit() -> Dictionary:
 	var o: Vector3 = player.eye_position()
 	var d: Vector3 = player.aim_direction()
 	var hit: Dictionary = doc.pick(o, d, player.camera.far)
+	if challenge != null:
+		var th: Dictionary = challenge.pick(o, d, player.camera.far)
+		if not th.is_empty() and (hit.is_empty() or th.distance < hit.distance):
+			hit = th
 	var ground := {}
 	if d.y < -1e-6 and o.y > 0.0:
 		var t := -o.y / d.y
@@ -444,7 +503,7 @@ func _aim_hit() -> Dictionary:
 
 ## True while something covers the view and should get the controller instead of the player.
 func modal_open() -> bool:
-	var tutorial_card: bool = tutorial != null and tutorial.is_open_card()
+	var tutorial_card: bool = (tutorial != null and tutorial.is_open_card()) or (challenge != null and challenge.is_open_card())
 	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or updater.busy()
 
 
@@ -500,6 +559,8 @@ func _keep_focus() -> void:
 		UiTheme.keep_focus(hud.menu_control())
 	elif tutorial != null and tutorial.is_open_card():
 		tutorial.keep_focus()
+	elif challenge != null and challenge.is_open_card():
+		challenge.keep_focus()
 	elif hud.panel_open:
 		UiTheme.keep_focus(hud.panel_control())
 
@@ -825,6 +886,13 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			hud.set_menu_items(_menu_items())
 			hud.focus_menu_action("ui_scale")
 			hud.toast("Interface size " + UiTheme.scale_label(next))
+		"restart_challenge":
+			hud.set_menu(false)
+			_start_mode("challenge", level)
+		"challenge_list":
+			hud.set_menu(false)
+			_show_title()
+			_show_levels()
 		"restart_training":
 			hud.set_menu(false)
 			_close_editors()
