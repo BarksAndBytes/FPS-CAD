@@ -251,6 +251,28 @@ func _run() -> void:
 	_check(not main.wheel.visible, "back at the groups closes the wheel")
 	main.tools.set_tool(0)
 
+	# Touch joysticks: the move stick walks and sprints when pushed past its ring; the look stick
+	# turns like a controller stick; both spring back when let go.
+	var tc = main.touch
+	tc.visible = true
+	tc._layout()
+	var mh: Vector2 = tc._stick_home
+	_touch(tc, 7, mh, true)
+	_drag(tc, 7, mh + Vector2(70, 0))
+	_check(main.player.move_from_touch.x > 0.95 and not main.player.touch_sprint, "the move stick walks")
+	_drag(tc, 7, mh + Vector2(110, 0))
+	_check(main.player.touch_sprint, "pushing the move stick past its ring sprints")
+	_touch(tc, 7, mh + Vector2(110, 0), false)
+	_check(main.player.move_from_touch == Vector2.ZERO and not main.player.touch_sprint, "letting go of the move stick stops")
+	var lh: Vector2 = tc._look_home
+	_touch(tc, 8, lh, true)
+	_drag(tc, 8, lh + Vector2(0, -80))
+	_check(main.player.look_stick_touch.y < -0.95, "the look stick looks up")
+	_touch(tc, 8, lh + Vector2(0, -80), false)
+	_check(main.player.look_stick_touch == Vector2.ZERO and tc._look_knob.position == lh - tc._look_knob.size / 2.0,
+		"letting go of the look stick recentres it")
+	tc.visible = false
+
 	# A phone-sized interface: larger text, and the pause menu switches to two columns to fit.
 	var ui = load("res://scripts/ui_theme.gd")
 	ui.apply_scale(self, 1.75)
@@ -410,6 +432,21 @@ func _frames(n: int) -> void:
 
 func _seconds(t: float) -> void:
 	await create_timer(t).timeout
+
+
+func _touch(tc: Node, index: int, pos: Vector2, pressed: bool) -> void:
+	var e := InputEventScreenTouch.new()
+	e.index = index
+	e.position = pos
+	e.pressed = pressed
+	tc._input(e)
+
+
+func _drag(tc: Node, index: int, pos: Vector2) -> void:
+	var e := InputEventScreenDrag.new()
+	e.index = index
+	e.position = pos
+	tc._input(e)
 
 
 ## Presses and releases a controller button the way a real pad would.

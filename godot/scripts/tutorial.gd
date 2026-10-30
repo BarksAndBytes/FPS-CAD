@@ -81,7 +81,7 @@ func _p(action: StringName) -> String:
 func _text_look() -> String:
 	match Actions.last_device:
 		"keyboard": return "Move the mouse to look around."
-		"touch": return "Drag on the right half of the screen to look around."
+		"touch": return "Push the LOOK stick (bottom right) to look around. Dragging anywhere on the right side works too."
 	return "Use the right stick to look around."
 
 

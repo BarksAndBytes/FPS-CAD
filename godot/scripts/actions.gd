@@ -107,7 +107,7 @@ func prompt(action: StringName) -> String:
 	const TOUCH := {
 		&"primary": "Fire", &"secondary": "Alt", &"tool_wheel": "Tool", &"jump": "Jump",
 		&"grow": "+", &"shrink": "−", &"controller_map": "Controls", &"menu": "Menu",
-		&"ui_accept": "Tap", &"ui_cancel": "Back", &"move": "Left thumb", &"look": "Right thumb",
+		&"ui_accept": "Tap", &"ui_cancel": "Back", &"move": "MOVE stick", &"look": "LOOK stick",
 		&"inspect_panel": "Model", &"undo": "Undo", &"context_wheel": "Tool chip",
 	}
 	match last_device:

@@ -36,7 +36,9 @@ var input_enabled := true
 ## size keys belong to the panel.
 var limited := false
 var look_from_touch := Vector2.ZERO
+var look_stick_touch := Vector2.ZERO  # the on-screen look stick, -1..1, like a controller stick
 var move_from_touch := Vector2.ZERO
+var touch_sprint := false
 var touch_up := false
 var touch_down := false
 
@@ -191,10 +193,11 @@ func _move_locked(dt: float) -> void:
 	if not input_enabled:
 		return
 	var mv := Input.get_vector(&"move_left", &"move_right", &"move_back", &"move_forward") + move_from_touch
-	var fine := Input.get_vector(&"look_left", &"look_right", &"look_down", &"look_up") * 0.4
+	var fine := (Input.get_vector(&"look_left", &"look_right", &"look_down", &"look_up")
+		+ Vector2(look_stick_touch.x, -look_stick_touch.y)).limit_length(1.0) * 0.4
 	var touch := Vector2(-look_from_touch.x, look_from_touch.y) * 0.6 / maxf(dt, 1e-3)
 	look_from_touch = Vector2.ZERO
-	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold")
+	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold") or touch_sprint
 	var speed := 1.6 * (SPRINT if sprinting else 1.0) * (PRECISION if precision else 1.0)
 	_pan((mv.limit_length(1.0) + fine + touch) * speed * dt)
 
@@ -204,7 +207,7 @@ func _read_actions(dt: float) -> void:
 		_read_size_actions(dt)  # the sticks pan in _move_locked
 		return
 	# Stick look with a squared response curve for fine aiming near the centre.
-	var stick := Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down")
+	var stick := (Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down") + look_stick_touch).limit_length(1.0)
 	stick = stick.normalized() * pow(stick.length(), 2.0) if stick.length() > 0.0 else stick
 	var k := STICK_LOOK * dt * (PRECISION if precision else 1.0)
 	_look(stick * k + look_from_touch)
@@ -269,7 +272,7 @@ func _move(dt: float) -> void:
 	if input_enabled:
 		mv = Input.get_vector(&"move_left", &"move_right", &"move_back", &"move_forward") + move_from_touch
 	mv = mv.limit_length(1.0)
-	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold")
+	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold") or touch_sprint
 	var speed := WALK_SPEED * size * (SPRINT if sprinting else 1.0)
 	var fwd := Vector3(-sin(yaw), 0, -cos(yaw))
 	var right := Vector3(cos(yaw), 0, -sin(yaw))
