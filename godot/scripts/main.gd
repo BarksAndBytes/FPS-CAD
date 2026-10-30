@@ -202,13 +202,14 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 			challenge.finished.connect(_on_challenge_finished)
 			challenge.start(level)
 			_open(d, false)
-			var sp: Dictionary = challenge.spawn()
-			_spawn(sp.feet, sp.yaw, sp.size)
+			var sp: Dictionary = challenge.spawn(view.room.top, view.room.floor_y())
+			_spawn(sp.feet, sp.yaw, sp.size, sp.pitch)
 		"new":
 			d = ClassDB.instantiate(&"CadPart")
 			d.new_blank("Part 1", "mm")
 			_open(d, false)
-			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
+			# Walking up to the table, looking down at its top.
+			_spawn(Vector3(view.room.top.get_center().x, view.room.floor_y(), view.room.top.end.y + 1.3), 0.0, 1.0, -0.5)
 		"assembly":
 			d = ClassDB.instantiate(&"CadAssembly")
 			d.make_sample()
@@ -252,11 +253,11 @@ func _menu_items() -> Array:
 	return items
 
 
-func _spawn(feet: Vector3, yaw: float, size: float) -> void:
+func _spawn(feet: Vector3, yaw: float, size: float, pitch := -0.12) -> void:
 	view.fit_table([feet])
 	player.feet = feet
 	player.yaw = yaw
-	player.pitch = -0.12
+	player.pitch = pitch
 	player.size = size
 	player.target_size = size
 
@@ -486,6 +487,10 @@ func _cast(origin: Vector3, dir: Vector3, max_distance: float) -> Dictionary:
 	if doc == null:
 		return {}
 	var hit: Dictionary = doc.pick(origin, dir, max_distance)
+	if challenge != null:  # the target part is solid too
+		var th: Dictionary = challenge.pick(origin, dir, max_distance)
+		if not th.is_empty() and (hit.is_empty() or th.distance < hit.distance):
+			hit = th
 	var env: Dictionary = view.room.cast(origin, dir, max_distance)
 	if not env.is_empty() and (hit.is_empty() or env.distance < hit.distance):
 		return env

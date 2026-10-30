@@ -75,7 +75,7 @@ func _run() -> void:
 	_check(absf(t.origin.y - (-0.020)) < 1e-6, "component placement converts to Y-up")
 
 	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main",
-			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info", "challenge", "room"]:
+			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info", "challenge", "room", "fat_lines"]:
 		var s: Script = load("res://scripts/%s.gd" % script)
 		_check(s != null and s.can_instantiate(), "script %s compiles" % script)
 
@@ -309,7 +309,7 @@ func _run() -> void:
 	await _frames(3)
 	var feats: Array = main.doc.get_features()
 	_check(not main.sketcher.active and feats.size() == 1 and feats[0].type == "sketch", "X finishes the sketch into the history")
-	_check(not main.player.view_lock and main.player.feet.distance_to(Vector3(0, 0, 4)) < 0.5,
+	_check(not main.player.view_lock and main.player.feet.distance_to(Vector3(0, -0.75, 1.605)) < 0.5,
 		"finishing the sketch returns the player to where they stood")
 	_check(main.tools.tool().id == "extrude", "finishing a sketch readies Extrude")
 	var sid: String = feats[0].id
@@ -367,6 +367,12 @@ func _run() -> void:
 	await _frames(3)
 	_check(main.challenge != null and main.challenge.target != null and main.challenge.offset.x < 0.0,
 		"challenge 1 shows its target beside the build area")
+	var table: Rect2 = main.view.room.top
+	_check(table.size.is_equal_approx(Vector2(1.22, 0.61)), "the table is 4 ft by 2 ft (%s)" % table.size)
+	_check(main.player.feet.y < -0.7 and main.player.feet.z > table.end.y and main.player.size == 1.0,
+		"the player starts on the floor, walking up to the table")
+	var c: Color = main.challenge.colour
+	_check(c.a == 1.0 and c.s > 0.2 and c.s < 0.45 and c.v > 0.85, "the target is an opaque pastel (%s)" % c)
 	var wrong: String = main.doc.add_primitive("box", Vector3(0.3, 0, 0.2), {w = 0.1, d = 0.075, h = 0.045}, "add")
 	main._on_model_changed()
 	await _frames(2)

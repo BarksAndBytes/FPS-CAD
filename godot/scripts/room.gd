@@ -11,10 +11,10 @@ const TABLE_HEIGHT := 0.75     # floor to tabletop, metres
 const TOP_THICKNESS := 0.045
 const LEG := 0.075
 const APRON := 0.22            # skirt boards under the top; also the depth of the table's edge
-const MIN_TOP := Vector2(1.6, 0.9)
+const MIN_TOP := Vector2(1.22, 0.61)  # 4 ft long by 2 ft deep; bigger only when the model needs it
 const WHITE := Color(0.95, 0.955, 0.965)
 
-var top := Rect2(-0.8, -0.45, 1.6, 0.9)  # tabletop in Godot x / z
+var top := Rect2(-0.61, -0.305, 1.22, 0.61)  # tabletop in Godot x / z
 var _boxes: Array[AABB] = []             # solid parts: tabletop, legs, floor slab
 var _table := Node3D.new()
 var _floor := MeshInstance3D.new()

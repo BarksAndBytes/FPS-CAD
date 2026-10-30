@@ -1,6 +1,6 @@
 extends Node3D
-## Challenge mode: copy the target part. The target floats beside the build area as a hologram
-## with its dimensions labelled; the player builds their copy in a blank part with the normal
+## Challenge mode: copy the target part. The target sits on the table beside the build area, in a
+## random pastel colour with solid black outlines and its dimensions labelled; the player builds their copy in a blank part with the normal
 ## tools. After every change the core compares the two (CadPart.compare_to): the copy passes when
 ## it is the same solid, whatever its position, orientation or the steps that made it.
 ##
@@ -11,7 +11,7 @@ signal finished(choice: String)  # "next", "retry", "list", "title"
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const SETTINGS := "user://settings.cfg"
-const HOLO := Color(0.35, 0.78, 1.0)
+const FatLines := preload("res://scripts/fat_lines.gd")
 
 var game: Node  # main.gd
 var index := 0
@@ -22,6 +22,7 @@ var solved := false
 var last := {}  # the latest comparison
 var _t := 0.0
 var _aabb := AABB()  # the target's bounds, before the offset
+var colour := Color.WHITE  # this attempt's pastel
 
 var _holo := Node3D.new()
 var _layer := CanvasLayer.new()
@@ -96,12 +97,9 @@ func start(i: int) -> void:
 	_end.visible = false
 
 
-## A good player size and spawn for this target: the part about knee-to-waist height.
-func spawn() -> Dictionary:
-	var aabb := _target_aabb()
-	var big := maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
-	var size := clampf(big / (0.45 * 1.75), 0.02, 2.0)
-	return {feet = Vector3(offset.x / 2.0, 0.0, big * 2.2), yaw = 0.0, size = size}
+## Where the player starts: full size, on the floor, walking up to the front of the table.
+func spawn(table: Rect2, floor_y: float) -> Dictionary:
+	return {feet = Vector3(table.get_center().x, floor_y, table.end.y + 1.3), yaw = 0.0, pitch = -0.5, size = 1.0}
 
 
 func _target_aabb() -> AABB:
@@ -120,28 +118,17 @@ func _build_hologram() -> void:
 	_holo.position = offset
 	var body := MeshInstance3D.new()
 	body.mesh = mesh
+	# Opaque, in a soft colour picked at random for each attempt.
+	colour = Color.from_hsv(randf(), randf_range(0.28, 0.4), randf_range(0.9, 0.97))
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(HOLO, 0.28)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.emission_enabled = true
-	mat.emission = HOLO * 0.25
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = colour
+	mat.roughness = 0.65
 	body.material_override = mat
-	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_holo.add_child(body)
 	var edges := MeshInstance3D.new()
-	var pts: PackedVector3Array = target.build_edges(0, 0.0002)
-	if pts.size() >= 2:
-		var arrays := []
-		arrays.resize(Mesh.ARRAY_MAX)
-		arrays[Mesh.ARRAY_VERTEX] = pts
-		var em := ArrayMesh.new()
-		em.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
-		edges.mesh = em
-	var emat := StandardMaterial3D.new()
-	emat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	emat.albedo_color = HOLO
-	edges.material_override = emat
+	edges.mesh = FatLines.mesh(target.build_edges(0, 0.0002))
+	edges.material_override = FatLines.material(Color.BLACK, 2.5 * UiTheme.ui_scale)
+	edges.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_holo.add_child(edges)
 	_build_callouts(big)
 	var tag := Label3D.new()
@@ -151,7 +138,8 @@ func _build_hologram() -> void:
 	tag.pixel_size = 0.0009 * UiTheme.ui_scale
 	tag.font_size = 34
 	tag.outline_size = 10
-	tag.modulate = HOLO
+	tag.modulate = colour.darkened(0.45)
+	tag.outline_modulate = Color(1, 1, 1, 0.9)
 	tag.position = Vector3(aabb.get_center().x, aabb.end.y + big * 0.25, aabb.get_center().z)
 	_holo.add_child(tag)
 
