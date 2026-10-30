@@ -75,7 +75,7 @@ func _run() -> void:
 	_check(absf(t.origin.y - (-0.020)) < 1e-6, "component placement converts to Y-up")
 
 	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main",
-			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info", "challenge"]:
+			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info", "challenge", "room"]:
 		var s: Script = load("res://scripts/%s.gd" % script)
 		_check(s != null and s.can_instantiate(), "script %s compiles" % script)
 
@@ -178,6 +178,19 @@ func _run() -> void:
 	main.player.set_size(1.0)
 	await _seconds(0.8)
 	_check(main.player.size > 0.95, "in the open the player grows back to full size")
+
+	# The room: the training course stands on the table; off its edge is the room floor.
+	var room = main.view.room
+	_check(room.top.has_point(Vector2(0, 9)) and room.top.has_point(Vector2(0, -5)), "the table holds the whole course")
+	var down: Dictionary = room.cast(Vector3(room.top.end.x + 2.0, 3, 0), Vector3.DOWN, 100.0)
+	_check(not down.is_empty() and absf(down.point.y + 0.75) < 1e-6, "beside the table the floor is 75 cm down")
+	var edge: Dictionary = room.cast(Vector3(room.top.end.x + 1.0, -0.1, 0), Vector3.LEFT, 10.0)
+	_check(not edge.is_empty() and edge.normal.is_equal_approx(Vector3.RIGHT), "the table's edge blocks a walking body")
+	main.player.feet = Vector3(room.top.end.x + 0.5, 0.0, 0)
+	await _seconds(1.0)
+	_check(absf(main.player.feet.y + 0.75) < 0.01, "stepping off the table drops the player to the floor")
+	main.player.feet = Vector3(0, 0.05, 9)
+	await _frames(2)
 
 	await _pad(JOY_BUTTON_START)
 	await _frames(4)

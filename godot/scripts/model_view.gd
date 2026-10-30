@@ -1,13 +1,12 @@
 extends Node3D
-## Draws the model: shaded bodies, feature edges, the ground grid, highlights, placement ghosts
-## and measure markers. Re-tessellates when the player's size changes enough that the mesh would
+## Draws the model: shaded bodies, feature edges, highlights, placement ghosts and measure
+## markers, inside the room (room.gd: the white room and the table the model stands on). Re-tessellates when the player's size changes enough that the mesh would
 ## look faceted (growing smaller) or wastefully dense (growing larger).
 
-const COLOR_PART := Color("d8d2c6")
+const COLOR_PART := Color("b7bfc8")  # a cool grey that reads against the white room and the wood
 const COLOR_EDGE := Color("1c222a")
 const COLOR_ACCENT := Color("ff8a3d")
 const COLOR_MEASURE := Color("ffd166")
-const SKY := Color("3a4553")
 const COLOR_SKETCH := Color("5aa9ff")
 const COLOR_SKETCH_BAD := Color("e0775f")
 
@@ -33,13 +32,11 @@ var _mesh_size := -1.0
 
 var _highlight := MeshInstance3D.new()
 var _ghost := MeshInstance3D.new()
-var _ground := MeshInstance3D.new()
-var _grid_mat := ShaderMaterial.new()
+var room: Node3D  # room.gd
 var _marker_a := MeshInstance3D.new()
 var _marker_b := MeshInstance3D.new()
 var _marker_snap := MeshInstance3D.new()
 var _measure_line := MeshInstance3D.new()
-var _env := Environment.new()
 var _hl_key := ""
 var _sketch_mat := StandardMaterial3D.new()
 var _sketch_bad_mat := StandardMaterial3D.new()
@@ -86,37 +83,8 @@ func _ready() -> void:
 	_plane.visible = false
 	add_child(_plane)
 
-	var light := DirectionalLight3D.new()
-	light.rotation = Vector3(deg_to_rad(-55), deg_to_rad(30), 0)
-	light.light_energy = 0.9
-	light.light_color = Color("fff0dc")
-	add_child(light)
-	var fill := DirectionalLight3D.new()
-	fill.rotation = Vector3(deg_to_rad(-20), deg_to_rad(210), 0)
-	fill.light_energy = 0.25
-	fill.light_color = Color("bfd2ff")
-	add_child(fill)
-
-	_env.background_mode = Environment.BG_COLOR
-	_env.background_color = SKY
-	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	_env.ambient_light_color = Color("8a96a8")
-	_env.ambient_light_energy = 0.9
-	_env.fog_enabled = true
-	_env.fog_light_color = SKY
-	_env.fog_density = 0.012
-	_env.fog_sky_affect = 0.0
-	var we := WorldEnvironment.new()
-	we.environment = _env
-	add_child(we)
-
-	_grid_mat.shader = load("res://scripts/grid.gdshader")
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(40000, 40000)
-	_ground.mesh = plane
-	_ground.material_override = _grid_mat
-	_ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_ground)
+	room = preload("res://scripts/room.gd").new()
+	add_child(room)
 
 	_highlight.material_override = _hl_mat
 	_ghost.material_override = _ghost_mat
@@ -133,14 +101,9 @@ func _ready() -> void:
 	_measure_line.material_override = _measure_mat
 
 
-## Called every frame with the camera so the grid, fog and tessellation follow the player.
+## Called every frame with the camera so the room and tessellation follow the player.
 func follow(camera_pos: Vector3, size: float) -> void:
-	_ground.position = Vector3(camera_pos.x, 0, camera_pos.z)
-	var grid := pow(10.0, round(log(size) / log(10.0)))
-	var fog := 0.012 / maxf(size, 0.12)
-	_grid_mat.set_shader_parameter("minor", grid)
-	_grid_mat.set_shader_parameter("fog_density", fog)
-	_env.fog_density = fog * 0.6
+	room.follow(camera_pos, size)
 	if _mesh_size < 0.0 or size / _mesh_size > 4.0 or _mesh_size / size > 4.0:
 		refresh(size)
 
@@ -254,6 +217,19 @@ func _refresh_assembly(defl: float) -> void:
 		e.transform = c.transform
 		_edges.append(e)
 		_component_nodes[i] = [mi, e, c.transform]
+
+
+## Sizes the table to the model (and to keep, points such as where the player stands).
+func fit_table(keep: Array = []) -> void:
+	var box := AABB()
+	var first := true
+	for n in _bodies + _components:
+		if n.mesh == null:
+			continue
+		var b: AABB = n.transform * n.mesh.get_aabb()
+		box = b if first else box.merge(b)
+		first = false
+	room.fit_table(box, keep)
 
 
 func _make_edges(points: PackedVector3Array) -> MeshInstance3D:

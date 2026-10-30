@@ -253,6 +253,7 @@ func _menu_items() -> Array:
 
 
 func _spawn(feet: Vector3, yaw: float, size: float) -> void:
+	view.fit_table([feet])
 	player.feet = feet
 	player.yaw = yaw
 	player.pitch = -0.12
@@ -331,6 +332,7 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 	view.doc = doc
 	view.is_assembly = assembly
 	view.refresh(player.size)
+	view.fit_table([player.feet])
 	tools.doc = doc
 	tools.is_assembly = assembly
 	tools.selected = ""
@@ -479,10 +481,15 @@ func _notification(what: int) -> void:
 
 # ---------- frame ----------
 
+## What the player collides with and stands on: the model, the table and the room floor.
 func _cast(origin: Vector3, dir: Vector3, max_distance: float) -> Dictionary:
 	if doc == null:
 		return {}
-	return doc.pick(origin, dir, max_distance)
+	var hit: Dictionary = doc.pick(origin, dir, max_distance)
+	var env: Dictionary = view.room.cast(origin, dir, max_distance)
+	if not env.is_empty() and (hit.is_empty() or env.distance < hit.distance):
+		return env
+	return hit
 
 
 func _aim_hit() -> Dictionary:
@@ -493,12 +500,12 @@ func _aim_hit() -> Dictionary:
 		var th: Dictionary = challenge.pick(o, d, player.camera.far)
 		if not th.is_empty() and (hit.is_empty() or th.distance < hit.distance):
 			hit = th
-	var ground := {}
-	if d.y < -1e-6 and o.y > 0.0:
-		var t := -o.y / d.y
-		if hit.is_empty() or t < hit.distance:
-			ground = {hit = true, ground = true, point = o + d * t, normal = Vector3.UP, distance = t}
-	return ground if not ground.is_empty() else hit
+	# The table and the floor count as "ground" for the tools (sketch on the Top plane, place on it).
+	var env: Dictionary = view.room.cast(o, d, player.camera.far)
+	if not env.is_empty() and (hit.is_empty() or env.distance < hit.distance):
+		env.ground = true
+		return env
+	return hit
 
 
 ## True while something covers the view and should get the controller instead of the player.

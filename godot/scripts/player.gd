@@ -326,12 +326,13 @@ func room_to_grow() -> float:
 	return maxf(limit, MIN_SIZE)
 
 
+## The surface under probe: the model, the table or the room floor (all through cast).
 func _floor_at(probe: Vector3) -> float:
-	var y := 0.0  # the ground plane
+	var y := -0.75  # the room floor, if nothing answers
 	if cast.is_valid():
 		var hit: Dictionary = cast.call(probe, Vector3.DOWN, 1e6)
 		if not hit.is_empty() and hit.normal.y > 0.2:  # only surfaces facing up are floors
-			y = maxf(y, hit.point.y)
+			y = hit.point.y
 	return y
 
 
