@@ -54,6 +54,15 @@ reference them by id, so editing a sketch's dimension rebuilds everything after 
 parameters are set in a property panel with a live preview. Direct tools (push/pull, boxes,
 cylinders, spheres) remain for quick blocking-out. Details: [`docs/SKETCHING.md`](SKETCHING.md).
 
+## The room
+
+Everything happens in a bright white room with a skylight that grows with the player and fades
+into white haze, so it never feels walled in (`godot/scripts/room.gd`). Free build and challenges
+add a wooden table, 4 ft × 2 ft and 75 cm high ("Old Wooden Table" by carlcapu9, CC BY 4.0), whose
+top is the CAD ground; the player starts on the floor walking up to it. Training, new parts and the
+assembly sandbox have no table: the room floor is the CAD ground. Free build opens a desk organiser
+sample (`PartDocument::deskSample`) driven by width, depth, height and wall variables.
+
 ## Challenge mode
 
 A series of target parts to copy (`core/src/Challenges.cpp`), from a 100 × 75 × 50 block to a

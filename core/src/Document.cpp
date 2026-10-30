@@ -139,6 +139,39 @@ PartDocument PartDocument::sample() {
   return d;
 }
 
+PartDocument PartDocument::deskSample() {
+  PartDocument d;
+  d.name = "Desk organiser";
+  d.units = "mm";
+  d.variables = {{"width", "240 mm"}, {"depth", "120 mm"}, {"height", "90 mm"}, {"wall", "8 mm"}};
+  auto feature = [](const char* type, const char* name, BodyOp op, Json params) {
+    Feature f;
+    f.type = type;
+    f.name = name;
+    f.op = op;
+    f.params = std::move(params);
+    return f;
+  };
+  d.add(feature("box", "Base", BodyOp::Add,
+                {{"x", 0}, {"y", 0}, {"z", 0}, {"w", "width"}, {"d", "depth"}, {"h", "wall"}}));
+  d.add(feature("box", "Back", BodyOp::Add,
+                {{"x", 0}, {"y", "depth / 2 - wall / 2"}, {"z", 0}, {"w", "width"}, {"d", "wall"}, {"h", "height"}}));
+  d.add(feature("box", "Left side", BodyOp::Add,
+                {{"x", "-(width / 2 - wall / 2)"}, {"y", 0}, {"z", 0}, {"w", "wall"}, {"d", "depth"}, {"h", "height * 0.6"}}));
+  d.add(feature("box", "Right side", BodyOp::Add,
+                {{"x", "width / 2 - wall / 2"}, {"y", 0}, {"z", 0}, {"w", "wall"}, {"d", "depth"}, {"h", "height * 0.6"}}));
+  d.add(feature("box", "Divider", BodyOp::Add,
+                {{"x", "width / 6"}, {"y", 0}, {"z", 0}, {"w", "wall"}, {"d", "depth"}, {"h", "height * 0.6"}}));
+  d.add(feature("cylinder", "Pen cup", BodyOp::Add,
+                {{"x", "-width / 4"}, {"y", 0}, {"z", 0}, {"r", "depth / 4"}, {"h", "height"}}));
+  d.add(feature("cylinder", "Pen cup hollow", BodyOp::Cut,
+                {{"x", "-width / 4"}, {"y", 0}, {"z", "wall"}, {"r", "depth / 4 - wall"}, {"h", "height"}}));
+  d.add(feature("fillet", "Base corners", BodyOp::Add,
+                {{"target", d.features[0].id}, {"edges", "vertical"}, {"r", "6 mm"}}));
+  d.viewpoints.push_back({"Approach", {0, -1.6, -0.75}, 0, -0.5, 1});
+  return d;
+}
+
 PartDocument PartDocument::trainingCourse() {
   PartDocument d;
   d.name = "Training course";

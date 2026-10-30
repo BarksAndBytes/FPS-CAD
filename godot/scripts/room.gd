@@ -1,29 +1,27 @@
 extends Node3D
-## The world around the model: a bright, clean white room with a skylight, and a wooden table at
-## its centre whose top is the CAD ground (z = 0, Godot y = 0). The room grows with the player and
-## fades into white haze, so it never feels walled in at any size; the table is sized to the model.
+## The world around the model: a bright, clean white room with a skylight. The room grows with the
+## player and fades into white haze, so it never feels walled in at any size.
+##
+## Free build and challenges put a wooden table in the middle ("Old Wooden Table" by carlcapu9,
+## Sketchfab, CC BY 4.0), 4 ft by 2 ft and 75 cm high, whose top is the CAD ground (z = 0, Godot
+## y = 0). Without the table (training, new parts, assemblies) the room floor is the CAD ground.
 ##
 ## The table and the floor are solid: cast() lets the player stand on them and bump into the
 ## table's edge and legs, and gives the tools something to aim at. The walls and ceiling only
 ## look solid; they always stay well beyond the player.
 
 const TABLE_HEIGHT := 0.75     # floor to tabletop, metres
-const TOP_THICKNESS := 0.045
-const LEG := 0.075
-const APRON := 0.22            # skirt boards under the top; also the depth of the table's edge
-const MIN_TOP := Vector2(1.22, 0.61)  # 4 ft long by 2 ft deep; bigger only when the model needs it
+const TABLE_TOP := Vector2(1.22, 0.61)  # 4 ft long by 2 ft deep
 const WHITE := Color(0.95, 0.955, 0.965)
-## The table everyday parts stand on: "Old Wooden Table" by carlcapu9 (Sketchfab, CC BY 4.0),
-## textures reduced for phones. It is stretched to MIN_TOP and TABLE_HEIGHT. Models too big for
-## it get the procedural table instead, sized to fit.
-const TABLE_MODEL := "res://models/old_wooden_table.glb"
-## Where that model's legs are, as fractions of its length (x) and depth (z), and how far below
-## its top the top board and apron reach, as a fraction of its height.
+const TABLE_MODEL := "res://models/old_wooden_table.glb"  # textures reduced for phones
+## Where the model's legs are, as fractions of its length (x) and depth (z), and how far below its
+## top the top board and apron reach, as a fraction of its height; measured from the mesh.
 const MODEL_LEGS_X := [Vector2(0.0238, 0.0632), Vector2(0.9387, 0.9781)]
 const MODEL_LEGS_Z := [Vector2(0.047, 0.136), Vector2(0.850, 0.939)]
 const MODEL_EDGE_DEPTH := 0.176
 
-var top := Rect2(-0.61, -0.305, 1.22, 0.61)  # tabletop in Godot x / z
+var top := Rect2(-TABLE_TOP / 2.0, TABLE_TOP)  # tabletop in Godot x / z
+var has_table := false
 var _boxes: Array[AABB] = []             # solid parts: tabletop, legs, floor slab
 var _table := Node3D.new()
 var _floor := MeshInstance3D.new()
@@ -32,7 +30,6 @@ var _skylight := MeshInstance3D.new()
 var _walls: Array[MeshInstance3D] = []
 var _sun := DirectionalLight3D.new()
 var _env := Environment.new()
-var uses_model := false  # the wooden table model is in place (not the procedural table)
 var _room_half := 40.0
 var _room_height := 12.0
 
@@ -110,87 +107,17 @@ func _ready() -> void:
 	var we := WorldEnvironment.new()
 	we.environment = _env
 	add_child(we)
-	fit_table(AABB(), [])
+	set_table(false)
 
 
-## Sizes the table to the model's footprint (Godot-space bounds) plus any points that must be on
-## it (where the player starts), with room to spare.
-func fit_table(bounds: AABB, keep: Array) -> void:
-	var r := Rect2(-MIN_TOP / 2.0, MIN_TOP)
-	if bounds.size != Vector3.ZERO:
-		var foot := Rect2(bounds.position.x, bounds.position.z, bounds.size.x, bounds.size.z)
-		var margin := maxf(0.15, 0.25 * maxf(foot.size.x, foot.size.y))
-		r = r.merge(foot.grow(margin))
-	for p in keep:
-		if p is Vector3 and absf(p.y) < 0.1:  # standing on the table, not flying above it
-			r = r.merge(Rect2(Vector2(p.x, p.z) - Vector2.ONE * 0.6, Vector2.ONE * 1.2))
-	top = r
-	_build_table()
-
-
-func _build_table() -> void:
+## Puts the table in the room (free build, challenges) or takes it away (the room floor is
+## then the CAD ground).
+func set_table(on: bool) -> void:
 	for c in _table.get_children():
 		c.queue_free()
-	var fits_model: bool = top.size.is_equal_approx(MIN_TOP)
-	uses_model = fits_model and ResourceLoader.exists(TABLE_MODEL) and _build_model_table()
-	if uses_model:
-		return
-	var wood := ShaderMaterial.new()
-	wood.shader = load("res://scripts/wood.gdshader")
-	var slab := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(top.size.x, TOP_THICKNESS, top.size.y)
-	slab.mesh = box
-	slab.material_override = wood
-	slab.position = Vector3(top.get_center().x, -TOP_THICKNESS / 2.0, top.get_center().y)
-	_table.add_child(slab)
-	# Solid from the top down to the apron's lower edge, so the table's edge stops a walking body.
-	var depth := TOP_THICKNESS + APRON
-	_boxes = [AABB(Vector3(top.position.x, -depth, top.position.y), Vector3(top.size.x, depth, top.size.y))]
-	var legs := ShaderMaterial.new()
-	legs.shader = wood.shader
-	legs.set_shader_parameter("light_wood", Color(0.62, 0.44, 0.28))
-	legs.set_shader_parameter("dark_wood", Color(0.42, 0.27, 0.16))
-	var leg_h := TABLE_HEIGHT - TOP_THICKNESS
-	var inset := minf(0.12, 0.08 * minf(top.size.x, top.size.y)) + LEG / 2.0
-	# The apron: boards just inside the legs' outer faces, along all four sides.
-	var a0 := Vector2(top.position.x + inset - LEG / 2.0, top.position.y + inset - LEG / 2.0)
-	var a1 := Vector2(top.end.x - inset + LEG / 2.0, top.end.y - inset + LEG / 2.0)
-	var board := 0.022
-	for spec in [[Vector3((a0.x + a1.x) / 2.0, 0, a0.y + board / 2.0), Vector3(a1.x - a0.x, APRON, board)],
-			[Vector3((a0.x + a1.x) / 2.0, 0, a1.y - board / 2.0), Vector3(a1.x - a0.x, APRON, board)],
-			[Vector3(a0.x + board / 2.0, 0, (a0.y + a1.y) / 2.0), Vector3(board, APRON, a1.y - a0.y)],
-			[Vector3(a1.x - board / 2.0, 0, (a0.y + a1.y) / 2.0), Vector3(board, APRON, a1.y - a0.y)]]:
-		var apron := MeshInstance3D.new()
-		var ab := BoxMesh.new()
-		ab.size = spec[1]
-		apron.mesh = ab
-		apron.material_override = legs
-		apron.position = spec[0] + Vector3(0, -TOP_THICKNESS - APRON / 2.0, 0)
-		_table.add_child(apron)
-	# Big tables get legs along their edges too, every few metres.
-	var nx := maxi(2, int(ceil(top.size.x / 3.0)) + 1)
-	var nz := maxi(2, int(ceil(top.size.y / 3.0)) + 1)
-	for ix in nx:
-		for iz in nz:
-			if ix != 0 and ix != nx - 1 and iz != 0 and iz != nz - 1:
-				continue
-			var x := lerpf(top.position.x + inset, top.end.x - inset, float(ix) / (nx - 1))
-			var z := lerpf(top.position.y + inset, top.end.y - inset, float(iz) / (nz - 1))
-			var leg := MeshInstance3D.new()
-			var lb := BoxMesh.new()
-			lb.size = Vector3(LEG, leg_h, LEG)
-			leg.mesh = lb
-			leg.material_override = legs
-			leg.position = Vector3(x, -TOP_THICKNESS - leg_h / 2.0, z)
-			_table.add_child(leg)
-			_boxes.append(AABB(Vector3(x - LEG / 2.0, -TABLE_HEIGHT, z - LEG / 2.0), Vector3(LEG, leg_h, LEG)))
-	_add_floor()
-
-
-func _add_floor() -> void:
-	# The floor, as a thick slab so nothing falls through it.
-	_boxes.append(AABB(Vector3(-1e7, -TABLE_HEIGHT - 10.0, -1e7), Vector3(2e7, 10.0, 2e7)))
+	_boxes = []
+	has_table = on and ResourceLoader.exists(TABLE_MODEL) and _build_model_table()
+	_boxes.append(AABB(Vector3(-1e7, floor_y() - 10.0, -1e7), Vector3(2e7, 10.0, 2e7)))  # the floor
 
 
 ## The wooden table model, fitted to the tabletop rectangle with its top at y = 0.
@@ -198,6 +125,7 @@ func _build_model_table() -> bool:
 	var scene: PackedScene = load(TABLE_MODEL)
 	if scene == null:
 		return false
+	top = Rect2(-TABLE_TOP / 2.0, TABLE_TOP)
 	var holder := Node3D.new()
 	_table.add_child(holder)
 	var inst := scene.instantiate()
@@ -219,7 +147,6 @@ func _build_model_table() -> bool:
 			var z0: float = top.position.y + lz.x * top.size.y
 			_boxes.append(AABB(Vector3(x0, -TABLE_HEIGHT, z0),
 				Vector3((lx.y - lx.x) * top.size.x, TABLE_HEIGHT - depth, (lz.y - lz.x) * top.size.y)))
-	_add_floor()
 	return true
 
 
@@ -245,19 +172,18 @@ func _meshes_aabb(node: Node) -> AABB:
 ## Every frame: the room keeps its walls far beyond the player, the haze and the shadow range
 ## follow their size.
 func follow(camera_pos: Vector3, size: float) -> void:
-	var table_half := maxf(top.size.x, top.size.y) / 2.0
-	_room_half = maxf(maxf(40.0, table_half * 4.0), 40.0 * size)
+	_room_half = maxf(40.0, 40.0 * size)
 	_room_height = maxf(12.0, 9.0 * size)
-	var c := Vector3(top.get_center().x, 0, top.get_center().y)
-	var floor_y := -TABLE_HEIGHT
-	var ceil_y := floor_y + _room_height
-	_floor.position = Vector3(c.x, floor_y, c.z)
+	var c := Vector3.ZERO
+	var fy := floor_y()
+	var ceil_y := fy + _room_height
+	_floor.position = Vector3(c.x, fy, c.z)
 	_floor.scale = Vector3(_room_half, 1, _room_half)
 	_ceiling.position = Vector3(c.x, ceil_y, c.z)
 	_ceiling.scale = Vector3(_room_half, 1, _room_half)
 	_skylight.position = Vector3(c.x, ceil_y - 0.01 * _room_height, c.z)
 	_skylight.scale = Vector3(_room_half * 0.32, 1, _room_half * 0.2)
-	var mid := floor_y + _room_height / 2.0
+	var mid := fy + _room_height / 2.0
 	var spots := [[Vector3(0, 0, -1), 0.0], [Vector3(0, 0, 1), PI], [Vector3(-1, 0, 0), PI / 2.0], [Vector3(1, 0, 0), -PI / 2.0]]
 	for i in 4:
 		var w := _walls[i]
@@ -271,9 +197,9 @@ func follow(camera_pos: Vector3, size: float) -> void:
 	_sun.shadow_normal_bias = 1.0
 
 
-## Height of the room floor.
+## Height of the room floor: below the table, or the CAD ground itself when there is no table.
 func floor_y() -> float:
-	return -TABLE_HEIGHT
+	return -TABLE_HEIGHT if has_table else 0.0
 
 
 ## A ray against the table and the floor. Faces seen from inside a box do not count, like model

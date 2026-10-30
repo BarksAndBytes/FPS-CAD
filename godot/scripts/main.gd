@@ -141,6 +141,7 @@ func _ready() -> void:
 func _load_background() -> void:
 	var part = ClassDB.instantiate(&"CadPart")
 	part.make_sample()
+	view.room.set_table(false)
 	_open(part, false)
 	_spawn(Vector3(0, 2.5, 18), 0.0, 1.0)
 	player.fly = true
@@ -180,6 +181,8 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 	if tutorial != null:
 		tutorial.queue_free()
 		tutorial = null
+	# The wooden table is for free build and challenges; elsewhere parts stand on the room floor.
+	view.room.set_table(m == "free" or m == "challenge")
 	var d: RefCounted
 	match m:
 		"training":
@@ -208,18 +211,18 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 			d = ClassDB.instantiate(&"CadPart")
 			d.new_blank("Part 1", "mm")
 			_open(d, false)
-			# Walking up to the table, looking down at its top.
-			_spawn(Vector3(view.room.top.get_center().x, view.room.floor_y(), view.room.top.end.y + 1.3), 0.0, 1.0, -0.5)
+			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
 		"assembly":
 			d = ClassDB.instantiate(&"CadAssembly")
 			d.make_sample()
 			_open(d, true)
 			_spawn(Vector3(0, 0, 0.35), 0.0, 0.05)  # the pin plate is 200 mm across
 		_:
+			# Free build: a desk organiser on the table, walking up to it.
 			d = ClassDB.instantiate(&"CadPart")
-			d.make_sample()
+			d.make_desk_sample()
 			_open(d, false)
-			_spawn(Vector3(0, 0, 14), 0.0, 1.0)
+			_spawn(Vector3(0, view.room.floor_y(), view.room.top.end.y + 1.3), 0.0, 1.0, -0.5)
 	tools.reset()
 	if m == "new" or m == "challenge":
 		tools.set_tool_id("sketch")
@@ -254,7 +257,6 @@ func _menu_items() -> Array:
 
 
 func _spawn(feet: Vector3, yaw: float, size: float, pitch := -0.12) -> void:
-	view.fit_table([feet])
 	player.feet = feet
 	player.yaw = yaw
 	player.pitch = pitch
@@ -333,7 +335,6 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 	view.doc = doc
 	view.is_assembly = assembly
 	view.refresh(player.size)
-	view.fit_table()  # the model only: where the player stood in another document says nothing
 	tools.doc = doc
 	tools.is_assembly = assembly
 	tools.selected = ""

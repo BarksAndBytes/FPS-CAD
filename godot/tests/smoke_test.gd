@@ -179,16 +179,11 @@ func _run() -> void:
 	await _seconds(0.8)
 	_check(main.player.size > 0.95, "in the open the player grows back to full size")
 
-	# The room: the training course stands on the table; off its edge is the room floor.
+	# The room: training has no table; the course stands on the room floor.
 	var env = main.view.room
-	_check(env.top.has_point(Vector2(0, 9)) and env.top.has_point(Vector2(0, -5)), "the table holds the whole course")
-	var down: Dictionary = env.cast(Vector3(env.top.end.x + 2.0, 3, 0), Vector3.DOWN, 100.0)
-	_check(not down.is_empty() and absf(down.point.y + 0.75) < 1e-6, "beside the table the floor is 75 cm down")
-	var edge: Dictionary = env.cast(Vector3(env.top.end.x + 1.0, -0.1, 0), Vector3.LEFT, 10.0)
-	_check(not edge.is_empty() and edge.normal.is_equal_approx(Vector3.RIGHT), "the table's edge blocks a walking body")
-	main.player.feet = Vector3(env.top.end.x + 0.5, 0.0, 0)
-	await _seconds(1.0)
-	_check(absf(main.player.feet.y + 0.75) < 0.01, "stepping off the table drops the player to the floor")
+	_check(not env.has_table, "training has no table")
+	var down: Dictionary = env.cast(Vector3(40, 3, 0), Vector3.DOWN, 100.0)
+	_check(not down.is_empty() and absf(down.point.y) < 1e-6, "the room floor is the CAD ground in training")
 	main.player.feet = Vector3(0, 0.05, 9)
 	await _frames(2)
 
@@ -309,7 +304,7 @@ func _run() -> void:
 	await _frames(3)
 	var feats: Array = main.doc.get_features()
 	_check(not main.sketcher.active and feats.size() == 1 and feats[0].type == "sketch", "X finishes the sketch into the history")
-	_check(not main.player.view_lock and main.player.feet.distance_to(Vector3(0, -0.75, 1.605)) < 0.5,
+	_check(not main.player.view_lock and main.player.feet.distance_to(Vector3(0, 0, 4)) < 0.5,
 		"finishing the sketch returns the player to where they stood")
 	_check(main.tools.tool().id == "extrude", "finishing a sketch readies Extrude")
 	var sid: String = feats[0].id
@@ -369,7 +364,7 @@ func _run() -> void:
 		"challenge 1 shows its target beside the build area")
 	var table: Rect2 = main.view.room.top
 	_check(table.size.is_equal_approx(Vector2(1.22, 0.61)), "the table is 4 ft by 2 ft (%s)" % table.size)
-	_check(main.view.room.uses_model, "challenges use the wooden table model")
+	_check(main.view.room.has_table, "challenges use the wooden table")
 	_check(main.player.feet.y < -0.7 and main.player.feet.z > table.end.y and main.player.size == 1.0,
 		"the player starts on the floor, walking up to the table")
 	var c: Color = main.challenge.colour
@@ -390,6 +385,16 @@ func _run() -> void:
 	await _frames(4)
 	_check(main.mode == "challenge" and main.level == 1 and main.challenge != null and main.challenge.info.id == "puck",
 		"A on Next challenge opens challenge 2")
+
+	# Free build: the desk organiser on the table, walking up to it from the floor.
+	main._start_mode("free")
+	await _frames(3)
+	_check(main.view.room.has_table and main.doc.get_part_name() == "Desk organiser" and main.doc.body_count() == 1,
+		"free build puts the desk organiser on the table")
+	_check(main.player.feet.y < -0.7 and main.player.feet.z > main.view.room.top.end.y, "free build starts on the floor in front of the table")
+	main._start_mode("new")
+	await _frames(2)
+	_check(not main.view.room.has_table and absf(main.view.room.floor_y()) < 1e-9, "a new part has no table")
 
 	main.queue_free()
 	await process_frame

@@ -462,6 +462,18 @@ int main() {
     CHECK(!mm.match && mm.mirrored);
   });
 
+  run("the desk organiser sample rebuilds from its variables", [] {
+    PartModel m(PartDocument::deskSample());
+    auto r = m.rebuild();
+    for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s\n", st.message.c_str());
+    CHECK(r.ok && m.bodyCount() == 1);
+    double v = m.massProperties().volume;
+    CHECK(v > 0.0003 && v < 0.0012);
+    for (auto& var : m.document().variables)
+      if (var.name == "width") var.expr = "300 mm";
+    CHECK(m.rebuild().ok && m.massProperties().volume > v);
+  });
+
   run("display mesh tags every face with its feature", [] {
     PartModel m(PartDocument::sample());
     m.rebuild();

@@ -219,19 +219,6 @@ func _refresh_assembly(defl: float) -> void:
 		_component_nodes[i] = [mi, e, c.transform]
 
 
-## Sizes the table to the model (and to keep, points such as where the player stands).
-func fit_table(keep: Array = []) -> void:
-	var box := AABB()
-	var first := true
-	for n in _bodies + _components:
-		if n.mesh == null:
-			continue
-		var b: AABB = n.transform * n.mesh.get_aabb()
-		box = b if first else box.merge(b)
-		first = false
-	room.fit_table(box, keep)
-
-
 func _make_edges(points: PackedVector3Array) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	if points.size() >= 2:

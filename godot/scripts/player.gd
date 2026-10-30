@@ -328,11 +328,12 @@ func room_to_grow() -> float:
 
 ## The surface under probe: the model, the table or the room floor (all through cast).
 func _floor_at(probe: Vector3) -> float:
-	var y := -0.75  # the room floor, if nothing answers
-	if cast.is_valid():
-		var hit: Dictionary = cast.call(probe, Vector3.DOWN, 1e6)
-		if not hit.is_empty() and hit.normal.y > 0.2:  # only surfaces facing up are floors
-			y = hit.point.y
+	var y := -1e9  # the room floor always answers; this only guards a missing cast
+	if not cast.is_valid():
+		return 0.0
+	var hit: Dictionary = cast.call(probe, Vector3.DOWN, 1e6)
+	if not hit.is_empty() and hit.normal.y > 0.2:  # only surfaces facing up are floors
+		y = hit.point.y
 	return y
 
 

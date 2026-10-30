@@ -24,6 +24,7 @@ public:
   // Documents
   void make_sample();
   void make_training();
+  void make_desk_sample();
   void new_blank(const godot::String& name, const godot::String& units);
   godot::String load_file(const godot::String& path);  // "" on success, else the reason
   godot::String save_file(const godot::String& path);

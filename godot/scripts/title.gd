@@ -58,7 +58,7 @@ func _ready() -> void:
 		["training", "Training", "Learn to move, resize yourself, sketch and extrude"],
 		["challenges", "Challenges", "Copy target parts, from a plain block to a mounting bracket"],
 		["new", "New part", "A blank part: pick a plane, sketch, then extrude, revolve, sweep or loft"],
-		["free", "Free build", "Walk and edit the sample pavilion"],
+		["free", "Free build", "Walk up to the table and edit a sample desk organiser"],
 		["assembly", "Assembly sandbox", "A plate with four pins, built from two parts"],
 		["controls", "Controls", "Controller, keyboard and touch maps"],
 		["quit", "Quit", ""],
