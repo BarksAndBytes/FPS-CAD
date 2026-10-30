@@ -13,6 +13,15 @@ const LEG := 0.075
 const APRON := 0.22            # skirt boards under the top; also the depth of the table's edge
 const MIN_TOP := Vector2(1.22, 0.61)  # 4 ft long by 2 ft deep; bigger only when the model needs it
 const WHITE := Color(0.95, 0.955, 0.965)
+## The table everyday parts stand on: "Old Wooden Table" by carlcapu9 (Sketchfab, CC BY 4.0),
+## textures reduced for phones. It is stretched to MIN_TOP and TABLE_HEIGHT. Models too big for
+## it get the procedural table instead, sized to fit.
+const TABLE_MODEL := "res://models/old_wooden_table.glb"
+## Where that model's legs are, as fractions of its length (x) and depth (z), and how far below
+## its top the top board and apron reach, as a fraction of its height.
+const MODEL_LEGS_X := [Vector2(0.0238, 0.0632), Vector2(0.9387, 0.9781)]
+const MODEL_LEGS_Z := [Vector2(0.047, 0.136), Vector2(0.850, 0.939)]
+const MODEL_EDGE_DEPTH := 0.176
 
 var top := Rect2(-0.61, -0.305, 1.22, 0.61)  # tabletop in Godot x / z
 var _boxes: Array[AABB] = []             # solid parts: tabletop, legs, floor slab
@@ -23,6 +32,7 @@ var _skylight := MeshInstance3D.new()
 var _walls: Array[MeshInstance3D] = []
 var _sun := DirectionalLight3D.new()
 var _env := Environment.new()
+var uses_model := false  # the wooden table model is in place (not the procedural table)
 var _room_half := 40.0
 var _room_height := 12.0
 
@@ -121,6 +131,10 @@ func fit_table(bounds: AABB, keep: Array) -> void:
 func _build_table() -> void:
 	for c in _table.get_children():
 		c.queue_free()
+	var fits_model: bool = top.size.is_equal_approx(MIN_TOP)
+	uses_model = fits_model and ResourceLoader.exists(TABLE_MODEL) and _build_model_table()
+	if uses_model:
+		return
 	var wood := ShaderMaterial.new()
 	wood.shader = load("res://scripts/wood.gdshader")
 	var slab := MeshInstance3D.new()
@@ -171,8 +185,61 @@ func _build_table() -> void:
 			leg.position = Vector3(x, -TOP_THICKNESS - leg_h / 2.0, z)
 			_table.add_child(leg)
 			_boxes.append(AABB(Vector3(x - LEG / 2.0, -TABLE_HEIGHT, z - LEG / 2.0), Vector3(LEG, leg_h, LEG)))
+	_add_floor()
+
+
+func _add_floor() -> void:
 	# The floor, as a thick slab so nothing falls through it.
 	_boxes.append(AABB(Vector3(-1e7, -TABLE_HEIGHT - 10.0, -1e7), Vector3(2e7, 10.0, 2e7)))
+
+
+## The wooden table model, fitted to the tabletop rectangle with its top at y = 0.
+func _build_model_table() -> bool:
+	var scene: PackedScene = load(TABLE_MODEL)
+	if scene == null:
+		return false
+	var holder := Node3D.new()
+	_table.add_child(holder)
+	var inst := scene.instantiate()
+	holder.add_child(inst)
+	var box := _meshes_aabb(inst)
+	if box.size.x <= 0.0 or box.size.y <= 0.0 or box.size.z <= 0.0:
+		holder.queue_free()
+		return false
+	var k := Vector3(top.size.x / box.size.x, TABLE_HEIGHT / box.size.y, top.size.y / box.size.z)
+	holder.scale = k
+	holder.position = Vector3(top.get_center().x - box.get_center().x * k.x, -box.end.y * k.y,
+		top.get_center().y - box.get_center().z * k.z)
+	# Collision: the top board and apron as one block, and the four legs.
+	var depth := MODEL_EDGE_DEPTH * TABLE_HEIGHT
+	_boxes = [AABB(Vector3(top.position.x, -depth, top.position.y), Vector3(top.size.x, depth, top.size.y))]
+	for lx in MODEL_LEGS_X:
+		for lz in MODEL_LEGS_Z:
+			var x0: float = top.position.x + lx.x * top.size.x
+			var z0: float = top.position.y + lz.x * top.size.y
+			_boxes.append(AABB(Vector3(x0, -TABLE_HEIGHT, z0),
+				Vector3((lx.y - lx.x) * top.size.x, TABLE_HEIGHT - depth, (lz.y - lz.x) * top.size.y)))
+	_add_floor()
+	return true
+
+
+## Bounds of every mesh under node, in node's parent's space (node's own transform included).
+func _meshes_aabb(node: Node) -> AABB:
+	var out := AABB()
+	var first := true
+	var stack: Array = [[node, (node as Node3D).transform if node is Node3D else Transform3D.IDENTITY]]
+	while not stack.is_empty():
+		var item: Array = stack.pop_back()
+		var n: Node = item[0]
+		var t: Transform3D = item[1]
+		if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+			var b: AABB = t * (n as MeshInstance3D).mesh.get_aabb()
+			out = b if first else out.merge(b)
+			first = false
+		for c in n.get_children():
+			var ct: Transform3D = t * ((c as Node3D).transform if c is Node3D else Transform3D.IDENTITY)
+			stack.append([c, ct])
+	return out
 
 
 ## Every frame: the room keeps its walls far beyond the player, the haze and the shadow range

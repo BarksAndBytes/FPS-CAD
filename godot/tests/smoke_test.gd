@@ -369,6 +369,7 @@ func _run() -> void:
 		"challenge 1 shows its target beside the build area")
 	var table: Rect2 = main.view.room.top
 	_check(table.size.is_equal_approx(Vector2(1.22, 0.61)), "the table is 4 ft by 2 ft (%s)" % table.size)
+	_check(main.view.room.uses_model, "challenges use the wooden table model")
 	_check(main.player.feet.y < -0.7 and main.player.feet.z > table.end.y and main.player.size == 1.0,
 		"the player starts on the floor, walking up to the table")
 	var c: Color = main.challenge.colour

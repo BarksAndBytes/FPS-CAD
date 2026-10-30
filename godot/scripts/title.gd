@@ -95,6 +95,8 @@ func _ready() -> void:
 	var version := UiTheme.text("v%s · %s · files stay on this device" % [
 		preload("res://scripts/build_info.gd").VERSION, preload("res://scripts/updater.gd").version_text()], 13, UiTheme.MUTED.darkened(0.25))
 	col.add_child(version)
+	# CC BY 4.0 attribution for the table model.
+	col.add_child(UiTheme.text("Table: “Old Wooden Table” by carlcapu9 (sketchfab.com), CC BY 4.0", 12, UiTheme.MUTED.darkened(0.3)))
 	visible = false
 	get_viewport().size_changed.connect(_fit)
 
