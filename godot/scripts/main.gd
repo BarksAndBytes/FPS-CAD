@@ -333,7 +333,7 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 	view.doc = doc
 	view.is_assembly = assembly
 	view.refresh(player.size)
-	view.fit_table([player.feet])
+	view.fit_table()  # the model only: where the player stood in another document says nothing
 	tools.doc = doc
 	tools.is_assembly = assembly
 	tools.selected = ""
