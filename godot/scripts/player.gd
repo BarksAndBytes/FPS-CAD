@@ -39,6 +39,8 @@ var look_from_touch := Vector2.ZERO
 var look_stick_touch := Vector2.ZERO  # the on-screen look stick, -1..1, like a controller stick
 var move_from_touch := Vector2.ZERO
 var touch_sprint := false
+## The room floor: nothing goes below it, walking or flying (main.gd keeps it up to date).
+var floor_limit := -INF
 var touch_up := false
 var touch_down := false
 
@@ -282,6 +284,7 @@ func _move(dt: float) -> void:
 		if input_enabled and not limited:
 			up = float(Input.is_action_pressed(&"jump") or touch_up) - float(Input.is_action_pressed(&"crouch") or touch_down)
 		feet += (look * mv.y + right * mv.x + Vector3.UP * up) * speed * dt
+		feet.y = maxf(feet.y, floor_limit)  # fly through parts, but not through the floor
 		_vy = 0.0
 		_jump_queued = false
 		return
@@ -296,8 +299,12 @@ func _move(dt: float) -> void:
 		_vy = JUMP_SPEED * size
 	_jump_queued = false
 	_vy -= GRAVITY * size * dt
+	var was_y := feet.y
 	feet.y += _vy * dt
-	var floor_y := _floor_at(feet + Vector3(0, STEP * size, 0))
+	# Look for the floor from where the feet were before this frame's fall, so a fast fall
+	# cannot carry them past a surface between two frames.
+	var floor_y := _floor_at(Vector3(feet.x, maxf(was_y, feet.y) + STEP * size, feet.z))
+	floor_y = maxf(floor_y, floor_limit)
 	if feet.y <= floor_y:
 		feet.y = floor_y
 		_vy = 0.0

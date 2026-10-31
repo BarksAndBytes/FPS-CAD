@@ -179,6 +179,20 @@ func _run() -> void:
 	await _seconds(0.8)
 	_check(main.player.size > 0.95, "in the open the player grows back to full size")
 
+	# Nobody falls through the floor: not from a long fall, nor after flying down into it.
+	main.player.feet = Vector3(30, 60, 30)
+	await _seconds(3.0)
+	_check(absf(main.player.feet.y) < 0.01, "a 60 m fall lands on the floor (%.2f)" % main.player.feet.y)
+	main.player.fly = true
+	main.player.feet = Vector3(30, -5, 30)
+	await _frames(3)
+	_check(main.player.feet.y >= -1e-6, "flying cannot go below the floor")
+	main.player.fly = false
+	await _seconds(0.5)
+	_check(absf(main.player.feet.y) < 0.01, "turning fly off stands the player on the floor")
+	main.player.feet = Vector3(0, 0.05, 9)
+	await _frames(2)
+
 	# The room: training has no table; the course stands on the room floor.
 	var env = main.view.room
 	_check(not env.has_table, "training has no table")

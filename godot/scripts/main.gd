@@ -524,6 +524,7 @@ func _process(dt: float) -> void:
 	if doc == null:
 		return
 	view.follow(player.camera.global_position, player.size)
+	player.floor_limit = view.room.floor_y()
 	if state != "play":
 		_orbit(dt)
 		if state == "title" and not cmap.visible and not updater.busy() and Actions.last_device == "controller":
