@@ -82,10 +82,10 @@
     <text class="lbl" x="242" y="456" text-anchor="end" data-key="←→" data-desc="Undo / redo"><tspan fill="#ff8a3d" font-weight="600">←→</tspan>  Undo / redo</text>
     <text class="lbl" x="958" y="157" text-anchor="start" data-key="RT" data-desc="Primary action"><tspan fill="#ff8a3d" font-weight="600">RT</tspan>  Primary action</text>
     <text class="lbl" x="958" y="219" text-anchor="start" data-key="RB" data-desc="Hold: tool wheel"><tspan fill="#ff8a3d" font-weight="600">RB</tspan>  Hold: tool wheel</text>
-    <text class="lbl" x="958" y="277" text-anchor="start" data-key="Y" data-desc="Inspect parameters"><tspan fill="#ff8a3d" font-weight="600">Y</tspan>  Inspect parameters</text>
+    <text class="lbl" x="958" y="277" text-anchor="start" data-key="Y" data-desc="Inspect · face the sketch"><tspan fill="#ff8a3d" font-weight="600">Y</tspan>  Inspect parameters</text>
     <text class="lbl" x="958" y="337" text-anchor="start" data-key="B" data-desc="Back · crouch / fly down"><tspan fill="#ff8a3d" font-weight="600">B</tspan>  Back · crouch / fly down</text>
     <text class="lbl" x="958" y="397" text-anchor="start" data-key="A" data-desc="Select · jump / fly up"><tspan fill="#ff8a3d" font-weight="600">A</tspan>  Select · jump / fly up</text>
-    <text class="lbl" x="958" y="507" text-anchor="start" data-key="X" data-desc="Finish operation"><tspan fill="#ff8a3d" font-weight="600">X</tspan>  Finish operation</text>
+    <text class="lbl" x="958" y="507" text-anchor="start" data-key="X" data-desc="Finish sketch"><tspan fill="#ff8a3d" font-weight="600">X</tspan>  Finish operation</text>
     <text class="lbl" x="958" y="554" text-anchor="start" data-key="R stick" data-desc="Look"><tspan fill="#ff8a3d" font-weight="600">R stick</tspan>  Look</text>
     <text class="lbl" x="958" y="580" text-anchor="start" data-key="Click" data-desc="Precision aim"><tspan fill="#ff8a3d" font-weight="600">Click</tspan>  Precision aim</text>
     <text class="lbl" x="532" y="117" text-anchor="end" data-key="View" data-desc="This map"><tspan fill="#ff8a3d" font-weight="600">View</tspan>  This map</text>

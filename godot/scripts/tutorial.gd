@@ -6,7 +6,7 @@ extends Node3D
 ##
 ## Course layout in Godot space (Y up, start at z = +14, walking toward -z):
 ##   z = 9    walk marker        z = 5..7   80 cm step        z = -0.5..0.5  wall, 30 cm tunnel
-##   x = 3, z = -5   lift block (1 m)       x = -3, z = -5   build pad
+##   x = 3, z = -5   lift block (1 m)       x = -3, z = -5   build pad (sketch and extrude here)
 
 signal finished(choice: String)  # "stay", "free", "title"
 
@@ -65,7 +65,10 @@ func _build_steps() -> void:
 		{title = "Grow back", text = "_text_grow", check = "_check_grow"},
 		{title = "Pick a tool", text = "_text_wheel", check = "_check_wheel"},
 		{title = "Push a face", text = "_text_push", check = "_check_push", marker = Vector3(3, 0, -5)},
-		{title = "Place a box", text = "_text_box", check = "_check_box", marker = Vector3(-3, 0.05, -5)},
+		{title = "Start a sketch", text = "_text_sketch", check = "_check_sketch", marker = Vector3(-3, 0.05, -5)},
+		{title = "Draw a rectangle", text = "_text_rect", check = "_check_rect"},
+		{title = "Finish the sketch", text = "_text_finish", check = "_check_finish"},
+		{title = "Extrude it", text = "_text_extrude", check = "_check_extrude"},
 		{title = "Measure", text = "_text_measure", check = "_check_measure"},
 		{title = "Controls", text = "_text_map", check = "_check_map"},
 	]
@@ -78,7 +81,7 @@ func _p(action: StringName) -> String:
 func _text_look() -> String:
 	match Actions.last_device:
 		"keyboard": return "Move the mouse to look around."
-		"touch": return "Drag on the right half of the screen to look around."
+		"touch": return "Push the stick at the bottom right to look around. Dragging anywhere on the right side works too."
 	return "Use the right stick to look around."
 
 
@@ -131,8 +134,9 @@ func _check_grow() -> bool:
 
 func _text_wheel() -> String:
 	if Actions.last_device == "touch":
-		return "Tap the tool name at the top left to open the tool wheel, then tap Push / Pull."
-	return "Hold %s to open the tool wheel, point at Push / Pull, then let go." % _p(&"tool_wheel")
+		return "Tap the tool name at the top left to open the tool wheel. Tap Modify: its tools branch out. Tap Push / Pull."
+	return "Hold %s to open the tool wheel and point at Modify: its tools branch out. Let go to open it, point at Push / Pull and press %s." % [
+		_p(&"tool_wheel"), _p(&"ui_accept")]
 
 
 func _check_wheel() -> bool:
@@ -148,16 +152,64 @@ func _check_push() -> bool:
 	return _param("Lift block", "h") >= 1.99
 
 
-func _text_box() -> String:
-	return "Open the tool wheel again, pick Box, aim at the orange pad and press %s to place one." % _p(&"primary")
+func _text_sketch() -> String:
+	if Actions.last_device == "touch":
+		return "Real CAD starts with a sketch. Open the tool wheel, pick Sketch, aim at the orange pad and tap Fire to sketch on its top face."
+	return "Real CAD starts with a sketch. Open the tool wheel, pick Sketch, aim at the orange pad and press %s to sketch on its top face." % _p(&"primary")
 
 
-func _check_box() -> bool:
-	return _box_on_pad()
+func _check_sketch() -> bool:
+	return game.sketcher.active
+
+
+func _text_rect() -> String:
+	if Actions.last_device == "touch":
+		return "Open the tool wheel for the sketch tools, tap Draw and pick Rectangle. Tap Fire on one corner, then on the opposite corner."
+	return "The view now looks straight down at the sketch: move to pan, %s / %s to zoom. Hold %s for the sketch tools, open Draw and pick Rectangle, then press %s on one corner and on the opposite corner." % [
+		_p(&"grow"), _p(&"shrink"), _p(&"tool_wheel"), _p(&"primary")]
+
+
+func _check_rect() -> bool:
+	return game.sketcher.active and game.sketcher.count("line") >= 4
+
+
+func _text_finish() -> String:
+	if Actions.last_device == "touch":
+		return "Open Menu and choose Finish sketch. It joins the part's history as a feature."
+	return "Press %s to finish the sketch. It joins the part's history as a feature." % _p(&"finish")
+
+
+func _check_finish() -> bool:
+	return not game.sketcher.active and _count_type("sketch") > 0
+
+
+func _text_extrude() -> String:
+	if Actions.last_device == "controller":
+		return "Extrude is ready. Aim at your sketch and press RT. Change the depth with D-pad ←→ (Y to type it), walk around the preview, then press A."
+	if Actions.last_device == "touch":
+		return "Extrude is ready. Aim at your sketch and tap Fire. Change the depth with the arrows in the panel, then tap OK."
+	return "Extrude is ready. Aim at your sketch and click. Change the depth with ←→ (N to type it), walk around the preview, then press Enter."
+
+
+func _check_extrude() -> bool:
+	if game.dialog.visible:
+		return false
+	for f in _features():
+		if f.type == "extrude" and f.params.has("sketch") and f.ok:
+			return true
+	return false
+
+
+func _count_type(t: String) -> int:
+	var n := 0
+	for f in _features():
+		if f.type == t:
+			n += 1
+	return n
 
 
 func _text_measure() -> String:
-	return "Pick Measure. Press %s on one corner, then on another, to read the distance between them." % _p(&"primary")
+	return "Pick Measure from the wheel. Press %s on one corner, then on another, to read the distance between them." % _p(&"primary")
 
 
 func _check_measure() -> bool:
@@ -192,17 +244,6 @@ func _param(feature_name: String, key: String) -> float:
 	return 0.0
 
 
-func _box_on_pad() -> bool:
-	for f in _features():
-		if f.type != "box" or f.name in COURSE:
-			continue
-		var x := float(f.params.get("x", 0.0))
-		var y := float(f.params.get("y", 0.0))  # CAD y = Godot -z
-		if x > -4.6 and x < -1.4 and y > 3.4 and y < 6.6:
-			return true
-	return false
-
-
 func _advance() -> void:
 	step += 1
 	if step >= steps.size():
@@ -233,7 +274,7 @@ func _process(dt: float) -> void:
 	_last_yaw = game.player.yaw
 	if game.cmap.visible:
 		_map_seen = true
-	var blocked: bool = game.hud.menu_open or game.hud.panel_open or game.cmap.visible
+	var blocked: bool = game.hud.menu_open or game.hud.panel_open or game.cmap.visible or game.numpad.visible
 	_card.visible = not blocked
 	_ring.position.y = 0.15 + 0.08 * sin(_t * 3.0)
 	_ring.rotation.y = _t * 0.8
@@ -324,7 +365,7 @@ func _build_ui() -> void:
 	end_col.custom_minimum_size = Vector2(420, 0)
 	_end.add_child(end_col)
 	end_col.add_child(UiTheme.title("TRAINING COMPLETE", 32, UiTheme.ACCENT))
-	var note := UiTheme.text("You can move at any size, pick tools from the wheel and edit the model by its faces. Every change is a real dimension you can export.", 17, UiTheme.MUTED)
+	var note := UiTheme.text("You can move at any size, sketch on any flat face or plane, and build features from sketches. Every change is a real dimension in the part's history, ready to export.", 17, UiTheme.MUTED)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	end_col.add_child(note)
 	for spec in [["stay", "Keep building here"], ["free", "Free build"], ["title", "Title screen"]]:

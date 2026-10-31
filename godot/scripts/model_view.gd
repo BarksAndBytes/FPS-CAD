@@ -1,13 +1,14 @@
 extends Node3D
-## Draws the model: shaded bodies, feature edges, the ground grid, highlights, placement ghosts
-## and measure markers. Re-tessellates when the player's size changes enough that the mesh would
+## Draws the model: shaded bodies, feature edges, highlights, placement ghosts and measure
+## markers, inside the room (room.gd: the white room and the table the model stands on). Re-tessellates when the player's size changes enough that the mesh would
 ## look faceted (growing smaller) or wastefully dense (growing larger).
 
-const COLOR_PART := Color("d8d2c6")
+const COLOR_PART := Color("b7bfc8")  # a cool grey that reads against the white room and the wood
 const COLOR_EDGE := Color("1c222a")
 const COLOR_ACCENT := Color("ff8a3d")
 const COLOR_MEASURE := Color("ffd166")
-const SKY := Color("3a4553")
+const COLOR_SKETCH := Color("5aa9ff")
+const COLOR_SKETCH_BAD := Color("e0775f")
 
 ## CadPart or CadAssembly (untyped so a missing extension shows an error instead of a parse failure)
 var doc: RefCounted
@@ -31,14 +32,22 @@ var _mesh_size := -1.0
 
 var _highlight := MeshInstance3D.new()
 var _ghost := MeshInstance3D.new()
-var _ground := MeshInstance3D.new()
-var _grid_mat := ShaderMaterial.new()
+var room: Node3D  # room.gd
 var _marker_a := MeshInstance3D.new()
 var _marker_b := MeshInstance3D.new()
 var _marker_snap := MeshInstance3D.new()
 var _measure_line := MeshInstance3D.new()
-var _env := Environment.new()
 var _hl_key := ""
+var _sketch_mat := StandardMaterial3D.new()
+var _sketch_bad_mat := StandardMaterial3D.new()
+var _sketch_hl_mat := StandardMaterial3D.new()
+var _plane_mat := StandardMaterial3D.new()
+var _sketches := {}  # feature id -> MeshInstance3D (unused sketches only)
+var _sketch_ok := {}
+var _plane := MeshInstance3D.new()
+var _hl_sketch := ""
+## A sketch being edited in sketch mode is drawn by the sketcher, not here.
+var hidden_sketch := ""
 
 
 func _ready() -> void:
@@ -58,38 +67,24 @@ func _ready() -> void:
 	_measure_mat.albedo_color = COLOR_MEASURE
 	_measure_mat.no_depth_test = true
 	_measure_mat.render_priority = 10
+	for pair in [[_sketch_mat, COLOR_SKETCH], [_sketch_bad_mat, COLOR_SKETCH_BAD], [_sketch_hl_mat, COLOR_ACCENT]]:
+		var m: StandardMaterial3D = pair[0]
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = pair[1]
+		m.no_depth_test = true
+		m.render_priority = 8
+	_plane_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_plane_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_plane_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_plane_mat.albedo_color = Color(COLOR_SKETCH, 0.16)
+	_plane_mat.vertex_color_use_as_albedo = false
+	_plane.mesh = ImmediateMesh.new()
+	_plane.material_override = _plane_mat
+	_plane.visible = false
+	add_child(_plane)
 
-	var light := DirectionalLight3D.new()
-	light.rotation = Vector3(deg_to_rad(-55), deg_to_rad(30), 0)
-	light.light_energy = 0.9
-	light.light_color = Color("fff0dc")
-	add_child(light)
-	var fill := DirectionalLight3D.new()
-	fill.rotation = Vector3(deg_to_rad(-20), deg_to_rad(210), 0)
-	fill.light_energy = 0.25
-	fill.light_color = Color("bfd2ff")
-	add_child(fill)
-
-	_env.background_mode = Environment.BG_COLOR
-	_env.background_color = SKY
-	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	_env.ambient_light_color = Color("8a96a8")
-	_env.ambient_light_energy = 0.9
-	_env.fog_enabled = true
-	_env.fog_light_color = SKY
-	_env.fog_density = 0.012
-	_env.fog_sky_affect = 0.0
-	var we := WorldEnvironment.new()
-	we.environment = _env
-	add_child(we)
-
-	_grid_mat.shader = load("res://scripts/grid.gdshader")
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(40000, 40000)
-	_ground.mesh = plane
-	_ground.material_override = _grid_mat
-	_ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(_ground)
+	room = preload("res://scripts/room.gd").new()
+	add_child(room)
 
 	_highlight.material_override = _hl_mat
 	_ghost.material_override = _ghost_mat
@@ -106,14 +101,9 @@ func _ready() -> void:
 	_measure_line.material_override = _measure_mat
 
 
-## Called every frame with the camera so the grid, fog and tessellation follow the player.
+## Called every frame with the camera so the room and tessellation follow the player.
 func follow(camera_pos: Vector3, size: float) -> void:
-	_ground.position = Vector3(camera_pos.x, 0, camera_pos.z)
-	var grid := pow(10.0, round(log(size) / log(10.0)))
-	var fog := 0.012 / maxf(size, 0.12)
-	_grid_mat.set_shader_parameter("minor", grid)
-	_grid_mat.set_shader_parameter("fog_density", fog)
-	_env.fog_density = fog * 0.6
+	room.follow(camera_pos, size)
 	if _mesh_size < 0.0 or size / _mesh_size > 4.0 or _mesh_size / size > 4.0:
 		refresh(size)
 
@@ -125,6 +115,10 @@ func refresh(size: float = -1.0) -> void:
 	var defl := clampf(0.0015 * _mesh_size, 2e-7, 0.5)
 	for n in _bodies + _edges + _components:
 		n.queue_free()
+	for id in _sketches:
+		_sketches[id].queue_free()
+	_sketches.clear()
+	_sketch_ok.clear()
 	_bodies.clear()
 	_edges.clear()
 	_components.clear()
@@ -150,6 +144,57 @@ func refresh(size: float = -1.0) -> void:
 		_tri_faces.append(doc.triangle_faces(b))
 		_face_features.append(doc.face_feature_ids(b))
 		_edges.append(_make_edges(doc.build_edges(b, defl)))
+	_refresh_sketches()
+
+
+## Unused sketches show as lines in the world (used ones hide, as in most CAD tools).
+func _refresh_sketches() -> void:
+	if not doc.has_method("sketch_views"):
+		return
+	for v in doc.sketch_views():
+		if v.consumed or v.id == hidden_sketch:
+			continue
+		var pts: PackedVector3Array = v.segments
+		pts.append_array(v.construction)
+		if pts.size() < 2:
+			continue
+		var mi := _make_edges(pts)
+		var good: bool = v.ok and v.regions > 0
+		mi.material_override = _sketch_mat if good else _sketch_bad_mat
+		_sketches[v.id] = mi
+		_sketch_ok[v.id] = good
+	if _hl_sketch != "":
+		var keep := _hl_sketch
+		_hl_sketch = ""
+		highlight_sketch(keep)
+
+
+## Tints one sketch in the accent colour ("" for none).
+func highlight_sketch(id: String) -> void:
+	if id == _hl_sketch:
+		return
+	if _sketches.has(_hl_sketch):
+		_sketches[_hl_sketch].material_override = _sketch_mat if _sketch_ok.get(_hl_sketch, true) else _sketch_bad_mat
+	_hl_sketch = id
+	if _sketches.has(id):
+		_sketches[id].material_override = _sketch_hl_mat
+
+
+## A translucent square showing a sketch plane (basis from CadPart.plane_basis), or none.
+func show_plane(basis: Dictionary, half: float) -> void:
+	if basis.is_empty():
+		_plane.visible = false
+		return
+	var o: Vector3 = basis.origin
+	var x: Vector3 = basis.xdir * half
+	var y: Vector3 = basis.ydir * half
+	var im: ImmediateMesh = _plane.mesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for v in [o - x - y, o + x - y, o + x + y, o - x - y, o + x + y, o - x + y]:
+		im.surface_add_vertex(v)
+	im.surface_end()
+	_plane.visible = true
 
 
 func _refresh_assembly(defl: float) -> void:

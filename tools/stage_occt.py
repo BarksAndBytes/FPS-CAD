@@ -18,7 +18,7 @@ import sys
 # The toolkits the extension loads, directly or through other toolkits (Open CASCADE 8.0).
 TOOLKITS = [
     "TKernel", "TKMath", "TKG2d", "TKG3d", "TKGeomBase", "TKBRep", "TKGeomAlgo", "TKTopAlgo",
-    "TKPrim", "TKBO", "TKBool", "TKFillet", "TKMesh", "TKShHealing", "TKHLR", "TKXSBase", "TKDE",
+    "TKPrim", "TKBO", "TKBool", "TKFillet", "TKOffset", "TKMesh", "TKShHealing", "TKHLR", "TKXSBase", "TKDE",
     "TKDESTEP", "TKDEIGES", "TKDESTL", "TKLCAF", "TKCAF", "TKCDF", "TKXCAF", "TKService", "TKV3d",
     "TKVCAF",
 ]

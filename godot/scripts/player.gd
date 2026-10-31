@@ -4,6 +4,7 @@ extends Node3D
 ## with size so movement feels the same at 0.1 mm and at 1 km.
 
 signal size_changed(size: float)
+signal growth_blocked  # walking: growing further would push the body into a part
 
 const TALL := 1.75        # metres at 1:1
 const EYE := 1.62
@@ -31,8 +32,15 @@ var fly := false
 var sprint_toggled := false
 var precision := false
 var input_enabled := true
+## While a feature panel is open the player can still walk and look, but the D-pad, A and the
+## size keys belong to the panel.
+var limited := false
 var look_from_touch := Vector2.ZERO
+var look_stick_touch := Vector2.ZERO  # the on-screen look stick, -1..1, like a controller stick
 var move_from_touch := Vector2.ZERO
+var touch_sprint := false
+## The room floor: nothing goes below it, walking or flying (main.gd keeps it up to date).
+var floor_limit := -INF
 var touch_up := false
 var touch_down := false
 
@@ -42,6 +50,17 @@ var _jump_queued := false
 var _grow_held := 0.0
 var _shrink_held := 0.0
 var _scale_hold := 0.0  # touch buttons: +1 grow, -1 shrink
+var _blocked_at := -10000
+
+## Sketch view: the camera looks straight down a plane's normal with the plane's X axis to the
+## right and its Y axis up. Moving pans across the plane and size is the zoom (distance).
+var view_lock := false
+var _lock_target := Vector3.ZERO  # point on the plane at the centre of the view
+var _lock_basis := Basis.IDENTITY  # columns: plane X, plane Y, plane normal
+const LOCK_DISTANCE := 2.6        # camera distance from the plane, in player heights
+const BLEND_TIME := 0.35
+var _blend_from := Transform3D.IDENTITY
+var _blend_t := 1.0
 
 
 func _ready() -> void:
@@ -79,12 +98,66 @@ func hold_scale(direction: float) -> void:
 	_scale_hold = direction
 
 
+## Locks the view onto a plane (Godot-space axes), centred on target.
+func lock_view(target: Vector3, xdir: Vector3, ydir: Vector3, normal: Vector3) -> void:
+	_start_blend()
+	view_lock = true
+	_lock_basis = Basis(xdir.normalized(), ydir.normalized(), normal.normalized())
+	_lock_target = target
+	_sync_locked()
+
+
+## Leaves the sketch view for free first-person look, flying where the camera is.
+func unlock_view() -> void:
+	if not view_lock:
+		return
+	view_lock = false
+	fly = true
+	var n := _lock_basis.z
+	pitch = clampf(asin(clampf(-n.y, -1.0, 1.0)), -1.55, 1.55)
+	if absf(n.y) < 0.999:
+		yaw = atan2(n.x, n.z)
+	_start_blend()
+
+
+## Where the player stood and looked, to come back to after a sketch.
+func pose() -> Dictionary:
+	return {feet = feet, yaw = yaw, pitch = pitch, size = target_size, fly = fly}
+
+
+func restore_pose(p: Dictionary) -> void:
+	_start_blend()
+	view_lock = false
+	feet = p.feet
+	yaw = p.yaw
+	pitch = p.pitch
+	fly = p.fly
+	set_size(p.size)
+
+
+func _start_blend() -> void:
+	if camera != null and camera.is_inside_tree():
+		_blend_from = camera.transform
+		_blend_t = 0.0
+
+
+func _sync_locked() -> void:
+	var eye := _lock_target + _lock_basis.z * LOCK_DISTANCE * EYE * size
+	feet = eye - Vector3(0, EYE * size, 0)
+
+
+func _pan(delta: Vector2) -> void:
+	_lock_target += (_lock_basis.x * delta.x + _lock_basis.y * delta.y) * size
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not input_enabled:
 		return
-	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and view_lock:
+		_pan(Vector2(event.relative.x, -event.relative.y) * 0.0035 * (PRECISION if precision else 1.0))
+	elif event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look(event.relative * MOUSE_SENS * (PRECISION if precision else 1.0))
-	elif event is InputEventMouseButton and event.pressed:
+	elif event is InputEventMouseButton and event.pressed and not limited:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			scale_by(1.15)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -101,13 +174,48 @@ func _process(dt: float) -> void:
 	if input_enabled:
 		_read_actions(dt)
 	_update_size(dt)
-	_move(dt)
 	global_position = Vector3.ZERO
-	camera.position = eye_position()
-	camera.rotation = Vector3(pitch, yaw, 0)
+	var want: Transform3D
+	if view_lock:
+		_move_locked(dt)
+		_sync_locked()
+		want = Transform3D(_lock_basis, eye_position())
+	else:
+		_move(dt)
+		want = Transform3D(Basis.from_euler(Vector3(pitch, yaw, 0)), eye_position())
+	if _blend_t < 1.0:
+		_blend_t = minf(1.0, _blend_t + dt / BLEND_TIME)
+		var k := ease(_blend_t, -2.0)  # ease in and out
+		want = _blend_from.interpolate_with(want, k)
+	camera.transform = want
+
+
+## Sketch view: left stick / WASD pan across the plane, the right stick pans finely.
+func _move_locked(dt: float) -> void:
+	if not input_enabled:
+		return
+	var mv := Input.get_vector(&"move_left", &"move_right", &"move_back", &"move_forward") + move_from_touch
+	var fine := (Input.get_vector(&"look_left", &"look_right", &"look_down", &"look_up")
+		+ Vector2(look_stick_touch.x, -look_stick_touch.y)).limit_length(1.0) * 0.4
+	var touch := Vector2(-look_from_touch.x, look_from_touch.y) * 0.6 / maxf(dt, 1e-3)
+	look_from_touch = Vector2.ZERO
+	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold") or touch_sprint
+	var speed := 1.6 * (SPRINT if sprinting else 1.0) * (PRECISION if precision else 1.0)
+	_pan((mv.limit_length(1.0) + fine + touch) * speed * dt)
 
 
 func _read_actions(dt: float) -> void:
+	if view_lock:
+		_read_size_actions(dt)  # the sticks pan in _move_locked
+		return
+	# Stick look with a squared response curve for fine aiming near the centre.
+	var stick := (Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down") + look_stick_touch).limit_length(1.0)
+	stick = stick.normalized() * pow(stick.length(), 2.0) if stick.length() > 0.0 else stick
+	var k := STICK_LOOK * dt * (PRECISION if precision else 1.0)
+	_look(stick * k + look_from_touch)
+	look_from_touch = Vector2.ZERO
+	if limited:
+		return
 	if Input.is_action_just_pressed(&"toggle_fly"):
 		fly = not fly
 	if Input.is_action_just_pressed(&"sprint_toggle"):
@@ -116,14 +224,14 @@ func _read_actions(dt: float) -> void:
 		precision = not precision
 	if Input.is_action_just_pressed(&"jump") and not fly:
 		_jump_queued = true
+	_read_size_actions(dt)
+
+
+func _read_size_actions(dt: float) -> void:
+	if Input.is_action_just_pressed(&"precision_aim") and view_lock:
+		precision = not precision
 	if Input.is_action_just_pressed(&"reset_size"):
 		set_size(1.0)
-	# Stick look with a squared response curve for fine aiming near the centre.
-	var stick := Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down")
-	stick = stick.normalized() * pow(stick.length(), 2.0) if stick.length() > 0.0 else stick
-	var k := STICK_LOOK * dt * (PRECISION if precision else 1.0)
-	_look(stick * k + look_from_touch)
-	look_from_touch = Vector2.ZERO
 	# D-pad / keys: a tap doubles or halves, holding scales smoothly.
 	_grow_held = _held(&"grow", _grow_held, dt, 2.0)
 	_shrink_held = _held(&"shrink", _shrink_held, dt, 0.5)
@@ -144,6 +252,13 @@ func _held(action: StringName, held: float, dt: float, tap_factor: float) -> flo
 func _update_size(dt: float) -> void:
 	if _scale_hold != 0.0:
 		scale_by(exp(1.4 * dt * _scale_hold))
+	if target_size > size * 1.0001 and not fly and not view_lock:
+		var room := room_to_grow()
+		if target_size > room:
+			target_size = maxf(room, size)  # never shrink the player because of it
+			if Time.get_ticks_msec() - _blocked_at > 1200:
+				_blocked_at = Time.get_ticks_msec()
+				growth_blocked.emit()
 	var before := size
 	var a := log(size)
 	var b := log(target_size)
@@ -159,16 +274,17 @@ func _move(dt: float) -> void:
 	if input_enabled:
 		mv = Input.get_vector(&"move_left", &"move_right", &"move_back", &"move_forward") + move_from_touch
 	mv = mv.limit_length(1.0)
-	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold")
+	var sprinting: bool = sprint_toggled or Input.is_action_pressed(&"sprint_hold") or touch_sprint
 	var speed := WALK_SPEED * size * (SPRINT if sprinting else 1.0)
 	var fwd := Vector3(-sin(yaw), 0, -cos(yaw))
 	var right := Vector3(cos(yaw), 0, -sin(yaw))
 	if fly:
 		var look := -camera.global_transform.basis.z
 		var up := 0.0
-		if input_enabled:
+		if input_enabled and not limited:
 			up = float(Input.is_action_pressed(&"jump") or touch_up) - float(Input.is_action_pressed(&"crouch") or touch_down)
 		feet += (look * mv.y + right * mv.x + Vector3.UP * up) * speed * dt
+		feet.y = maxf(feet.y, floor_limit)  # fly through parts, but not through the floor
 		_vy = 0.0
 		_jump_queued = false
 		return
@@ -183,8 +299,12 @@ func _move(dt: float) -> void:
 		_vy = JUMP_SPEED * size
 	_jump_queued = false
 	_vy -= GRAVITY * size * dt
+	var was_y := feet.y
 	feet.y += _vy * dt
-	var floor_y := _floor_at(feet + Vector3(0, STEP * size, 0))
+	# Look for the floor from where the feet were before this frame's fall, so a fast fall
+	# cannot carry them past a surface between two frames.
+	var floor_y := _floor_at(Vector3(feet.x, maxf(was_y, feet.y) + STEP * size, feet.z))
+	floor_y = maxf(floor_y, floor_limit)
 	if feet.y <= floor_y:
 		feet.y = floor_y
 		_vy = 0.0
@@ -193,12 +313,37 @@ func _move(dt: float) -> void:
 		_on_ground = feet.y - floor_y < 0.02 * size and _vy <= 0.0
 
 
+## The largest size the walking player can grow to here without its body entering a part: the
+## head stays under the nearest ceiling and the body clear of nearby walls. Faces seen from
+## inside a part do not count, as in _blocked, so a player already inside one is not trapped.
+func room_to_grow() -> float:
+	if not cast.is_valid():
+		return MAX_SIZE
+	var limit := MAX_SIZE
+	var base := feet + Vector3(0, 0.02 * size, 0)
+	var up: Dictionary = cast.call(base, Vector3.UP, TALL * target_size * 1.1 + 1e-6)
+	if not up.is_empty() and up.normal.y < 0.0:
+		limit = minf(limit, (up.distance + 0.02 * size) / (TALL * 1.03))
+	# Walls, sampled at heights through the body the player would grow into.
+	var height := TALL * minf(target_size, limit)
+	for f in [0.35, 0.65, 0.95]:
+		var o := feet + Vector3(0, maxf(height * f, STEP * size), 0)
+		for i in 8:
+			var dir := Vector3(cos(TAU * i / 8.0), 0, sin(TAU * i / 8.0))
+			var hit: Dictionary = cast.call(o, dir, RADIUS * target_size * 1.2 + 1e-6)
+			if not hit.is_empty() and hit.normal.dot(dir) < 0.0:
+				limit = minf(limit, hit.distance / (RADIUS * 1.1))
+	return maxf(limit, MIN_SIZE)
+
+
+## The surface under probe: the model, the table or the room floor (all through cast).
 func _floor_at(probe: Vector3) -> float:
-	var y := 0.0  # the ground plane
-	if cast.is_valid():
-		var hit: Dictionary = cast.call(probe, Vector3.DOWN, 1e6)
-		if not hit.is_empty() and hit.normal.y > 0.2:  # only surfaces facing up are floors
-			y = maxf(y, hit.point.y)
+	var y := -1e9  # the room floor always answers; this only guards a missing cast
+	if not cast.is_valid():
+		return 0.0
+	var hit: Dictionary = cast.call(probe, Vector3.DOWN, 1e6)
+	if not hit.is_empty() and hit.normal.y > 0.2:  # only surfaces facing up are floors
+		y = hit.point.y
 	return y
 
 

@@ -75,9 +75,56 @@ func _run() -> void:
 	_check(absf(t.origin.y - (-0.020)) < 1e-6, "component placement converts to Y-up")
 
 	for script in ["actions", "player", "model_view", "tools", "tool_wheel", "hud", "touch_controls", "main",
-			"ui_theme", "controller_map", "splash", "title", "tutorial"]:
+			"ui_theme", "controller_map", "splash", "title", "tutorial", "sketcher", "feature_dialog", "number_pad", "units", "updater", "build_info", "challenge", "room", "fat_lines"]:
 		var s: Script = load("res://scripts/%s.gd" % script)
 		_check(s != null and s.can_instantiate(), "script %s compiles" % script)
+
+	# Sketch → extrude through the bindings alone.
+	var blank = ClassDB.instantiate(&"CadPart")
+	blank.new_blank("Bindings", "mm")
+	var plane: Dictionary = blank.standard_plane("front")
+	var basis: Dictionary = blank.plane_basis(plane.plane)
+	_check(plane.name == "Front" and basis.normal.is_equal_approx(Vector3(0, 0, 1)), "Front plane faces +Z in Godot space")
+	var rect := {plane = plane.plane, planeName = "Front", points = [
+		{id = "b", x = 0.9, y = 0.0}, {id = "c", x = 1.1, y = 0.6}, {id = "d", x = 0.0, y = 0.5}],
+		entities = [{id = "l1", kind = "line", pts = ["o", "b"]}, {id = "l2", kind = "line", pts = ["b", "c"]},
+			{id = "l3", kind = "line", pts = ["c", "d"]}, {id = "l4", kind = "line", pts = ["d", "o"]}],
+		constraints = [{id = "h1", kind = "horizontal", refs = ["l1"]}, {id = "v2", kind = "vertical", refs = ["l2"]},
+			{id = "h3", kind = "horizontal", refs = ["l3"]}, {id = "v4", kind = "vertical", refs = ["l4"]},
+			{id = "w", kind = "distance", refs = ["l1"], value = 1.0}, {id = "h", kind = "distance", refs = ["l2"], value = "500 mm"}]}
+	var solved: Dictionary = blank.solve_sketch(rect)
+	_check(solved.ok and solved.dof == 0, "solve_sketch squares up a dimensioned rectangle (%s)" % solved.message)
+	var sk_id: String = blank.add_sketch(solved.sketch)
+	blank.checkpoint()
+	var ins: Dictionary = blank.insert_feature("extrude", "add", {sketch = sk_id, depth = 0.2})
+	_check(ins.ok and absf(blank.mass_properties().volume - 0.1) < 1e-6, "insert_feature extrudes the sketch")
+	blank.update_feature(ins.id, "", {depth = 0.4})
+	_check(absf(blank.mass_properties().volume - 0.2) < 1e-6, "update_feature changes the preview")
+	blank.abandon()
+	_check(blank.body_count() == 0 and blank.latest_unused_sketch() == sk_id, "abandon removes the preview")
+	var aimed: Dictionary = blank.pick_sketch(Vector3(0.5, 0.25, 5), Vector3(0, 0, -1), 20.0, 0.02, false)
+	_check(aimed.get("feature_id", "") == sk_id and aimed.region == 0, "pick_sketch finds the profile")
+
+	# Update checks: the decision logic, without touching the network.
+	var up = load("res://scripts/updater.gd")
+	var newer: Dictionary = up.evaluate({build = 12, apk = "https://example.invalid/a.apk", signing = "release"}, 11)
+	_check(newer.newer, "a higher build number is offered as an update")
+	_check(not up.evaluate({build = 11, apk = "x", signing = "release"}, 11).newer, "the same build is not an update")
+	_check(not up.evaluate({build = 13, apk = "x", signing = "debug"}, 11).newer, "a debug-signed build is not offered (it could not install over this one)")
+	_check(not up.evaluate("nonsense", 11).newer and not up.evaluate({build = 13}, 11).newer, "unreadable update information is ignored")
+	_check(not up.supported(), "local and desktop builds never check for updates")
+	var apk_path := "user://smoke-update.apk"
+	var fa := FileAccess.open(apk_path, FileAccess.WRITE)
+	var blob := PackedByteArray()
+	blob.resize(4096)
+	blob.fill(7)
+	fa.store_buffer(blob)
+	fa.close()
+	var sha: String = FileAccess.get_sha256(apk_path)
+	_check(up.verify(apk_path, {size = 4096, sha256 = sha}) == "", "a downloaded update that matches its checksum is accepted")
+	_check(up.verify(apk_path, {size = 4096, sha256 = "00" + sha.substr(2)}) != "", "a damaged download is refused")
+	_check(up.verify(apk_path, {size = 9999, sha256 = sha}) != "", "a short download is refused")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(apk_path))
 
 	var course = ClassDB.instantiate(&"CadPart")
 	course.make_training()
@@ -116,6 +163,44 @@ func _run() -> void:
 	await _seconds(1.6)
 	_check(main.tutorial.step == 2, "reaching the marker completes objective 2")
 
+	# Growing while walking stops where the body would enter a part: inside the 30 cm crawl
+	# tunnel the player cannot grow taller than the tunnel. Flying lifts the limit.
+	main.player.size = 0.1
+	main.player.target_size = 0.1
+	main.player.feet = Vector3(0, 0, 0)
+	await _frames(2)
+	main.player.set_size(1.0)
+	await _seconds(0.8)
+	var grown: float = main.player.size * 1.75
+	_check(grown < 0.3 and grown > 0.2, "growing inside the tunnel stops under its 30 cm ceiling (%.0f mm tall)" % (grown * 1000.0))
+	main.player.feet = Vector3(0, 0.05, 9)
+	await _frames(2)
+	main.player.set_size(1.0)
+	await _seconds(0.8)
+	_check(main.player.size > 0.95, "in the open the player grows back to full size")
+
+	# Nobody falls through the floor: not from a long fall, nor after flying down into it.
+	main.player.feet = Vector3(30, 60, 30)
+	await _seconds(3.0)
+	_check(absf(main.player.feet.y) < 0.01, "a 60 m fall lands on the floor (%.2f)" % main.player.feet.y)
+	main.player.fly = true
+	main.player.feet = Vector3(30, -5, 30)
+	await _frames(3)
+	_check(main.player.feet.y >= -1e-6, "flying cannot go below the floor")
+	main.player.fly = false
+	await _seconds(0.5)
+	_check(absf(main.player.feet.y) < 0.01, "turning fly off stands the player on the floor")
+	main.player.feet = Vector3(0, 0.05, 9)
+	await _frames(2)
+
+	# The room: training has no table; the course stands on the room floor.
+	var env = main.view.room
+	_check(not env.has_table, "training has no table")
+	var down: Dictionary = env.cast(Vector3(40, 3, 0), Vector3.DOWN, 100.0)
+	_check(not down.is_empty() and absf(down.point.y) < 1e-6, "the room floor is the CAD ground in training")
+	main.player.feet = Vector3(0, 0.05, 9)
+	await _frames(2)
+
 	await _pad(JOY_BUTTON_START)
 	await _frames(4)
 	_check(main.hud.menu_open, "Start opens the pause menu")
@@ -148,6 +233,216 @@ func _run() -> void:
 	_check(main.tutorial == null and main.mode == "free", "A on the complete card keeps building")
 	_check(load("res://scripts/tutorial.gd").is_done(), "finishing training is remembered")
 
+	main._open_wheel(true)
+	await _frames(2)
+	var screen: Vector2 = root.get_viewport().get_visible_rect().size
+	var wheel_ok: bool = main.wheel.size.is_equal_approx(screen)
+	var mean := Vector2.ZERO
+	for b in main.wheel._slots:
+		mean += b.position + b.size / 2.0
+	mean /= maxi(1, main.wheel._slots.size())
+	_check(wheel_ok and mean.distance_to(screen / 2.0) < 2.0,
+		"the tool wheel fills the screen and is centred (%s, slots around %s)" % [main.wheel.size, mean])
+	_check(main.touch.size.is_equal_approx(screen), "touch controls cover the screen")
+	# Groups: aiming at Solids shows its branch, committing opens it, then a tool is picked.
+	var solids := -1
+	for i in main.wheel.tree.size():
+		if main.wheel.tree[i].name == "Solids":
+			solids = i
+	main.wheel._set_hover(solids)
+	_check(solids >= 0 and main.wheel._kids.size() == 4, "aiming at Solids shows its four tools branching out")
+	_check(main.wheel.commit() == load("res://scripts/tool_wheel.gd").ENTERED and main.wheel.visible and main.wheel.group == solids,
+		"choosing a group opens its branch and keeps the wheel open")
+	main.wheel.aim(Vector2.from_angle(main.wheel._kid_angle(solids, 1)))
+	var picked_value: int = main.wheel.commit()
+	main._wheel_pick(picked_value)
+	_check(not main.wheel.visible and main.tools.tool().id == "revolve", "aiming along the branch and choosing picks Revolve")
+	main._open_wheel(true)
+	main.wheel.enter(solids)
+	main.wheel.back()
+	_check(main.wheel.visible and main.wheel.group == -1, "back steps from a branch to the groups")
+	main.wheel.back()
+	_check(not main.wheel.visible, "back at the groups closes the wheel")
+	main.tools.set_tool(0)
+
+	# Touch joysticks: the move stick walks and sprints when pushed past its ring; the look stick
+	# turns like a controller stick; both spring back when let go.
+	var tc = main.touch
+	var acts: Node = root.get_node("Actions")
+	acts.last_device = "touch"
+	acts.device_changed.emit("touch")
+	tc._layout()
+	# A phone sends a pretend mouse click with every touch; it must not hide the touch controls.
+	var fake := InputEventMouseButton.new()
+	fake.device = InputEvent.DEVICE_ID_EMULATION
+	fake.button_index = MOUSE_BUTTON_LEFT
+	fake.pressed = true
+	Input.parse_input_event(fake)
+	await _frames(2)
+	_check(acts.last_device == "touch" and tc.visible, "touches stay touches (emulated mouse clicks are ignored)")
+	var mh: Vector2 = tc._stick_home
+	_touch(tc, 7, mh, true)
+	_drag(tc, 7, mh + Vector2(70, 0))
+	_check(main.player.move_from_touch.x > 0.95 and not main.player.touch_sprint, "the move stick walks")
+	_drag(tc, 7, mh + Vector2(110, 0))
+	_check(main.player.touch_sprint, "pushing the move stick past its ring sprints")
+	_touch(tc, 7, mh + Vector2(110, 0), false)
+	_check(main.player.move_from_touch == Vector2.ZERO and not main.player.touch_sprint, "letting go of the move stick stops")
+	var lh: Vector2 = tc._look_home
+	_touch(tc, 8, lh, true)
+	_drag(tc, 8, lh + Vector2(0, -80))
+	_check(main.player.look_stick_touch.y < -0.95, "the look stick looks up")
+	_touch(tc, 8, lh + Vector2(0, -80), false)
+	_check(main.player.look_stick_touch == Vector2.ZERO and tc._look_knob.position == lh - tc._look_knob.size / 2.0,
+		"letting go of the look stick recentres it")
+	acts.last_device = "controller"
+	acts.device_changed.emit("controller")
+
+	# A phone-sized interface: larger text, and the pause menu switches to two columns to fit.
+	var ui = load("res://scripts/ui_theme.gd")
+	ui.apply_scale(self, 1.75)
+	await _frames(2)
+	main.hud.set_menu_items(main._menu_items())
+	main.hud.set_menu(true)
+	await _frames(2)
+	var tall: float = main.hud.menu_control().size.y
+	var room: float = root.get_viewport().get_visible_rect().size.y
+	_check(root.content_scale_factor == 1.75 and tall <= room,
+		"at 175%% the pause menu fits the screen (%.0f of %.0f)" % [tall, room])
+	main.hud.set_menu(false)
+	ui.apply_scale(self, 1.0)
+	await _frames(2)
+
+	# ---- the CAD workflow in the game: plane → sketch → dimension → finish → extrude ----
+	main._start_mode("new")
+	await _frames(3)
+	_check(main.mode == "new" and main.doc.get_features().is_empty() and main.tools.tool().id == "sketch",
+		"New part opens blank with the Sketch tool")
+	var top: Dictionary = main.doc.standard_plane("top")
+	main._on_sketch_requested(top.plane, top.name, "")
+	await _frames(2)
+	_check(main.sketcher.active and main.hud.menu_open == false, "sketch mode opens on the Top plane")
+	await _seconds(0.6)  # let the camera swing into the sketch view
+	var cam: Basis = main.player.camera.global_transform.basis
+	_check(main.player.view_lock and cam.x.is_equal_approx(Vector3(1, 0, 0)) and cam.y.is_equal_approx(Vector3(0, 0, -1))
+		and (-cam.z).is_equal_approx(Vector3(0, -1, 0)),
+		"the Top-plane sketch view looks straight down with sketch X right and Y up (%s)" % cam)
+	var view_y: float = main.player.camera.global_position.y
+	main.player.set_size(0.5)
+	await _seconds(0.6)
+	_check(main.player.camera.global_position.y < view_y * 0.75 and main.player.view_lock, "shrinking zooms the sketch view in")
+	main.player.set_size(1.0)
+	await _seconds(0.6)
+	main.sketcher.set_tool_id("rect")
+	main.sketcher.click_at(Vector2(0, 0))
+	main.sketcher.click_at(Vector2(1, 0.5))
+	_check(main.sketcher.count("line") == 4 and main.sketcher.status.ok and main.sketcher.status.dof == 2,
+		"a rectangle from the origin leaves width and height free (%s)" % main.sketcher.status.get("message", ""))
+	main.sketcher.set_dimension("2000", "distance", ["l1"])
+	main.sketcher.ask_dimension("distance", ["l2"], 0.5)
+	await _frames(2)
+	_check(main.numpad.visible, "the number pad opens for a dimension")
+	for k in ["2", "5", "0", "OK"]:
+		main.numpad._key(k)
+	await _frames(2)
+	_check(not main.numpad.visible and main.sketcher.defined(), "two dimensions fully define the rectangle")
+	_check(not main.sketcher.set_dimension("1000", "distance", ["l3"]), "a conflicting dimension is refused")
+	await _pad(JOY_BUTTON_X)
+	await _frames(3)
+	var feats: Array = main.doc.get_features()
+	_check(not main.sketcher.active and feats.size() == 1 and feats[0].type == "sketch", "X finishes the sketch into the history")
+	_check(not main.player.view_lock and main.player.feet.distance_to(Vector3(0, 0, 4)) < 0.5,
+		"finishing the sketch returns the player to where they stood")
+	_check(main.tools.tool().id == "extrude", "finishing a sketch readies Extrude")
+	var sid: String = feats[0].id
+	main._on_feature_requested("extrude", sid, "add")
+	await _frames(2)
+	_check(main.dialog.visible and main.doc.body_count() == 1, "the extrude panel opens with a live preview")
+	main.dialog.set_value("depth", 0.25)
+	main.dialog.focus = 0
+	await _pad(JOY_BUTTON_DPAD_RIGHT)
+	await _frames(2)
+	_check(absf(float(main.dialog.values.depth) - 0.5) < 1e-9, "D-pad right adds a snap step to the depth")
+	await _pad(JOY_BUTTON_A)
+	await _frames(3)
+	_check(not main.dialog.visible and absf(main.doc.mass_properties().volume - 0.25) < 1e-6,
+		"A accepts: 2 m × 250 mm × 500 mm extrude (%.4f m³)" % main.doc.mass_properties().volume)
+
+	main._on_sketch_requested({}, "", sid)
+	await _frames(2)
+	_check(main.sketcher.active and main.sketcher.edit_id == sid, "a finished sketch opens again for editing")
+	main.sketcher.set_dimension("3000", "distance", ["l1"])
+	main.sketcher.finish()
+	await _frames(2)
+	_check(absf(main.doc.mass_properties().volume - 0.375) < 1e-6, "editing the sketch drives the extrude")
+
+	main._start_mode("new")
+	await _frames(2)
+	var front: Dictionary = main.doc.standard_plane("front")
+	main._on_sketch_requested(front.plane, front.name, "")
+	await _seconds(0.6)
+	cam = main.player.camera.global_transform.basis
+	_check(cam.x.is_equal_approx(Vector3(1, 0, 0)) and cam.y.is_equal_approx(Vector3(0, 1, 0)) and (-cam.z).is_equal_approx(Vector3(0, 0, -1)),
+		"the Front-plane sketch view faces the plane square-on (%s)" % cam)
+	main.sketcher.toggle_view()
+	await _frames(2)
+	_check(not main.player.view_lock and main.player.fly, "Y switches the sketch view to free look")
+	main.sketcher.toggle_view()
+	await _frames(2)
+	_check(main.player.view_lock, "Y returns to the sketch view")
+	main.sketcher.set_tool_id("rect")
+	main.sketcher.click_at(Vector2(0.5, 0))
+	main.sketcher.click_at(Vector2(1, 1))
+	main.sketcher.finish()
+	var rid: String = main.doc.latest_unused_sketch()
+	main._on_feature_requested("revolve", rid, "add")
+	await _frames(2)
+	main.dialog.accept()
+	await _frames(2)
+	_check(absf(main.doc.mass_properties().volume - PI * 0.75) < 1e-4,
+		"a revolve about the sketch's Y axis makes a tube (%.4f m³)" % main.doc.mass_properties().volume)
+
+	# ---- challenge mode: copy the target, any orientation, any method ----
+	var list: Array = ClassDB.instantiate(&"CadPart").challenge_list()
+	_check(list.size() == 10 and list[0].name == "Block", "ten challenges, starting with the block")
+	main._start_mode("challenge", 0)
+	await _frames(3)
+	_check(main.challenge != null and main.challenge.target != null and main.challenge.offset.x < 0.0,
+		"challenge 1 shows its target beside the build area")
+	var table: Rect2 = main.view.room.top
+	_check(table.size.is_equal_approx(Vector2(1.22, 0.61)), "the table is 4 ft by 2 ft (%s)" % table.size)
+	_check(main.view.room.has_table, "challenges use the wooden table")
+	_check(main.player.feet.y < -0.7 and main.player.feet.z > table.end.y and main.player.size == 1.0,
+		"the player starts on the floor, walking up to the table")
+	var c: Color = main.challenge.colour
+	_check(c.a == 1.0 and c.s > 0.2 and c.s < 0.45 and c.v > 0.85, "the target is an opaque pastel (%s)" % c)
+	var wrong: String = main.doc.add_primitive("box", Vector3(0.3, 0, 0.2), {w = 0.1, d = 0.075, h = 0.045}, "add")
+	main._on_model_changed()
+	await _frames(2)
+	_check(wrong != "" and not main.challenge.solved and String(main.challenge.last.get("message", "")).contains("90%"),
+		"a block 5 mm short does not pass, and the hint says 90%% (%s)" % main.challenge.last.get("message", ""))
+	main.doc.delete_feature(wrong)
+	var right: String = main.doc.add_primitive("box", Vector3(0.3, 0, 0.2), {w = 0.075, d = 0.05, h = 0.1}, "add")
+	main._on_model_changed()
+	await _frames(3)
+	_check(right != "" and main.challenge.solved and main.challenge.is_open_card(),
+		"the same block stood on end and moved elsewhere passes")
+	_check(load("res://scripts/challenge.gd").unlocked() >= 2, "passing unlocks the next challenge")
+	await _pad(JOY_BUTTON_A)
+	await _frames(4)
+	_check(main.mode == "challenge" and main.level == 1 and main.challenge != null and main.challenge.info.id == "puck",
+		"A on Next challenge opens challenge 2")
+
+	# Free build: the desk organiser on the table, walking up to it from the floor.
+	main._start_mode("free")
+	await _frames(3)
+	_check(main.view.room.has_table and main.doc.get_part_name() == "Desk organiser" and main.doc.body_count() == 1,
+		"free build puts the desk organiser on the table")
+	_check(main.player.feet.y < -0.7 and main.player.feet.z > main.view.room.top.end.y, "free build starts on the floor in front of the table")
+	main._start_mode("new")
+	await _frames(2)
+	_check(not main.view.room.has_table and absf(main.view.room.floor_y()) < 1e-9, "a new part has no table")
+
 	main.queue_free()
 	await process_frame
 
@@ -162,6 +457,21 @@ func _frames(n: int) -> void:
 
 func _seconds(t: float) -> void:
 	await create_timer(t).timeout
+
+
+func _touch(tc: Node, index: int, pos: Vector2, pressed: bool) -> void:
+	var e := InputEventScreenTouch.new()
+	e.index = index
+	e.position = pos
+	e.pressed = pressed
+	tc._input(e)
+
+
+func _drag(tc: Node, index: int, pos: Vector2) -> void:
+	var e := InputEventScreenDrag.new()
+	e.index = index
+	e.position = pos
+	tc._input(e)
 
 
 ## Presses and releases a controller button the way a real pad would.

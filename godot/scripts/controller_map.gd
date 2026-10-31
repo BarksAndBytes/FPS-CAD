@@ -1,7 +1,8 @@
 extends CanvasLayer
 ## Full-screen controls reference. Opens with View (Select) on a controller or F1 on a keyboard,
 ## from the title screen's Controls entry, and from the pause menu. Pages: Controller, Keyboard
-## and mouse, Touch; LB / RB or the D-pad switch pages, B / View / Esc close it.
+## and mouse, Touch, Sketch and features; LB / RB or the D-pad switch pages, B / View / Esc
+## close it.
 ##
 ## The controller page is res://ui/controller_map.svg. Its shapes are rasterized here; its <text>
 ## elements are drawn with the game's fonts so the art stays sharp and readable at any size.
@@ -11,17 +12,43 @@ signal closed
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const SVG_PATH := "res://ui/controller_map.svg"
 const ART_SIZE := Vector2(1200, 720)
-const PAGES := ["Controller", "Keyboard and mouse", "Touch"]
+const PAGES := ["Controller", "Keyboard and mouse", "Touch", "Sketch and features"]
 const KEYBOARD := [
 	["WASD", "Move"], ["Mouse", "Look"], ["Shift", "Sprint"], ["Space / C", "Jump / crouch (fly up / down)"],
 	["Left click", "Primary action"], ["Right click", "Secondary action"], ["Hold Q", "Tool wheel"],
-	["1 – 8", "Pick a tool"], ["E", "Tool option"], ["Scroll, = / −", "Grow / shrink"], ["R", "Back to 1:1 size"],
+	["1 – 6", "Wheel entry: a tool, or open a group"], ["E", "Tool option"], ["Scroll, = / −", "Grow / shrink"], ["R", "Back to 1:1 size"],
 	["F", "Fly through walls"], ["Alt", "Precision aim"], ["I", "Inspect parameters"], ["Tab", "Model panel"],
 	["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"], ["Delete", "Delete selected feature"], ["F1", "This map"],
-	["Esc", "Pause menu"], ["F12", "Screenshot"],
+	["Enter", "Finish a sketch"], ["Esc", "Pause menu"], ["F12", "Screenshot"],
+]
+## Sketch mode and the feature panel: [controller, keyboard, what it does].
+const SKETCH := [
+	["", "", "THE CAD WORKFLOW"],
+	["RT", "Left click", "Sketch tool: start a sketch on the aimed flat face (or the ground)"],
+	["LB", "E", "Sketch tool: choose Top, Front or Right plane instead"],
+	["LT", "Right click", "Sketch tool: edit the sketch you aim at"],
+	["", "", "TOOL WHEEL"],
+	["Hold RB, aim", "Hold Q, mouse", "Groups and tools on the inner ring; a group's tools branch outward"],
+	["Let go / A / RT", "Let go / Enter / click", "Pick the tool, or open the group's branch"],
+	["B", "Esc", "Back from a branch to the groups, then close"],
+	["", "", "WHILE SKETCHING"],
+	["RB", "Hold Q", "Sketch tools: Draw (line, rectangle, circle, arc), Constrain (dimension, relation), Delete"],
+	["RT", "Left click", "Place a point (snaps to points, the origin and the grid)"],
+	["LT / B", "Right click", "End the line chain or drop the shape being drawn"],
+	["LB", "E", "Tool option: construction, arc direction, dimension or relation type"],
+	["L stick / R stick", "WASD / mouse", "Pan across the sketch (the view stays square to it)"],
+	["D-pad ↑ / ↓", "Scroll, = / −", "Zoom in / out (the snap step follows)"],
+	["Y", "I", "Switch between the sketch view and free look"],
+	["D-pad ← / →", "Ctrl+Z / Ctrl+Shift+Z", "Undo / redo inside the sketch"],
+	["X", "Enter", "Finish the sketch (Menu also has Discard)"],
+	["", "", "FEATURE PANEL (EXTRUDE, REVOLVE, SWEEP, LOFT)"],
+	["D-pad ↑ / ↓", "↑ / ↓", "Pick a field"],
+	["D-pad ← / →, RT / LT", "← / →", "Change it (depth snaps to your snap step)"],
+	["Y", "N", "Type a value or an expression"],
+	["A / B", "Enter / Esc", "OK / cancel. Walk around the preview meanwhile"],
 ]
 const TOUCH := [
-	["Left thumb", "Drag anywhere on the left half to walk"], ["Right thumb", "Drag on the right half to look"],
+	["Left stick", "Walk; it jumps under your left thumb anywhere on the left. Push past the ring to sprint"], ["Right stick", "Look, like a controller stick; or drag anywhere else on the right"],
 	["FIRE", "Primary action"], ["ALT", "Secondary action"], ["JUMP", "Jump (UP while flying)"],
 	["+ / −", "Grow / shrink"], ["TOOL or the tool chip", "Tool wheel"], ["Model", "Feature tree and parameters"],
 	["Fly", "Fly through walls"], ["Menu", "Pause menu"],
@@ -202,7 +229,20 @@ func show_page(i: int) -> void:
 	scroll.visible = page != 0
 	for c in _list.get_children():
 		c.queue_free()
-	if page != 0:
+	_list.columns = 3 if page == 3 else 2
+	if page == 3:
+		for row in SKETCH:
+			if row[0] == "":
+				for col in 3:
+					_list.add_child(UiTheme.title(row[2] if col == 2 else "", 15, UiTheme.MUTED))
+				continue
+			for col in 2:
+				var k := UiTheme.title(row[col], 17, UiTheme.ACCENT)
+				k.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+				k.custom_minimum_size = Vector2(170, 0)
+				_list.add_child(k)
+			_list.add_child(UiTheme.text(row[2], 17))
+	elif page != 0:
 		for row in (KEYBOARD if page == 1 else TOUCH):
 			var k := UiTheme.title(row[0], 19, UiTheme.ACCENT)
 			k.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT

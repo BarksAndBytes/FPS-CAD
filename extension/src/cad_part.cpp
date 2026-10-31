@@ -1,12 +1,15 @@
 #include "cad_part.h"
 
 #include <algorithm>
+#include <set>
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 
 #include "convert.h"
+#include "fpcad/Challenges.h"
+#include "fpcad/Compare.h"
 #include "fpcad/Expression.h"
 #include "fpcad/Export.h"
 #include "fpcad/FileIO.h"
@@ -36,6 +39,12 @@ void CadPart::make_sample() {
 
 void CadPart::make_training() {
   model_ = std::make_unique<fpcad::PartModel>(fpcad::PartDocument::trainingCourse());
+  undo_.clear();
+  redo_.clear();
+}
+
+void CadPart::make_desk_sample() {
+  model_ = std::make_unique<fpcad::PartModel>(fpcad::PartDocument::deskSample());
   undo_.clear();
   redo_.clear();
 }
@@ -295,14 +304,27 @@ Dictionary CadPart::delete_feature(const String& id) {
   if (!f) return result(false, "that feature no longer exists");
   std::string name = f->name;
   checkpoint();
-  // Edge features that point at the deleted feature go with it.
-  feats.erase(std::remove_if(feats.begin(), feats.end(),
-                             [&](const fpcad::Feature& x) {
-                               return x.id == sid || x.params.value("target", std::string()) == sid;
-                             }),
+  // Features built from the deleted one go with it: edge features that target it, and extrudes,
+  // revolves, sweeps and lofts that use a deleted sketch (repeated so chains are followed).
+  std::set<std::string> gone{sid};
+  auto uses = [&](const fpcad::Feature& x) {
+    for (const char* k : {"target", "sketch", "path"})
+      if (x.params.contains(k) && x.params[k].is_string() && gone.count(x.params[k].get<std::string>())) return true;
+    if (x.params.contains("sketches") && x.params["sketches"].is_array())
+      for (auto& e : x.params["sketches"])
+        if (e.is_string() && gone.count(e.get<std::string>())) return true;
+    return false;
+  };
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (auto& x : feats)
+      if (!gone.count(x.id) && uses(x)) { gone.insert(x.id); grew = true; }
+  }
+  size_t extra = gone.size() - 1;
+  feats.erase(std::remove_if(feats.begin(), feats.end(), [&](const fpcad::Feature& x) { return gone.count(x.id) > 0; }),
               feats.end());
   model_->rebuild();
-  return result(true, name + " deleted");
+  return result(true, name + " deleted" + (extra ? " with " + std::to_string(extra) + " feature" + (extra > 1 ? "s" : "") + " built on it" : ""));
 }
 
 String CadPart::duplicate_feature(const String& id, const Vector3& offset) {
@@ -436,9 +458,268 @@ Dictionary CadPart::export_file(const String& path, const String& units) {
   return d;
 }
 
+// ----- Sketches -----
+
+namespace {
+fpcad::SketchPlane planeOf(const Dictionary& plane) { return fpcad::SketchPlane::fromJson(variantToJson(plane)); }
+
+Dictionary namedPlane(const fpcad::SketchPlane& p, const std::string& name) {
+  Dictionary d;
+  d["plane"] = jsonToVariant(p.toJson());
+  d["name"] = str(name);
+  return d;
+}
+
+PackedVector3Array points(const std::vector<fpcad::Vec3>& pts) {
+  PackedVector3Array out;
+  out.resize(int64_t(pts.size()));
+  for (size_t i = 0; i < pts.size(); ++i) out.set(int64_t(i), toGodot(pts[i]));
+  return out;
+}
+}  // namespace
+
+Dictionary CadPart::standard_plane(const String& name) const {
+  std::string n = str(name).empty() ? "top" : str(name.to_lower());
+  std::string label = n == "front" ? "Front" : n == "right" ? "Right" : "Top";
+  return namedPlane(fpcad::standardPlane(n), label);
+}
+
+Dictionary CadPart::plane_from_hit(const Dictionary& hit) const {
+  std::string name;
+  auto p = model_->planeFromHit(dictToHit(hit), &name);
+  return p ? namedPlane(*p, name) : Dictionary();
+}
+
+Dictionary CadPart::plane_basis(const Dictionary& plane) const {
+  fpcad::SketchPlane p = planeOf(plane);
+  Dictionary d;
+  d["origin"] = toGodot(p.origin);
+  d["normal"] = toGodot(p.normal);
+  d["xdir"] = toGodot(p.xdir);
+  d["ydir"] = toGodot(p.ydir());
+  return d;
+}
+
+Vector3 CadPart::plane_point(const Dictionary& plane, const Vector2& uv) const {
+  return toGodot(planeOf(plane).toWorld(uv.x, uv.y));
+}
+
+Vector2 CadPart::plane_uv(const Dictionary& plane, const Vector3& world) const {
+  auto uv = planeOf(plane).toPlane(toCad(world));
+  return Vector2(float(uv[0]), float(uv[1]));
+}
+
+Dictionary CadPart::solve_sketch(const Dictionary& sketch) const {
+  Dictionary d;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    fpcad::SolveResult r = model_->solve(s);
+    d["ok"] = r.ok;
+    d["dof"] = r.dof;
+    d["message"] = str(r.message);
+    PackedStringArray conflicts;
+    for (auto& c : r.conflicts) conflicts.push_back(str(c));
+    d["conflicts"] = conflicts;
+    d["sketch"] = jsonToVariant(s.toJson());
+  } catch (const std::exception& e) {
+    d["ok"] = false;
+    d["dof"] = 0;
+    d["message"] = str(e.what());
+    d["conflicts"] = PackedStringArray();
+    d["sketch"] = sketch;
+  }
+  return d;
+}
+
+String CadPart::add_sketch(const Dictionary& sketch) {
+  fpcad::Feature f;
+  f.type = "sketch";
+  f.params = variantToJson(sketch);
+  checkpoint();
+  fpcad::PartDocument backup = model_->document();
+  std::string id = model_->document().add(f).id;
+  Dictionary r = commitOrRevert(backup, "sketch added");
+  return bool(r["ok"]) ? str(id) : String();
+}
+
+Dictionary CadPart::set_sketch(const String& id, const Dictionary& sketch) {
+  fpcad::Feature* f = model_->document().find(str(id));
+  if (!f || f->type != "sketch") return result(false, "that sketch no longer exists");
+  checkpoint();
+  fpcad::PartDocument backup = model_->document();
+  std::string name = f->name;
+  f->params = variantToJson(sketch);
+  return commitOrRevert(backup, name + " updated");
+}
+
+Dictionary CadPart::get_sketch(const String& id) const {
+  const fpcad::Feature* f = model_->document().find(str(id));
+  if (!f || f->type != "sketch") return Dictionary();
+  return jsonToVariant(f->params);
+}
+
+Array CadPart::sketch_views() const {
+  Array out;
+  for (auto& v : model_->sketchViews()) {
+    Dictionary d;
+    d["id"] = str(v.featureId);
+    d["name"] = str(v.name);
+    d["plane_name"] = str(v.planeName);
+    d["consumed"] = v.consumed;
+    d["ok"] = v.ok;
+    d["dof"] = v.dof;
+    d["regions"] = v.regions;
+    d["message"] = str(v.message);
+    d["segments"] = points(v.segments);
+    d["construction"] = points(v.constructionSegments);
+    out.push_back(d);
+  }
+  return out;
+}
+
+Dictionary CadPart::pick_sketch(const Vector3& origin, const Vector3& direction, double max_distance,
+                                double tolerance, bool include_consumed) const {
+  auto h = model_->pickSketch(toCad(origin), toCad(direction), max_distance, tolerance, include_consumed);
+  if (!h) return Dictionary();
+  Dictionary d;
+  d["feature_id"] = str(h->featureId);
+  d["region"] = h->region;
+  d["point"] = toGodot(h->point);
+  d["distance"] = h->distance;
+  if (const fpcad::Feature* f = model_->document().find(h->featureId)) d["name"] = str(f->name);
+  return d;
+}
+
+String CadPart::latest_unused_sketch() const { return str(model_->latestUnusedSketch()); }
+
+// ----- Dialog features with live preview -----
+
+namespace {
+Dictionary featureResult(fpcad::PartModel& m, const std::string& id) {
+  fpcad::RebuildReport r = m.rebuild();
+  Dictionary d = result(true, "");
+  d["id"] = str(id);
+  for (auto& st : r.features)
+    if (!st.ok && st.featureId == id) {
+      d["ok"] = false;
+      d["message"] = str(st.message);
+    }
+  if (bool(d["ok"]) && !r.ok) {
+    for (auto& st : r.features)
+      if (!st.ok) {
+        d["ok"] = false;
+        d["message"] = str("a later feature fails: " + st.message);
+        break;
+      }
+  }
+  return d;
+}
+}  // namespace
+
+Dictionary CadPart::insert_feature(const String& type, const String& op, const Dictionary& params) {
+  fpcad::Feature f;
+  f.type = str(type);
+  try {
+    f.op = fpcad::bodyOpFromString(op.is_empty() ? "add" : str(op));
+  } catch (const std::exception& e) {
+    return result(false, e.what());
+  }
+  f.params = variantToJson(params);
+  std::string id = model_->document().add(f).id;
+  Dictionary d = featureResult(*model_, id);
+  if (const fpcad::Feature* added = model_->document().find(id)) d["name"] = str(added->name);
+  return d;
+}
+
+Dictionary CadPart::update_feature(const String& id, const String& op, const Dictionary& params) {
+  fpcad::Feature* f = model_->document().find(str(id));
+  if (!f) return result(false, "that feature no longer exists");
+  if (!op.is_empty()) {
+    try {
+      f->op = fpcad::bodyOpFromString(str(op));
+    } catch (const std::exception& e) {
+      return result(false, e.what());
+    }
+  }
+  fpcad::Json p = variantToJson(params);
+  for (auto it = p.begin(); it != p.end(); ++it) {
+    if (it.value().is_null()) f->params.erase(it.key());
+    else f->params[it.key()] = it.value();
+  }
+  return featureResult(*model_, str(id));
+}
+
+void CadPart::abandon() {
+  if (undo_.empty()) return;
+  model_->document() = undo_.back();
+  undo_.pop_back();
+  model_->rebuild();
+}
+
+// ----- Challenge mode -----
+
+Array CadPart::challenge_list() const {
+  Array out;
+  for (auto& c : fpcad::challenges()) {
+    Dictionary d;
+    d["id"] = str(c.id);
+    d["name"] = str(c.name);
+    d["brief"] = str(c.brief);
+    d["hint"] = str(c.hint);
+    out.push_back(d);
+  }
+  return out;
+}
+
+Dictionary CadPart::make_challenge(int index) {
+  auto list = fpcad::challenges();
+  if (index < 0 || index >= int(list.size())) return Dictionary();
+  fpcad::Challenge& c = list[size_t(index)];
+  model_ = std::make_unique<fpcad::PartModel>(c.target);
+  undo_.clear();
+  redo_.clear();
+  Dictionary d;
+  d["index"] = index;
+  d["count"] = int(list.size());
+  d["id"] = str(c.id);
+  d["name"] = str(c.name);
+  d["brief"] = str(c.brief);
+  d["hint"] = str(c.hint);
+  Array callouts;
+  for (auto& k : c.callouts) {
+    Dictionary e;
+    e["a"] = toGodot(k.a);
+    e["b"] = toGodot(k.b);
+    e["text"] = str(k.text);
+    callouts.push_back(e);
+  }
+  d["callouts"] = callouts;
+  return d;
+}
+
+Dictionary CadPart::compare_to(Object* target) const {
+  Dictionary d;
+  const CadPart* t = Object::cast_to<CadPart>(target);
+  if (t == nullptr) {
+    d["match"] = false;
+    d["message"] = "no target part";
+    return d;
+  }
+  fpcad::ShapeMatch m = fpcad::compareParts(*model_, t->model());
+  d["match"] = m.match;
+  d["mirrored"] = m.mirrored;
+  d["empty"] = m.empty;
+  d["volume_ratio"] = m.volumeRatio;
+  d["area_ratio"] = m.areaRatio;
+  d["overlap"] = m.overlap;
+  d["message"] = str(m.message);
+  return d;
+}
+
 void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("make_sample"), &CadPart::make_sample);
   ClassDB::bind_method(D_METHOD("make_training"), &CadPart::make_training);
+  ClassDB::bind_method(D_METHOD("make_desk_sample"), &CadPart::make_desk_sample);
   ClassDB::bind_method(D_METHOD("new_blank", "name", "units"), &CadPart::new_blank);
   ClassDB::bind_method(D_METHOD("load_file", "path"), &CadPart::load_file);
   ClassDB::bind_method(D_METHOD("save_file", "path"), &CadPart::save_file);
@@ -465,6 +746,25 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_variables"), &CadPart::get_variables);
   ClassDB::bind_method(D_METHOD("mass_properties"), &CadPart::mass_properties);
   ClassDB::bind_method(D_METHOD("export_file", "path", "units"), &CadPart::export_file);
+  ClassDB::bind_method(D_METHOD("standard_plane", "name"), &CadPart::standard_plane);
+  ClassDB::bind_method(D_METHOD("plane_from_hit", "hit"), &CadPart::plane_from_hit);
+  ClassDB::bind_method(D_METHOD("plane_basis", "plane"), &CadPart::plane_basis);
+  ClassDB::bind_method(D_METHOD("plane_point", "plane", "uv"), &CadPart::plane_point);
+  ClassDB::bind_method(D_METHOD("plane_uv", "plane", "world"), &CadPart::plane_uv);
+  ClassDB::bind_method(D_METHOD("solve_sketch", "sketch"), &CadPart::solve_sketch);
+  ClassDB::bind_method(D_METHOD("add_sketch", "sketch"), &CadPart::add_sketch);
+  ClassDB::bind_method(D_METHOD("set_sketch", "id", "sketch"), &CadPart::set_sketch);
+  ClassDB::bind_method(D_METHOD("get_sketch", "id"), &CadPart::get_sketch);
+  ClassDB::bind_method(D_METHOD("sketch_views"), &CadPart::sketch_views);
+  ClassDB::bind_method(D_METHOD("pick_sketch", "origin", "direction", "max_distance", "tolerance", "include_consumed"),
+                       &CadPart::pick_sketch);
+  ClassDB::bind_method(D_METHOD("latest_unused_sketch"), &CadPart::latest_unused_sketch);
+  ClassDB::bind_method(D_METHOD("insert_feature", "type", "op", "params"), &CadPart::insert_feature);
+  ClassDB::bind_method(D_METHOD("update_feature", "id", "op", "params"), &CadPart::update_feature);
+  ClassDB::bind_method(D_METHOD("abandon"), &CadPart::abandon);
+  ClassDB::bind_method(D_METHOD("challenge_list"), &CadPart::challenge_list);
+  ClassDB::bind_method(D_METHOD("make_challenge", "index"), &CadPart::make_challenge);
+  ClassDB::bind_method(D_METHOD("compare_to", "target"), &CadPart::compare_to);
   ClassDB::bind_method(D_METHOD("undo"), &CadPart::undo);
   ClassDB::bind_method(D_METHOD("redo"), &CadPart::redo);
   ClassDB::bind_method(D_METHOD("can_undo"), &CadPart::can_undo);

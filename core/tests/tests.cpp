@@ -15,7 +15,17 @@
 #include "fpcad/Export.h"
 #include "fpcad/Expression.h"
 #include "fpcad/FileIO.h"
+#include <chrono>
+
 #include "fpcad/Model.h"
+#include "fpcad/Sketch.h"
+#include "fpcad/Challenges.h"
+#include "fpcad/Compare.h"
+#include "../src/CompareShapes.h"
+
+#include <BRepBuilderAPI_Transform.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Trsf.hxx>
 
 using namespace fpcad;
 
@@ -81,10 +91,55 @@ size_t count(const std::string& hay, const std::string& needle) {
 
 constexpr double kSampleVolume = 84.474;  // m^3, from the sample's dimensions (see tests notes)
 
+// A w×h rectangle with its lower-left corner at (x, y), held by horizontal/vertical relations and
+// two length dimensions. When x = y = 0 the corner is the sketch origin, so it is fully defined.
+Json rectSketch(const SketchPlane& plane, double x, double y, double w, double h, const std::string& tag = "r") {
+  bool atOrigin = x == 0 && y == 0;
+  std::string a = atOrigin ? "o" : tag + "a";
+  Json pts = Json::array();
+  if (!atOrigin) pts.push_back({{"id", a}, {"x", x}, {"y", y}});
+  pts.push_back({{"id", tag + "b"}, {"x", x + w}, {"y", y}});
+  pts.push_back({{"id", tag + "c"}, {"x", x + w}, {"y", y + h}});
+  pts.push_back({{"id", tag + "d"}, {"x", x}, {"y", y + h}});
+  std::string b = tag + "b", c = tag + "c", d = tag + "d";
+  Json ents = Json::array({
+      {{"id", tag + "1"}, {"kind", "line"}, {"pts", {a, b}}},
+      {{"id", tag + "2"}, {"kind", "line"}, {"pts", {b, c}}},
+      {{"id", tag + "3"}, {"kind", "line"}, {"pts", {c, d}}},
+      {{"id", tag + "4"}, {"kind", "line"}, {"pts", {d, a}}}});
+  Json cons = Json::array({
+      {{"id", tag + "h1"}, {"kind", "horizontal"}, {"refs", {tag + "1"}}},
+      {{"id", tag + "v2"}, {"kind", "vertical"}, {"refs", {tag + "2"}}},
+      {{"id", tag + "h3"}, {"kind", "horizontal"}, {"refs", {tag + "3"}}},
+      {{"id", tag + "v4"}, {"kind", "vertical"}, {"refs", {tag + "4"}}},
+      {{"id", tag + "w"}, {"kind", "distance"}, {"refs", {tag + "1"}}, {"value", w}},
+      {{"id", tag + "hh"}, {"kind", "distance"}, {"refs", {tag + "2"}}, {"value", h}}});
+  return {{"plane", plane.toJson()}, {"planeName", "Top"}, {"points", pts}, {"entities", ents}, {"constraints", cons}};
+}
+
+Json circleSketch(const SketchPlane& plane, double cx, double cy, double r) {
+  return {{"plane", plane.toJson()},
+          {"planeName", "Plane"},
+          {"points", Json::array({{{"id", "c"}, {"x", cx}, {"y", cy}}})},
+          {"entities", Json::array({{{"id", "k"}, {"kind", "circle"}, {"pts", {"c"}}, {"r", r}}})},
+          {"constraints", Json::array({{{"id", "kd"}, {"kind", "diameter"}, {"refs", {"k"}}, {"value", 2 * r}}})}};
+}
+
+Feature feature(const char* type, Json params, BodyOp op = BodyOp::Add) {
+  Feature f;
+  f.type = type;
+  f.op = op;
+  f.params = std::move(params);
+  return f;
+}
+
+constexpr double kPiT = 3.14159265358979323846;
+
 }  // namespace
 
+namespace fs = std::filesystem;
+
 int main() {
-  namespace fs = std::filesystem;
   fs::path out = fs::temp_directory_path() / "fpcad-tests";
   fs::remove_all(out);
   fs::create_directories(out);
@@ -135,6 +190,288 @@ int main() {
     auto lift = m.pick({3, 5, 5}, {0, 0, -1});
     auto drive = lift ? m.faceDrive(*lift) : std::nullopt;
     CHECK(drive && drive->param == "+h" && std::abs(drive->value - 1.0) < 1e-9);
+  });
+
+
+  run("sketch solver: dimensions drive a rectangle and count freedom", [] {
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    Sketch s = Sketch::fromJson(rectSketch(standardPlane("top"), 0, 0, 1.0, 0.5));
+    // Start from a sloppy drawing: the solver should square it up to the dimensions.
+    s.point("rb")->x = 0.9;  s.point("rb")->y = 0.07;
+    s.point("rc")->x = 1.2;  s.point("rc")->y = 0.4;
+    s.point("rd")->x = -0.1; s.point("rd")->y = 0.6;
+    SolveResult r = solveSketch(s, noVars);
+    CHECK(r.ok);
+    CHECK(r.dof == 0);
+    CHECK_NEAR(s.point("rc")->x, 1.0, 1e-9);
+    CHECK_NEAR(s.point("rc")->y, 0.5, 1e-9);
+    CHECK_NEAR(s.point("rd")->x, 0.0, 1e-9);
+
+    Sketch loose = Sketch::fromJson(rectSketch(standardPlane("top"), 0.2, 0.2, 1.0, 0.5));
+    CHECK(solveSketch(loose, noVars).dof == 2);  // the rectangle can still slide
+    loose.constraints.pop_back();
+    CHECK(solveSketch(loose, noVars).dof == 3);  // ...and change height
+
+    Sketch conflict = Sketch::fromJson(rectSketch(standardPlane("top"), 0, 0, 1.0, 0.5));
+    conflict.constraints.push_back({"bad", "distance", {"r3"}, 2.0});  // opposite side 2 m long
+    SolveResult c = solveSketch(conflict, noVars);
+    CHECK(!c.ok);
+    CHECK(!c.conflicts.empty());
+
+    Sketch circ = Sketch::fromJson(circleSketch(standardPlane("top"), 0.3, 0.1, 0.2));
+    circ.entities[0].r = 0.5;
+    SolveResult cr = solveSketch(circ, noVars);
+    CHECK(cr.ok && cr.dof == 2);
+    CHECK_NEAR(circ.entities[0].r, 0.2, 1e-9);
+  });
+
+  run("sketch extrude follows its dimensions and variables", [] {
+    PartDocument d;
+    d.variables = {{"width", "1000 mm"}};
+    Json sk = rectSketch(standardPlane("top"), 0, 0, 1.0, 0.5);
+    sk["constraints"][4]["value"] = "width";
+    Feature& sketch = d.add(feature("sketch", sk));
+    std::string sid = sketch.id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.5}}));
+    PartModel m(d);
+    auto r = m.rebuild();
+    for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s\n", st.message.c_str());
+    CHECK(r.ok && m.bodyCount() == 1);
+    CHECK_NEAR(m.massProperties().volume, 0.25, 1e-9);
+    for (auto& v : m.document().variables) v.expr = "2000 mm";
+    CHECK(m.rebuild().ok);
+    CHECK_NEAR(m.massProperties().volume, 0.5, 1e-9);
+    // Solved positions are written back into the history.
+    CHECK_NEAR(m.document().features[0].params["points"][1]["x"].get<double>(), 2.0, 1e-9);
+    auto views = m.sketchViews();
+    CHECK(views.size() == 1 && views[0].consumed && views[0].dof == 0 && views[0].regions == 1);
+    CHECK(views[0].segments.size() == 8);
+    CHECK(m.latestUnusedSketch().empty());
+
+    // The top face drives depth; pushing it grows the extrude.
+    auto top = m.pick({0.5, 0.25, 5}, {0, 0, -1});
+    auto drive = top ? m.faceDrive(*top) : std::nullopt;
+    CHECK(drive && drive->param == "+depth" && std::abs(drive->value - 0.5) < 1e-9);
+    CHECK(top && m.pushPull(*top, 0.25));
+    CHECK_NEAR(m.massProperties().volume, 0.75, 1e-9);
+    // The bottom face moves the start: pulling it down 0.1 m adds 0.1 m of height.
+    auto bottom = m.pick({0.5, 0.25, -5}, {0, 0, 1});
+    CHECK(bottom && m.pushPull(*bottom, 0.1));
+    CHECK_NEAR(m.massProperties().volume, 0.85 * 2 * 0.5 / 1.0 * 1.0, 1e-9);
+    auto low = m.pick({0.5, 0.25, -5}, {0, 0, 1});
+    CHECK(low && std::abs(low->point[2] - (-0.1)) < 1e-9);
+  });
+
+  run("profiles with holes, cut extrudes through all, sketches on faces", [] {
+    PartDocument d;
+    Json plate = rectSketch(standardPlane("top"), 0, 0, 2.0, 1.0);
+    plate["points"].push_back({{"id", "hc"}, {"x", 1.0}, {"y", 0.5}});
+    plate["entities"].push_back({{"id", "hole"}, {"kind", "circle"}, {"pts", {"hc"}}, {"r", 0.2}});
+    std::string sid = d.add(feature("sketch", plate)).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    CHECK_NEAR(m.massProperties().volume, (2.0 - kPiT * 0.04) * 0.1, 1e-6);
+
+    // Sketch on the plate's top face and cut a slot through everything.
+    auto top = m.pick({0.3, 0.3, 5}, {0, 0, -1});
+    std::string planeName;
+    auto plane = top ? m.planeFromHit(*top, &planeName) : std::nullopt;
+    CHECK(plane && std::abs(plane->normal[2] - 1) < 1e-12 && std::abs(plane->origin[2] - 0.1) < 1e-12);
+    CHECK(planeName.rfind("Face of", 0) == 0);
+    Json slot = circleSketch(*plane, 0.4, 0.5, 0.1);
+    std::string cid = m.document().add(feature("sketch", slot)).id;
+    m.document().add(feature("extrude", {{"sketch", cid}, {"end", "through_all"}, {"direction", "reverse"}}, BodyOp::Cut));
+    auto r = m.rebuild();
+    CHECK(r.ok);
+    CHECK_NEAR(m.massProperties().volume, (2.0 - kPiT * 0.04 - kPiT * 0.01) * 0.1, 1e-6);
+    // A curved face gives no sketch plane.
+    auto side = m.pick({1.0, 0.5, 0.05}, {1, 0, 0});
+    CHECK(side && !m.planeFromHit(*side));
+  });
+
+  run("revolve, sweep and loft from sketches", [] {
+    // Revolve: a 0.5 × 1 rectangle 0.5 m from the axis makes a tube.
+    {
+      PartDocument d;
+      std::string sid = d.add(feature("sketch", rectSketch(standardPlane("front"), 0.5, 0, 0.5, 1.0))).id;
+      d.add(feature("revolve", {{"sketch", sid}, {"axis", "y"}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, kPiT * (1.0 - 0.25) * 1.0, 1e-6);
+      m.document().features[1].params["angle"] = "90 deg";
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, kPiT * 0.75 / 4, 1e-6);
+    }
+    // Sweep: a 0.1 m circle along a straight 1 m path, then along a quarter arc.
+    {
+      PartDocument d;
+      std::string prof = d.add(feature("sketch", circleSketch(standardPlane("front"), 0, 0, 0.1))).id;
+      Json path = {{"plane", standardPlane("top").toJson()},
+                   {"points", Json::array({{{"id", "e"}, {"x", 0}, {"y", 1}}})},
+                   {"entities", Json::array({{{"id", "l"}, {"kind", "line"}, {"pts", {"o", "e"}}}})},
+                   {"constraints", Json::array()}};
+      std::string pid = d.add(feature("sketch", path)).id;
+      d.add(feature("sweep", {{"sketch", prof}, {"path", pid}}));
+      PartModel m(d);
+      auto r = m.rebuild();
+      for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s\n", st.message.c_str());
+      CHECK(r.ok);
+      CHECK_NEAR(m.massProperties().volume, kPiT * 0.01 * 1.0, 1e-6);
+      // Quarter arc of radius 0.5 centred at (0.5, 0): from the origin round to (0.5, 0.5).
+      Json arc = {{"plane", standardPlane("top").toJson()},
+                  {"points", Json::array({{{"id", "ac"}, {"x", 0.5}, {"y", 0}}, {{"id", "ae"}, {"x", 0.5}, {"y", 0.5}}})},
+                  {"entities", Json::array({{{"id", "a"}, {"kind", "arc"}, {"pts", {"ac", "ae", "o"}}}})},
+                  {"constraints", Json::array()}};
+      m.document().features[1].params = arc;
+      r = m.rebuild();
+      for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s\n", st.message.c_str());
+      CHECK(r.ok);
+      CHECK_NEAR(m.massProperties().volume, kPiT * 0.01 * (kPiT / 2 * 0.5), 1e-4);
+    }
+    // Loft: a 1 m square at the bottom to a 0.4 m circle 1 m above.
+    {
+      PartDocument d;
+      std::string a = d.add(feature("sketch", rectSketch(standardPlane("top"), -0.5, -0.5, 1, 1))).id;
+      SketchPlane up = standardPlane("top");
+      up.origin = {0, 0, 1};
+      std::string b = d.add(feature("sketch", circleSketch(up, 0, 0, 0.2))).id;
+      d.add(feature("loft", {{"sketches", {a, b}}}));
+      PartModel m(d);
+      auto r = m.rebuild();
+      for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s\n", st.message.c_str());
+      CHECK(r.ok && m.bodyCount() == 1);
+      double v = m.massProperties().volume;
+      CHECK(v > kPiT * 0.04 && v < 1.0);
+    }
+  });
+
+  run("sketch picking, problems and file round-trip", [&] {
+    PartDocument d;
+    std::string sid = d.add(feature("sketch", rectSketch(standardPlane("top"), 0, 0, 1, 1))).id;
+    Json open = {{"plane", standardPlane("top").toJson()},
+                 {"points", Json::array({{{"id", "q"}, {"x", 3}, {"y", 0}}})},
+                 {"entities", Json::array({{{"id", "l"}, {"kind", "line"}, {"pts", {"o", "q"}}}})},
+                 {"constraints", Json::array()}};
+    std::string oid = d.add(feature("sketch", open)).id;
+    d.add(feature("extrude", {{"sketch", oid}, {"depth", 1}}));
+    PartModel m(d);
+    auto r = m.rebuild();
+    CHECK(!r.ok);
+    CHECK(r.features[2].message.find("no closed profile") != std::string::npos);
+    auto hit = m.pickSketch({0.5, 0.5, 2}, {0, 0, -1}, 10, 0.01);
+    CHECK(hit && hit->featureId == sid && hit->region == 0);
+    auto nearLine = m.pickSketch({2.0, 0.005, 1}, {0, 0, -1}, 10, 0.02, true);
+    CHECK(nearLine && nearLine->featureId == oid && nearLine->region == -1);
+    CHECK(!m.pickSketch({5, 5, 1}, {0, 0, -1}, 10, 0.01));
+    CHECK(m.latestUnusedSketch() == sid);
+
+    std::string path = (fs::temp_directory_path() / "fpcad-tests" / "sketch.fpprt").string();
+    savePart(path, m.document(), &m);
+    PartModel back(loadPart(path));
+    back.rebuild();
+    CHECK(back.document().features[0].type == "sketch");
+    CHECK(back.sketchViews().size() == 2);
+  });
+
+
+  run("challenge targets build, and copies match however they are made or turned", [] {
+    auto list = challenges();
+    CHECK(list.size() == 10);
+    for (auto& c : list) {
+      PartModel m(c.target);
+      auto r = m.rebuild();
+      for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s: %s\n", c.id.c_str(), st.message.c_str());
+      CHECK(r.ok && m.bodyCount() == 1);
+      CHECK(!c.callouts.empty() && !c.brief.empty());
+      // The same solid, turned about a skew axis and moved, is a match; built from itself.
+      gp_Trsf t;
+      t.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 2, 3)), 0.65);
+      gp_Trsf mv;
+      mv.SetTranslation(gp_Vec(0.4, -0.3, 0.2));
+      TopoDS_Shape turned = BRepBuilderAPI_Transform(m.body(0), mv * t, true).Shape();
+      auto t0 = std::chrono::steady_clock::now();
+      ShapeMatch sm = compareShapes(turned, m.body(0));
+      double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+      std::printf("    %-18s compared in %.0f ms%s\n", c.id.c_str(), ms, sm.match ? "" : ("  " + sm.message).c_str());
+      CHECK(sm.match);
+    }
+
+    PartModel block(list[0].target);
+    block.rebuild();
+    auto box = [](double w, double d, double h, double x = 0, double y = 0, double z = 0) {
+      Feature f;
+      f.type = "box";
+      f.params = {{"x", x}, {"y", y}, {"z", z}, {"w", w}, {"d", d}, {"h", h}};
+      return f;
+    };
+    // Built another way: lying on its side somewhere else.
+    PartDocument d1;
+    d1.add(box(0.05, 0.1, 0.075, 0.3, 0.2, 0.01));
+    PartModel m1(d1);
+    m1.rebuild();
+    CHECK(compareParts(m1, block).match);
+    // Built from two halves that meet: still one block.
+    PartDocument d2;
+    d2.add(box(0.1, 0.075, 0.02));
+    d2.add(box(0.1, 0.075, 0.03, 0, 0, 0.02));
+    PartModel m2(d2);
+    m2.rebuild();
+    CHECK(compareParts(m2, block).match);
+    // 5 mm short: not a match, and the hint says by how much.
+    PartDocument d3;
+    d3.add(box(0.1, 0.075, 0.045));
+    PartModel m3(d3);
+    m3.rebuild();
+    ShapeMatch short3 = compareParts(m3, block);
+    CHECK(!short3.match && std::abs(short3.volumeRatio - 0.9) < 1e-6);
+    CHECK(short3.message.find("90%") != std::string::npos);
+    PartModel nothing{PartDocument{}};
+    nothing.rebuild();
+    CHECK(compareParts(nothing, block).empty);
+
+    // The hole has to be in the right place, not just the right size.
+    PartModel plate(list[2].target);
+    plate.rebuild();
+    PartDocument d4;
+    d4.add(box(0.15, 0.1, 0.025));
+    Feature hole;
+    hole.type = "cylinder";
+    hole.op = BodyOp::Cut;
+    hole.params = {{"x", 0.03}, {"y", 0}, {"z", -0.001}, {"r", 0.025}, {"h", 0.027}};
+    d4.add(hole);
+    PartModel m4(d4);
+    m4.rebuild();
+    ShapeMatch off = compareParts(m4, plate);
+    CHECK(!off.match && !off.mirrored);
+
+    // A mirror image is recognised but does not pass: a block with a blind hole off two axes.
+    PartDocument d5;
+    d5.add(box(0.1, 0.06, 0.04));
+    Feature blind;
+    blind.type = "cylinder";
+    blind.op = BodyOp::Cut;
+    blind.params = {{"x", 0.02}, {"y", 0.01}, {"z", 0.03}, {"r", 0.006}, {"h", 0.02}};
+    d5.add(blind);
+    PartModel m5(d5);
+    m5.rebuild();
+    gp_Trsf mirror;
+    mirror.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)));
+    TopoDS_Shape flipped = BRepBuilderAPI_Transform(m5.body(0), mirror, true).Shape();
+    ShapeMatch mm = compareShapes(flipped, m5.body(0));
+    CHECK(!mm.match && mm.mirrored);
+  });
+
+  run("the desk organiser sample rebuilds from its variables", [] {
+    PartModel m(PartDocument::deskSample());
+    auto r = m.rebuild();
+    for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s\n", st.message.c_str());
+    CHECK(r.ok && m.bodyCount() == 1);
+    double v = m.massProperties().volume;
+    CHECK(v > 0.0003 && v < 0.0012);
+    for (auto& var : m.document().variables)
+      if (var.name == "width") var.expr = "300 mm";
+    CHECK(m.rebuild().ok && m.massProperties().volume > v);
   });
 
   run("display mesh tags every face with its feature", [] {

@@ -9,6 +9,7 @@
 | [miniz](https://github.com/richgel999/miniz) | ZIP containers (.fpprt, .fpasm, .3mf) | MIT | Statically linked |
 | [Chakra Petch](https://github.com/google/fonts/tree/main/ofl/chakrapetch) | Display font (titles, tool names) | SIL OFL 1.1 | `godot/fonts/`, licence beside it |
 | [IBM Plex Sans](https://github.com/google/fonts/tree/main/ofl/ibmplexsans) | Body font | SIL OFL 1.1 | `godot/fonts/`, licence beside it |
+| ["Old Wooden Table"](https://skfb.ly/pEFA6) by [carlcapu9](https://sketchfab.com/carlcapu9) | The table parts stand on | [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/) | `godot/models/old_wooden_table.glb`; credited on the title screen |
 
 ## LGPL obligations for Open CASCADE
 
@@ -26,3 +27,10 @@ Have counsel review this before the first public release, as the spec's risk tab
 (mesh objects, units, build items with transforms). The spec named lib3mf; the small direct writer
 avoids an extra native dependency on Android, and lib3mf can replace it if materials and colour
 groups need more than the core spec.
+
+## Old Wooden Table
+
+"Old Wooden Table" (https://skfb.ly/pEFA6) by carlcapu9 is licensed under Creative Commons
+Attribution 4.0 (http://creativecommons.org/licenses/by/4.0/). Changes made for FPS-CAD: textures
+reduced from 4096 px to 2048 px (colour, JPEG) and 1024 px (occlusion-roughness-metal, JPEG;
+normal, PNG) for phones, and the model is scaled in the game to a 4 ft × 2 ft top, 75 cm high.

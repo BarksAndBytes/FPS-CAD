@@ -24,6 +24,7 @@ public:
   // Documents
   void make_sample();
   void make_training();
+  void make_desk_sample();
   void new_blank(const godot::String& name, const godot::String& units);
   godot::String load_file(const godot::String& path);  // "" on success, else the reason
   godot::String save_file(const godot::String& path);
@@ -55,6 +56,35 @@ public:
   godot::Array get_variables() const;
   godot::Dictionary mass_properties() const;
   godot::Dictionary export_file(const godot::String& path, const godot::String& units);
+
+  // Sketches. A sketch is a Dictionary in the core's JSON form (see fpcad/Sketch.h); its "plane"
+  // stays in CAD coordinates, so use plane_basis / plane_point / plane_uv to move between the
+  // plane's (u, v) and Godot space.
+  godot::Dictionary standard_plane(const godot::String& name) const;   // {plane, name}
+  godot::Dictionary plane_from_hit(const godot::Dictionary& hit) const; // {plane, name} or {}
+  godot::Dictionary plane_basis(const godot::Dictionary& plane) const;  // origin, normal, xdir, ydir
+  godot::Vector3 plane_point(const godot::Dictionary& plane, const godot::Vector2& uv) const;
+  godot::Vector2 plane_uv(const godot::Dictionary& plane, const godot::Vector3& world) const;
+  godot::Dictionary solve_sketch(const godot::Dictionary& sketch) const;  // {ok, dof, message, conflicts, sketch}
+  godot::String add_sketch(const godot::Dictionary& sketch);             // new feature id ("" on failure)
+  godot::Dictionary set_sketch(const godot::String& id, const godot::Dictionary& sketch);
+  godot::Dictionary get_sketch(const godot::String& id) const;
+  godot::Array sketch_views() const;
+  godot::Dictionary pick_sketch(const godot::Vector3& origin, const godot::Vector3& direction, double max_distance,
+                                double tolerance, bool include_consumed) const;
+  godot::String latest_unused_sketch() const;
+
+  // Features edited through a dialog with live preview: checkpoint(), insert_feature(), any number
+  // of update_feature() calls, then either keep the result or abandon() to restore the checkpoint.
+  godot::Dictionary insert_feature(const godot::String& type, const godot::String& op, const godot::Dictionary& params);
+  godot::Dictionary update_feature(const godot::String& id, const godot::String& op, const godot::Dictionary& params);
+  void abandon();
+
+  // Challenge mode
+  godot::Array challenge_list() const;                     // [{id, name, brief, hint}]
+  godot::Dictionary make_challenge(int index);             // loads that target into this part
+  godot::Dictionary compare_to(godot::Object* target) const;  // target: another CadPart
+  const fpcad::PartModel& model() const { return *model_; }
 
   // History
   bool undo();
