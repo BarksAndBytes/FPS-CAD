@@ -72,6 +72,10 @@ func _ready() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	# Phones also send a pretend mouse click for every touch. It is not a mouse, so it must not
+	# switch the controls away from touch (which hid the joysticks the moment they were used).
+	if event is InputEventMouse and event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
 	var kind := last_device
 	if event is InputEventJoypadButton or (event is InputEventJoypadMotion and absf(event.axis_value) > 0.5):
 		kind = "controller"
@@ -107,7 +111,7 @@ func prompt(action: StringName) -> String:
 	const TOUCH := {
 		&"primary": "Fire", &"secondary": "Alt", &"tool_wheel": "Tool", &"jump": "Jump",
 		&"grow": "+", &"shrink": "−", &"controller_map": "Controls", &"menu": "Menu",
-		&"ui_accept": "Tap", &"ui_cancel": "Back", &"move": "MOVE stick", &"look": "LOOK stick",
+		&"ui_accept": "Tap", &"ui_cancel": "Back", &"move": "Left stick", &"look": "Right stick",
 		&"inspect_panel": "Model", &"undo": "Undo", &"context_wheel": "Tool chip",
 	}
 	match last_device:

@@ -23,7 +23,6 @@ var _look_index := -1
 var _look_home := Vector2.ZERO
 var _look_base := Panel.new()
 var _look_knob := Panel.new()
-var _labels := {}
 var _look := {}        # touch index -> last position
 var _held := {}        # touch index -> button name
 var _buttons := {}     # name -> Control
@@ -34,7 +33,7 @@ var _stick_knob := Panel.new()
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)  # in the tree already: offsets must follow too
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for pair in [[_stick_base, _stick_knob, "MOVE"], [_look_base, _look_knob, "LOOK"]]:
+	for pair in [[_stick_base, _stick_knob], [_look_base, _look_knob]]:
 		var base: Panel = pair[0]
 		var knob: Panel = pair[1]
 		base.size = Vector2(STICK_RADIUS * 2.0, STICK_RADIUS * 2.0)
@@ -45,17 +44,6 @@ func _ready() -> void:
 		knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(base)
 		add_child(knob)
-		var l := Label.new()
-		l.text = pair[2]
-		l.add_theme_font_size_override("font_size", 12)
-		l.add_theme_color_override("font_color", Color(0.95, 0.96, 0.98, 0.75))
-		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
-		l.add_theme_constant_override("outline_size", 4)
-		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		l.size = Vector2(STICK_RADIUS * 2.0, 16)
-		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(l)
-		_labels[pair[2]] = l
 	_add_button("primary", "FIRE", 84, Color("ff8a3d"))
 	_add_button("secondary", "ALT", 62, Color("e8edf3"))
 	_add_button("jump", "JUMP", 62, Color("e8edf3"))
@@ -121,8 +109,6 @@ func _layout() -> void:
 func _place(base: Panel, knob: Panel, centre: Vector2, offset: Vector2) -> void:
 	base.position = centre - base.size / 2.0
 	knob.position = centre + offset - knob.size / 2.0
-	var l: Label = _labels["MOVE" if base == _stick_base else "LOOK"]
-	l.position = centre + Vector2(-STICK_RADIUS, STICK_RADIUS + 2)
 
 
 func set_fly(on: bool) -> void:

@@ -48,7 +48,7 @@ const SKETCH := [
 	["A / B", "Enter / Esc", "OK / cancel. Walk around the preview meanwhile"],
 ]
 const TOUCH := [
-	["MOVE stick", "Walk; it jumps under your left thumb anywhere on the left. Push past the ring to sprint"], ["LOOK stick", "Look, like a controller stick; or drag anywhere else on the right"],
+	["Left stick", "Walk; it jumps under your left thumb anywhere on the left. Push past the ring to sprint"], ["Right stick", "Look, like a controller stick; or drag anywhere else on the right"],
 	["FIRE", "Primary action"], ["ALT", "Secondary action"], ["JUMP", "Jump (UP while flying)"],
 	["+ / −", "Grow / shrink"], ["TOOL or the tool chip", "Tool wheel"], ["Model", "Feature tree and parameters"],
 	["Fly", "Fly through walls"], ["Menu", "Pause menu"],
