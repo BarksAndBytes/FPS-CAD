@@ -254,9 +254,9 @@ func _run() -> void:
 	# Touch joysticks: the move stick walks and sprints when pushed past its ring; the look stick
 	# turns like a controller stick; both spring back when let go.
 	var tc = main.touch
-	var actions: Node = root.get_node("Actions")
-	actions.last_device = "touch"
-	actions.device_changed.emit("touch")
+	var acts: Node = root.get_node("Actions")
+	acts.last_device = "touch"
+	acts.device_changed.emit("touch")
 	tc._layout()
 	# A phone sends a pretend mouse click with every touch; it must not hide the touch controls.
 	var fake := InputEventMouseButton.new()
@@ -265,7 +265,7 @@ func _run() -> void:
 	fake.pressed = true
 	Input.parse_input_event(fake)
 	await _frames(2)
-	_check(actions.last_device == "touch" and tc.visible, "touches stay touches (emulated mouse clicks are ignored)")
+	_check(acts.last_device == "touch" and tc.visible, "touches stay touches (emulated mouse clicks are ignored)")
 	var mh: Vector2 = tc._stick_home
 	_touch(tc, 7, mh, true)
 	_drag(tc, 7, mh + Vector2(70, 0))
@@ -281,8 +281,8 @@ func _run() -> void:
 	_touch(tc, 8, lh + Vector2(0, -80), false)
 	_check(main.player.look_stick_touch == Vector2.ZERO and tc._look_knob.position == lh - tc._look_knob.size / 2.0,
 		"letting go of the look stick recentres it")
-	actions.last_device = "controller"
-	actions.device_changed.emit("controller")
+	acts.last_device = "controller"
+	acts.device_changed.emit("controller")
 
 	# A phone-sized interface: larger text, and the pause menu switches to two columns to fit.
 	var ui = load("res://scripts/ui_theme.gd")
