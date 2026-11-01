@@ -263,6 +263,11 @@ func _run() -> void:
 	main.wheel.aim_branch(Vector2.from_angle(main.wheel._kid_angle(solids, 2)))
 	main._wheel_pick(main.wheel.commit())
 	_check(not main.wheel.visible and main.tools.tool().id == "sweep", "right stick picks Solids, left stick picks Sweep, letting go takes it")
+	main._open_wheel(false)
+	main.wheel.aim(Vector2.from_angle(main.wheel._slot_angle(solids)))
+	main._wheel_pick(main.wheel.commit(true))
+	_check(not main.wheel.visible and main.tools.tool().id == "sweep",
+		"letting go with only a group picked closes the wheel and keeps the tool")
 	main._open_wheel(true)
 	main.wheel.enter(solids)
 	main.wheel.back()

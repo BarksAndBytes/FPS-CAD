@@ -135,7 +135,11 @@ func back() -> void:
 ## Acts on the hovered node: picks a tool (returns its value and closes), opens a group
 ## (returns ENTERED), or with nothing aimed at closes (-1) at the inner ring and stays open on a
 ## branch (ENTERED).
-func commit() -> int:
+##
+## released: the wheel button was let go. Then only a complete choice counts: a single tool, or a
+## group with a tool picked on its branch. Anything less closes the wheel and keeps the tool in
+## use (-1).
+func commit(released := false) -> int:
 	if group < 0:
 		if hover < 0:
 			visible = false
@@ -143,6 +147,9 @@ func commit() -> int:
 		if branch >= 0 and tree[hover].has("children"):
 			visible = false
 			return int(tree[hover].children[branch].value)
+		if released and tree[hover].has("children"):
+			visible = false
+			return -1
 		if tree[hover].has("children"):
 			enter(hover)
 			return ENTERED

@@ -637,7 +637,7 @@ func _gameplay_input() -> void:
 		var pressed: bool = Input.is_action_just_pressed(&"ui_accept") \
 			or (Input.is_action_just_pressed(&"primary") and Actions.last_device != "keyboard")
 		if released or pressed:
-			var r: int = wheel.commit()
+			var r: int = wheel.commit(released)
 			if r == ToolWheel.ENTERED:
 				_wheel_from_button = true  # a group opened: aim at its tools and press to pick
 			else:

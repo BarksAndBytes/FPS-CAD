@@ -30,7 +30,7 @@ const SKETCH := [
 	["", "", "TOOL WHEEL"],
 	["Hold RB + right stick", "Hold Q + mouse", "Point at a group (or a single tool) on the inner ring; its tools branch out"],
 	["Left stick", "WASD", "Point at a tool on that branch"],
-	["Let go of RB", "Let go of Q", "Pick it (with no tool picked, open the group's branch to choose with A / Enter)"],
+	["Let go of RB", "Let go of Q", "Pick it; without a tool picked, the wheel closes and your tool stays the same"],
 	["B", "Esc", "Back from a branch to the groups, then close"],
 	["", "", "WHILE SKETCHING"],
 	["RB", "Hold Q", "Sketch tools: Draw (line, rectangle, circle, arc), Constrain (dimension, relation), Delete"],
