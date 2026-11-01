@@ -246,9 +246,9 @@ int main() {
 
     // Symmetric about a vertical axis through the origin.
     Json j = base;
-    j["points"] = {P("a0", 0, 0, true), P("a1", 0, 1, true), P("p", -0.3, 0.2, true), P("q", 0.25, 0.3)};
-    j["entities"] = {E("ax", "line", {"a0", "a1"})};
-    j["constraints"] = {C("symmetric", {"p", "q", "ax"})};
+    j["points"] = Json::array({P("a0", 0, 0, true), P("a1", 0, 1, true), P("p", -0.3, 0.2, true), P("q", 0.25, 0.3)});
+    j["entities"] = Json::array({E("ax", "line", {"a0", "a1"})});
+    j["constraints"] = Json::array({C("symmetric", {"p", "q", "ax"})});
     Sketch s = Sketch::fromJson(j);
     CHECK(solveSketch(s, noVars).ok);
     CHECK_NEAR(s.point("q")->x, 0.3, 1e-9);
@@ -256,11 +256,11 @@ int main() {
 
     // Collinear lines, a point square-distance from a line, and two points level.
     j = base;
-    j["points"] = {P("a", 0, 0, true), P("b", 1, 0, true), P("c", 2, 0.1), P("d", 3, -0.2), P("e", 0.5, 0.9),
-                   P("f", 4, 1.1)};
-    j["entities"] = {E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})};
-    j["constraints"] = {C("collinear", {"l1", "l2"}), C("distance", {"e", "l1"}, 0.75),
-                        C("horizontal", {"e", "f"})};
+    j["points"] = Json::array({P("a", 0, 0, true), P("b", 1, 0, true), P("c", 2, 0.1), P("d", 3, -0.2), P("e", 0.5, 0.9),
+                   P("f", 4, 1.1)});
+    j["entities"] = Json::array({E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})});
+    j["constraints"] = Json::array({C("collinear", {"l1", "l2"}), C("distance", {"e", "l1"}, 0.75),
+                        C("horizontal", {"e", "f"})});
     s = Sketch::fromJson(j);
     CHECK(solveSketch(s, noVars).ok);
     CHECK_NEAR(s.point("c")->y, 0.0, 1e-9);
@@ -270,9 +270,9 @@ int main() {
 
     // Distance between two parallel lines.
     j = base;
-    j["points"] = {P("a", 0, 0, true), P("b", 1, 0, true), P("c", 0, 0.4), P("d", 1, 0.45)};
-    j["entities"] = {E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})};
-    j["constraints"] = {C("parallel", {"l1", "l2"}), C("distance", {"l1", "l2"}, 0.5)};
+    j["points"] = Json::array({P("a", 0, 0, true), P("b", 1, 0, true), P("c", 0, 0.4), P("d", 1, 0.45)});
+    j["entities"] = Json::array({E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})});
+    j["constraints"] = Json::array({C("parallel", {"l1", "l2"}), C("distance", {"l1", "l2"}, 0.5)});
     s = Sketch::fromJson(j);
     CHECK(solveSketch(s, noVars).ok);
     CHECK_NEAR(s.point("c")->y, 0.5, 1e-9);
@@ -280,11 +280,11 @@ int main() {
 
     // Concentric circles, and circles tangent outside and inside.
     j = base;
-    j["points"] = {P("o1", 0, 0, true), P("o2", 0.05, 0.02), P("o3", 1.1, 0), P("o4", 0.2, 0.1)};
-    j["entities"] = {E("k1", "circle", {"o1"}, 0.5), E("k2", "circle", {"o2"}, 0.2), E("k3", "circle", {"o3"}, 0.4),
-                     E("k4", "circle", {"o4"}, 0.2)};
-    j["constraints"] = {C("concentric", {"k1", "k2"}), C("tangent", {"k1", "k3"}), C("tangent", {"k1", "k4"}),
-                        C("radius", {"k1"}, 0.5), C("radius", {"k3"}, 0.4), C("radius", {"k4"}, 0.2)};
+    j["points"] = Json::array({P("o1", 0, 0, true), P("o2", 0.05, 0.02), P("o3", 1.1, 0), P("o4", 0.2, 0.1)});
+    j["entities"] = Json::array({E("k1", "circle", {"o1"}, 0.5), E("k2", "circle", {"o2"}, 0.2), E("k3", "circle", {"o3"}, 0.4),
+                     E("k4", "circle", {"o4"}, 0.2)});
+    j["constraints"] = Json::array({C("concentric", {"k1", "k2"}), C("tangent", {"k1", "k3"}), C("tangent", {"k1", "k4"}),
+                        C("radius", {"k1"}, 0.5), C("radius", {"k3"}, 0.4), C("radius", {"k4"}, 0.2)});
     j["constraints"][1]["id"] = "t1";
     j["constraints"][2]["id"] = "t2";
     j["constraints"][3]["id"] = "r1";
@@ -298,9 +298,9 @@ int main() {
 
     // Tangent where a line and an arc share an end: one freedom taken, no more, no less.
     j = base;
-    j["points"] = {P("a", 0, 0, true), P("jn", 1, 0), P("c", 1, 0.5), P("e", 1.5, 0.5)};
-    j["entities"] = {E("l", "line", {"a", "jn"}), E("arc", "arc", {"c", "jn", "e"})};
-    j["constraints"] = {C("tangent", {"l", "arc"})};
+    j["points"] = Json::array({P("a", 0, 0, true), P("jn", 1, 0), P("c", 1, 0.5), P("e", 1.5, 0.5)});
+    j["entities"] = Json::array({E("l", "line", {"a", "jn"}), E("arc", "arc", {"c", "jn", "e"})});
+    j["constraints"] = Json::array({C("tangent", {"l", "arc"})});
     s = Sketch::fromJson(j);
     SolveResult tr = solveSketch(s, noVars);
     CHECK(tr.ok && tr.dof == 4);
@@ -318,8 +318,8 @@ int main() {
     auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
     PartDocument d;
     Json el = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
-    el["points"] = {{{"id", "c"}, {"x", 0}, {"y", 0}}, {{"id", "m"}, {"x", 0.0}, {"y", 0.3}}};
-    el["entities"] = {{{"id", "e"}, {"kind", "ellipse"}, {"pts", {"c", "m"}}, {"r", 0.5}}};
+    el["points"] = Json::array({{{"id", "c"}, {"x", 0}, {"y", 0}}, {{"id", "m"}, {"x", 0.0}, {"y", 0.3}}});
+    el["entities"] = Json::array({{{"id", "e"}, {"kind", "ellipse"}, {"pts", {"c", "m"}}, {"r", 0.5}}});
     std::string sid = d.add(feature("sketch", el)).id;
     d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}}));
     PartModel m(d);
@@ -328,10 +328,10 @@ int main() {
 
     // An open spline closed by a line is a profile; a closed spline is one on its own.
     Json sp = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
-    sp["points"] = {{{"id", "a"}, {"x", 0}, {"y", 0}}, {{"id", "b"}, {"x", 0.5}, {"y", 0.4}},
-                    {{"id", "c"}, {"x", 1.0}, {"y", 0.0}}};
-    sp["entities"] = {{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c"}}},
-                      {{"id", "l"}, {"kind", "line"}, {"pts", {"c", "a"}}}};
+    sp["points"] = Json::array({{{"id", "a"}, {"x", 0}, {"y", 0}}, {{"id", "b"}, {"x", 0.5}, {"y", 0.4}},
+                    {{"id", "c"}, {"x", 1.0}, {"y", 0.0}}});
+    sp["entities"] = Json::array({{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c"}}},
+                      {{"id", "l"}, {"kind", "line"}, {"pts", {"c", "a"}}}});
     Sketch open = Sketch::fromJson(sp);
     CHECK(solveSketch(open, noVars).ok);
     CHECK(!sketchFill(open).empty());
@@ -339,7 +339,7 @@ int main() {
     CHECK(curves.size() == 2 && curves[0].points.size() > 10);
     Json ring = sp;
     ring["points"].push_back({{"id", "d"}, {"x", 0.5}, {"y", -0.4}});
-    ring["entities"] = {{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c", "d", "a"}}}};
+    ring["entities"] = Json::array({{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c", "d", "a"}}}});
     Sketch closed = Sketch::fromJson(ring);
     CHECK(!sketchFill(closed).empty());
     PartDocument d2;
