@@ -165,8 +165,8 @@ func _check_sketch() -> bool:
 
 func _text_rect() -> String:
 	if Actions.last_device == "touch":
-		return "Open the tool wheel for the sketch tools, tap Draw and pick Rectangle. Tap Fire on one corner, then on the opposite corner."
-	return "The view now looks straight down at the sketch: move to pan, %s / %s to zoom. Hold %s for the sketch tools, open Draw and pick Rectangle, then press %s on one corner and on the opposite corner." % [
+		return "Open the tool wheel for the sketch tools, tap Lines and pick Corner rectangle. Tap Fire on one corner, then on the opposite corner."
+	return "The view now looks straight down at the sketch: move to pan, %s / %s to zoom. Hold %s for the sketch tools, open Lines and pick Corner rectangle, then press %s on one corner and on the opposite corner." % [
 		_p(&"grow"), _p(&"shrink"), _p(&"tool_wheel"), _p(&"primary")]
 
 

@@ -904,6 +904,76 @@ std::vector<Vec3> PartModel::faceVertices(int b, int face) const {
   return out;
 }
 
+std::vector<PartModel::ProjectedCurve> PartModel::projectFace(int b, int face, const SketchPlane& plane) const {
+  std::vector<ProjectedCurve> out;
+  if (b < 0 || b >= bodyCount()) return out;
+  const ShapeIndex& faces = d_->faceIndex[static_cast<size_t>(b)];
+  if (face < 0 || face >= faces.Extent()) return out;
+  const gp_Dir N(plane.normal[0], plane.normal[1], plane.normal[2]);
+  auto flat = [&](const gp_Pnt& p) { return plane.toPlane({p.X(), p.Y(), p.Z()}); };
+  auto gap = [](const std::array<double, 2>& a, const std::array<double, 2>& c) {
+    return std::hypot(a[0] - c[0], a[1] - c[1]);
+  };
+  ShapeIndex edges;
+  TopExp::MapShapes(faces(face + 1), TopAbs_EDGE, edges);
+  for (int i = 1; i <= edges.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(edges(i));
+    if (BRep_Tool::Degenerated(edge)) continue;
+    try {
+      BRepAdaptor_Curve c(edge);
+      double t0 = c.FirstParameter(), t1 = c.LastParameter();
+      gp_Pnt s3 = c.Value(t0), e3 = c.Value(t1);
+      bool closedEdge = s3.Distance(e3) < 1e-9;
+      ProjectedCurve pc;
+      if (c.GetType() == GeomAbs_Line) {
+        pc.kind = "line";
+        pc.pts = {flat(s3), flat(e3)};
+        if (gap(pc.pts[0], pc.pts[1]) < 1e-9) continue;
+      } else if (c.GetType() == GeomAbs_Circle && std::abs(c.Circle().Axis().Direction().Dot(N)) > 1 - 1e-9) {
+        gp_Circ circ = c.Circle();
+        auto centre = flat(circ.Location());
+        if (closedEdge) {
+          pc.kind = "circle";
+          pc.pts = {centre};
+          pc.r = circ.Radius();
+        } else {
+          pc.kind = "arc";
+          // Parameters run counter-clockwise about the circle's own axis.
+          bool ccw = circ.Axis().Direction().Dot(N) > 0;
+          pc.pts = {centre, flat(ccw ? s3 : e3), flat(ccw ? e3 : s3)};
+        }
+      } else {
+        // Anything else is sampled into a spline; one that flattens to a straight run is a line.
+        int n = closedEdge ? 16 : 9;
+        std::vector<std::array<double, 2>> pts;
+        for (int k = 0; k < n; ++k) pts.push_back(flat(c.Value(t0 + (t1 - t0) * k / (closedEdge ? n : n - 1))));
+        size_t ia = 0, ib = 0;
+        double span = 0;
+        for (size_t a = 0; a < pts.size(); ++a)
+          for (size_t z = a + 1; z < pts.size(); ++z)
+            if (gap(pts[a], pts[z]) > span) { span = gap(pts[a], pts[z]); ia = a; ib = z; }
+        if (span < 1e-9) continue;
+        double off = 0;
+        auto A = pts[ia], B = pts[ib];
+        for (auto& q : pts)
+          off = std::max(off, std::abs((B[0] - A[0]) * (q[1] - A[1]) - (B[1] - A[1]) * (q[0] - A[0])) / span);
+        if (off < 1e-7 * std::max(1.0, span)) {
+          pc.kind = "line";
+          pc.pts = {A, B};
+        } else {
+          pc.kind = "spline";
+          pc.pts = pts;
+          pc.closed = closedEdge;
+        }
+      }
+      out.push_back(pc);
+    } catch (const Standard_Failure&) {
+      continue;
+    }
+  }
+  return out;
+}
+
 // ----- Sketches -----
 
 SolveResult PartModel::solve(Sketch& s) const { return solveSketch(s, d_->valueFn()); }

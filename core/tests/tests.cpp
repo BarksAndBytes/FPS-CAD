@@ -225,6 +225,164 @@ int main() {
     CHECK_NEAR(circ.entities[0].r, 0.2, 1e-9);
   });
 
+  run("sketch relations: symmetric, collinear, concentric, tangent curves, distances", [] {
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    auto P = [](const char* id, double x, double y, bool fixed = false) {
+      Json p = {{"id", id}, {"x", x}, {"y", y}};
+      if (fixed) p["fixed"] = true;
+      return p;
+    };
+    auto E = [](const char* id, const char* kind, std::vector<std::string> pts, double r = 0) {
+      Json e = {{"id", id}, {"kind", kind}, {"pts", pts}};
+      if (r > 0) e["r"] = r;
+      return e;
+    };
+    auto C = [](const char* kind, std::vector<std::string> refs, Json value = Json()) {
+      Json c = {{"id", std::string("c_") + kind}, {"kind", kind}, {"refs", refs}};
+      if (!value.is_null()) c["value"] = value;
+      return c;
+    };
+    Json base = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+
+    // Symmetric about a vertical axis through the origin.
+    Json j = base;
+    j["points"] = {P("a0", 0, 0, true), P("a1", 0, 1, true), P("p", -0.3, 0.2, true), P("q", 0.25, 0.3)};
+    j["entities"] = {E("ax", "line", {"a0", "a1"})};
+    j["constraints"] = {C("symmetric", {"p", "q", "ax"})};
+    Sketch s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(s.point("q")->x, 0.3, 1e-9);
+    CHECK_NEAR(s.point("q")->y, 0.2, 1e-9);
+
+    // Collinear lines, a point square-distance from a line, and two points level.
+    j = base;
+    j["points"] = {P("a", 0, 0, true), P("b", 1, 0, true), P("c", 2, 0.1), P("d", 3, -0.2), P("e", 0.5, 0.9),
+                   P("f", 4, 1.1)};
+    j["entities"] = {E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})};
+    j["constraints"] = {C("collinear", {"l1", "l2"}), C("distance", {"e", "l1"}, 0.75),
+                        C("horizontal", {"e", "f"})};
+    s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(s.point("c")->y, 0.0, 1e-9);
+    CHECK_NEAR(s.point("d")->y, 0.0, 1e-9);
+    CHECK_NEAR(s.point("e")->y, 0.75, 1e-9);
+    CHECK_NEAR(s.point("f")->y, 0.75, 1e-9);
+
+    // Distance between two parallel lines.
+    j = base;
+    j["points"] = {P("a", 0, 0, true), P("b", 1, 0, true), P("c", 0, 0.4), P("d", 1, 0.45)};
+    j["entities"] = {E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})};
+    j["constraints"] = {C("parallel", {"l1", "l2"}), C("distance", {"l1", "l2"}, 0.5)};
+    s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(s.point("c")->y, 0.5, 1e-9);
+    CHECK_NEAR(s.point("d")->y, 0.5, 1e-9);
+
+    // Concentric circles, and circles tangent outside and inside.
+    j = base;
+    j["points"] = {P("o1", 0, 0, true), P("o2", 0.05, 0.02), P("o3", 1.1, 0), P("o4", 0.2, 0.1)};
+    j["entities"] = {E("k1", "circle", {"o1"}, 0.5), E("k2", "circle", {"o2"}, 0.2), E("k3", "circle", {"o3"}, 0.4),
+                     E("k4", "circle", {"o4"}, 0.2)};
+    j["constraints"] = {C("concentric", {"k1", "k2"}), C("tangent", {"k1", "k3"}), C("tangent", {"k1", "k4"}),
+                        C("radius", {"k1"}, 0.5), C("radius", {"k3"}, 0.4), C("radius", {"k4"}, 0.2)};
+    j["constraints"][1]["id"] = "t1";
+    j["constraints"][2]["id"] = "t2";
+    j["constraints"][3]["id"] = "r1";
+    j["constraints"][4]["id"] = "r3";
+    j["constraints"][5]["id"] = "r4";
+    s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(std::hypot(s.point("o2")->x, s.point("o2")->y), 0.0, 1e-9);
+    CHECK_NEAR(std::hypot(s.point("o3")->x, s.point("o3")->y), 0.9, 1e-9);  // outside: 0.5 + 0.4
+    CHECK_NEAR(std::hypot(s.point("o4")->x, s.point("o4")->y), 0.3, 1e-9);  // inside: 0.5 − 0.2
+
+    // Tangent where a line and an arc share an end: one freedom taken, no more, no less.
+    j = base;
+    j["points"] = {P("a", 0, 0, true), P("jn", 1, 0), P("c", 1, 0.5), P("e", 1.5, 0.5)};
+    j["entities"] = {E("l", "line", {"a", "jn"}), E("arc", "arc", {"c", "jn", "e"})};
+    j["constraints"] = {C("tangent", {"l", "arc"})};
+    s = Sketch::fromJson(j);
+    SolveResult tr = solveSketch(s, noVars);
+    CHECK(tr.ok && tr.dof == 4);
+    // Two arcs joined end to end and tangent: their centres stay in line with the joint.
+    j["points"].push_back(P("c2", 1.5, 1.0));
+    j["points"].push_back(P("f", 2.0, 0.5));
+    j["entities"].push_back(E("arc2", "arc", {"c2", "f", "e"}));
+    j["constraints"].push_back({{"id", "t2"}, {"kind", "tangent"}, {"refs", {"arc", "arc2"}}});
+    s = Sketch::fromJson(j);
+    tr = solveSketch(s, noVars);
+    CHECK(tr.ok && tr.dof == 6);
+  });
+
+  run("ellipses and splines make profiles; faces project onto sketches", [] {
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    PartDocument d;
+    Json el = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    el["points"] = {{{"id", "c"}, {"x", 0}, {"y", 0}}, {{"id", "m"}, {"x", 0.0}, {"y", 0.3}}};
+    el["entities"] = {{{"id", "e"}, {"kind", "ellipse"}, {"pts", {"c", "m"}}, {"r", 0.5}}};
+    std::string sid = d.add(feature("sketch", el)).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok && m.bodyCount() == 1);
+    CHECK_NEAR(m.massProperties().volume, kPiT * 0.5 * 0.3 * 0.1, 1e-6);
+
+    // An open spline closed by a line is a profile; a closed spline is one on its own.
+    Json sp = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    sp["points"] = {{{"id", "a"}, {"x", 0}, {"y", 0}}, {{"id", "b"}, {"x", 0.5}, {"y", 0.4}},
+                    {{"id", "c"}, {"x", 1.0}, {"y", 0.0}}};
+    sp["entities"] = {{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c"}}},
+                      {{"id", "l"}, {"kind", "line"}, {"pts", {"c", "a"}}}};
+    Sketch open = Sketch::fromJson(sp);
+    CHECK(solveSketch(open, noVars).ok);
+    CHECK(!sketchFill(open).empty());
+    auto curves = sketchCurves(open);
+    CHECK(curves.size() == 2 && curves[0].points.size() > 10);
+    Json ring = sp;
+    ring["points"].push_back({{"id", "d"}, {"x", 0.5}, {"y", -0.4}});
+    ring["entities"] = {{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c", "d", "a"}}}};
+    Sketch closed = Sketch::fromJson(ring);
+    CHECK(!sketchFill(closed).empty());
+    PartDocument d2;
+    std::string rid = d2.add(feature("sketch", ring)).id;
+    d2.add(feature("extrude", {{"sketch", rid}, {"depth", 0.1}}));
+    PartModel m2(d2);
+    CHECK(m2.rebuild().ok && m2.bodyCount() == 1);
+    CHECK(m2.massProperties().volume > 0.02 && m2.massProperties().volume < 0.1);
+
+    // Project: a box's top face gives four lines; the ellipse's top face one spline.
+    PartModel box(PartDocument::sample());
+    CHECK(box.rebuild().ok);
+    auto hit = box.pick({0, 0, 50}, {0, 0, -1});
+    CHECK(hit.has_value());
+    if (hit) {
+      SketchPlane top = standardPlane("top");
+      auto pc = box.projectFace(hit->body, hit->face, top);
+      CHECK(!pc.empty());
+    }
+    auto ehit = m.pick({0, 0, 5}, {0, 0, -1});
+    CHECK(ehit.has_value());
+    if (ehit) {
+      auto pc = m.projectFace(ehit->body, ehit->face, standardPlane("top"));
+      CHECK(pc.size() == 1 && pc[0].kind == "spline" && pc[0].closed);
+    }
+    // A cylinder's flat end projects to a true circle.
+    PartDocument cyl;
+    Json ck = circleSketch(standardPlane("top"), 0.2, 0.1, 0.25);
+    std::string kid = cyl.add(feature("sketch", ck)).id;
+    cyl.add(feature("extrude", {{"sketch", kid}, {"depth", 0.3}}));
+    PartModel cm(cyl);
+    CHECK(cm.rebuild().ok);
+    auto chit = cm.pick({0.2, 0.1, 5}, {0, 0, -1});
+    if (chit) {
+      auto pc = cm.projectFace(chit->body, chit->face, standardPlane("front"));
+      // Seen edge-on from the front the circle flattens into a line.
+      CHECK(pc.size() == 1 && pc[0].kind == "line");
+      pc = cm.projectFace(chit->body, chit->face, standardPlane("top"));
+      CHECK(pc.size() == 1 && pc[0].kind == "circle");
+      CHECK(pc.size() == 1 && std::abs(pc[0].r - 0.25) < 1e-9 && std::abs(pc[0].pts[0][0] - 0.2) < 1e-9);
+    }
+  });
+
   run("sketch extrude follows its dimensions and variables", [] {
     PartDocument d;
     d.variables = {{"width", "1000 mm"}};

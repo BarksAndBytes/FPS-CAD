@@ -130,6 +130,18 @@ public:
   // Corner points of one face (for measure snapping), metres.
   std::vector<Vec3> faceVertices(int body, int face) const;
 
+  // A face's edges flattened onto a sketch plane (Convert Entities / Project Geometry), in plane
+  // coordinates. Lines stay lines; circles and arcs square to the plane stay circles and arcs
+  // (arcs counter-clockwise: centre, start, end); any other curve becomes a fit-point spline.
+  // Edges that flatten to a point are left out.
+  struct ProjectedCurve {
+    std::string kind;  // line, circle, arc, spline
+    std::vector<std::array<double, 2>> pts;  // line: a, b · circle: centre · arc: centre, start, end · spline: fit points
+    double r = 0;      // circles
+    bool closed = false;  // closed splines (the first point is not repeated)
+  };
+  std::vector<ProjectedCurve> projectFace(int body, int face, const SketchPlane& plane) const;
+
   // ----- Sketches -----
 
   // Solves a sketch against the part's variables (for live editing before it is committed).

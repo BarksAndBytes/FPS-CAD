@@ -96,7 +96,7 @@ public:
       X_.push_back(p.y);
     }
     for (auto& e : s_.entities) {
-      if (e.kind != "circle") continue;
+      if (e.kind != "circle" && e.kind != "ellipse") continue;
       ridx_[e.id] = static_cast<int>(X_.size());
       X_.push_back(e.r);
     }
@@ -109,6 +109,10 @@ public:
         if (e.pts.size() != 2) throw std::invalid_argument("line " + e.id + " needs two points");
       } else if (e.kind == "circle") {
         if (e.pts.size() != 1) throw std::invalid_argument("circle " + e.id + " needs a centre");
+      } else if (e.kind == "ellipse") {
+        if (e.pts.size() != 2) throw std::invalid_argument("ellipse " + e.id + " needs a centre and an axis end");
+      } else if (e.kind == "spline") {
+        if (e.pts.size() < 2) throw std::invalid_argument("spline " + e.id + " needs at least two points");
       } else {
         throw std::invalid_argument("unknown sketch entity kind '" + e.kind + "'");
       }
@@ -238,15 +242,38 @@ private:
     return *e;
   }
 
-  // Radius of a circle (unknown) or an arc (centre to start).
+  // Radius of a circle (unknown) or an arc (centre to start); an ellipse's free semi-axis.
   double radius(const V& X, const SketchEntity& e) const {
-    if (e.kind == "circle") return X[ridx_.at(e.id)];
+    if (e.kind == "circle" || e.kind == "ellipse") return X[ridx_.at(e.id)];
     return dist(X, e.pts[0], e.pts[1]);
   }
 
   // Length of a line, or radius of a circle/arc, for "equal".
   double size(const V& X, const SketchEntity& e) const {
     return e.kind == "line" ? dist(X, e.pts[0], e.pts[1]) : radius(X, e);
+  }
+
+  // End points of lines and arcs (an arc's centre is not an end).
+  static std::vector<std::string> endsOf(const SketchEntity& e) {
+    if (e.kind == "line") return e.pts;
+    if (e.kind == "arc") return {e.pts[1], e.pts[2]};
+    return {};
+  }
+
+  // A point id that ends both entities, or "".
+  static std::string sharedEnd(const SketchEntity& a, const SketchEntity& b) {
+    for (auto& p : endsOf(a))
+      for (auto& q : endsOf(b))
+        if (p == q) return p;
+    return "";
+  }
+
+  // Signed distance of point p from the infinite line through l.
+  double offLine(const V& X, const std::string& p, const SketchEntity& l) const {
+    P a = pt(X, l.pts[0]), b = pt(X, l.pts[1]), q = pt(X, p);
+    double len = std::hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-30) return 0.0;
+    return ((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x)) / len;
   }
 
   std::array<double, 2> dir(const V& X, const SketchEntity& l) const {
@@ -269,9 +296,16 @@ private:
     const std::string id = c.id.empty() ? k : c.id;
     auto val = [&](Quantity q) { return value_(c.value, q); };
     if (k == "horizontal" || k == "vertical") {
+      bool h = k == "horizontal";
+      if (c.refs.size() == 2) {  // two points level with each other, or one above the other
+        need(c.refs[0]);
+        need(c.refs[1]);
+        std::string p = c.refs[0], q = c.refs[1];
+        add(id, [this, p, q, h](const V& X) { return h ? pt(X, q).y - pt(X, p).y : pt(X, q).x - pt(X, p).x; });
+        return;
+      }
       refs(c, 1);
       const SketchEntity& l = ent(c.refs[0], "line");
-      bool h = k == "horizontal";
       add(id, [this, l, h](const V& X) {
         P a = pt(X, l.pts[0]), b = pt(X, l.pts[1]);
         return h ? b.y - a.y : b.x - a.x;
@@ -294,10 +328,44 @@ private:
         if (n < 1e-30) return 0.0;
         return par ? (d1[0] * d2[1] - d1[1] * d2[0]) / n : (d1[0] * d2[0] + d1[1] * d2[1]) / n;
       });
+    } else if (k == "collinear") {
+      refs(c, 2);
+      const SketchEntity& l1 = ent(c.refs[0], "line");
+      const SketchEntity& l2 = ent(c.refs[1], "line");
+      for (int end = 0; end < 2; ++end) {
+        std::string p = l2.pts[end];
+        add(id, [this, p, l1](const V& X) { return offLine(X, p, l1); });
+      }
+    } else if (k == "concentric") {
+      refs(c, 2);
+      std::string p = ent(c.refs[0], "circle arc ellipse").pts[0];
+      std::string q = ent(c.refs[1], "circle arc ellipse").pts[0];
+      add(id, [this, p, q](const V& X) { return pt(X, q).x - pt(X, p).x; });
+      add(id, [this, p, q](const V& X) { return pt(X, q).y - pt(X, p).y; });
+    } else if (k == "symmetric") {
+      refs(c, 3);
+      need(c.refs[0]);
+      need(c.refs[1]);
+      const SketchEntity& l = ent(c.refs[2], "line");
+      std::string p = c.refs[0], q = c.refs[1];
+      // The midpoint lies on the line, and the two points are square across it.
+      add(id, [this, p, q, l](const V& X) {
+        P a = pt(X, l.pts[0]), b = pt(X, l.pts[1]), u = pt(X, p), w = pt(X, q);
+        double len = std::hypot(b.x - a.x, b.y - a.y);
+        if (len < 1e-30) return 0.0;
+        double mx = 0.5 * (u.x + w.x), my = 0.5 * (u.y + w.y);
+        return ((b.x - a.x) * (my - a.y) - (b.y - a.y) * (mx - a.x)) / len;
+      });
+      add(id, [this, p, q, l](const V& X) {
+        P a = pt(X, l.pts[0]), b = pt(X, l.pts[1]), u = pt(X, p), w = pt(X, q);
+        double len = std::hypot(b.x - a.x, b.y - a.y);
+        if (len < 1e-30) return 0.0;
+        return ((b.x - a.x) * (w.x - u.x) + (b.y - a.y) * (w.y - u.y)) / len;
+      });
     } else if (k == "equal") {
       refs(c, 2);
-      const SketchEntity& a = ent(c.refs[0], "line circle arc");
-      const SketchEntity& b = ent(c.refs[1], "line circle arc");
+      const SketchEntity& a = ent(c.refs[0], "line circle arc ellipse");
+      const SketchEntity& b = ent(c.refs[1], "line circle arc ellipse");
       add(id, [this, a, b](const V& X) { return size(X, b) - size(X, a); });
     } else if (k == "point_on_line") {
       refs(c, 2);
@@ -323,10 +391,46 @@ private:
       std::string p = c.refs[0];
       add(id, [this, p, l](const V& X) { return pt(X, p).x - 0.5 * (pt(X, l.pts[0]).x + pt(X, l.pts[1]).x); });
       add(id, [this, p, l](const V& X) { return pt(X, p).y - 0.5 * (pt(X, l.pts[0]).y + pt(X, l.pts[1]).y); });
+    } else if (k == "tangent" && s_.entity(c.refs.empty() ? "" : c.refs[0]) &&
+               s_.entity(c.refs[0])->kind != "line") {
+      // Two circles or arcs touching: centres r1 + r2 apart (outside) or |r1 − r2| (inside),
+      // whichever the geometry is nearer to now, so the relation never flips a curve over.
+      refs(c, 2);
+      const SketchEntity& e1 = ent(c.refs[0], "circle arc");
+      const SketchEntity& e2 = ent(c.refs[1], "circle arc");
+      std::string joint = sharedEnd(e1, e2);
+      if (!joint.empty()) {
+        // Joined end to end: both centres in line with the joint. (Distances between centres
+        // would only touch their target, giving the solver no slope to follow.)
+        add(id, [this, e1, e2, joint](const V& X) {
+          P j = pt(X, joint), a = pt(X, e1.pts[0]), b = pt(X, e2.pts[0]);
+          double ax = a.x - j.x, ay = a.y - j.y, bx = b.x - j.x, by = b.y - j.y;
+          double n = std::hypot(ax, ay) * std::hypot(bx, by);
+          return n < 1e-30 ? 0.0 : (ax * by - ay * bx) / n;
+        });
+        return;
+      }
+      double d0 = dist(X_, e1.pts[0], e2.pts[0]), r1 = radius(X_, e1), r2 = radius(X_, e2);
+      bool outside = std::abs(d0 - (r1 + r2)) <= std::abs(d0 - std::abs(r1 - r2));
+      add(id, [this, e1, e2, outside](const V& X) {
+        double d = dist(X, e1.pts[0], e2.pts[0]), a = radius(X, e1), b = radius(X, e2);
+        return outside ? d - (a + b) : d - std::abs(a - b);
+      });
     } else if (k == "tangent") {
       refs(c, 2);
       const SketchEntity& l = ent(c.refs[0], "line");
       const SketchEntity& e = ent(c.refs[1], "circle arc");
+      std::string joint = sharedEnd(l, e);
+      if (!joint.empty()) {
+        // Line and arc joined at an end: the radius there is square to the line.
+        add(id, [this, l, e, joint](const V& X) {
+          P a = pt(X, l.pts[0]), b = pt(X, l.pts[1]), j = pt(X, joint), q = pt(X, e.pts[0]);
+          double dx = b.x - a.x, dy = b.y - a.y, rx = j.x - q.x, ry = j.y - q.y;
+          double n = std::hypot(dx, dy) * std::hypot(rx, ry);
+          return n < 1e-30 ? 0.0 : (dx * rx + dy * ry) / n;
+        });
+        return;
+      }
       add(id, [this, l, e](const V& X) {
         P a = pt(X, l.pts[0]), b = pt(X, l.pts[1]), q = pt(X, e.pts[0]);
         double len = std::hypot(b.x - a.x, b.y - a.y);
@@ -344,9 +448,21 @@ private:
       add(id, [this, p, y0](const V& X) { return pt(X, p).y - y0; });
     } else if (k == "distance") {
       double d = val(Quantity::Length);
+      const SketchEntity* e0 = c.refs.empty() ? nullptr : s_.entity(c.refs[0]);
+      const SketchEntity* e1 = c.refs.size() < 2 ? nullptr : s_.entity(c.refs[1]);
       if (c.refs.size() == 1) {
         const SketchEntity& l = ent(c.refs[0], "line");
         add(id, [this, l, d](const V& X) { return dist(X, l.pts[0], l.pts[1]) - d; });
+      } else if (e0 || e1) {
+        // Square to a line: from a point, or between two parallel lines (from the second line's
+        // first point to the first line).
+        refs(c, 2);
+        const SketchEntity& l = e1 ? ent(c.refs[1], "line") : ent(c.refs[0], "line");
+        std::string p;
+        if (e0 && e1) p = ent(c.refs[0], "line").pts[0];
+        else p = e1 ? c.refs[0] : c.refs[1];
+        need(p);
+        add(id, [this, p, l, d](const V& X) { return std::abs(offLine(X, p, l)) - d; });
       } else {
         refs(c, 2);
         need(c.refs[0]);
@@ -366,7 +482,7 @@ private:
       });
     } else if (k == "radius" || k == "diameter") {
       refs(c, 1);
-      const SketchEntity& e = ent(c.refs[0], "circle arc");
+      const SketchEntity& e = ent(c.refs[0], "circle arc ellipse");
       double d = val(Quantity::Length) * (k == "diameter" ? 0.5 : 1.0);
       add(id, [this, e, d](const V& X) { return radius(X, e) - d; });
     } else if (k == "angle") {
@@ -513,7 +629,7 @@ Json Sketch::toJson() const {
   }
   for (auto& e : entities) {
     Json o = {{"id", e.id}, {"kind", e.kind}, {"pts", e.pts}};
-    if (e.kind == "circle") o["r"] = e.r;
+    if (e.kind == "circle" || e.kind == "ellipse") o["r"] = e.r;
     if (e.construction) o["construction"] = true;
     ents.push_back(o);
   }

@@ -431,6 +431,8 @@ func _run() -> void:
 	_check(absf(main.doc.mass_properties().volume - PI * 0.75) < 1e-4,
 		"a revolve about the sketch's Y axis makes a tube (%.4f m³)" % main.doc.mass_properties().volume)
 
+	await _sketch_tools(main)
+
 	# ---- challenge mode: copy the target, any orientation, any method ----
 	var list: Array = ClassDB.instantiate(&"CadPart").challenge_list()
 	_check(list.size() == 10 and list[0].name == "Block", "ten challenges, starting with the block")
@@ -477,6 +479,271 @@ func _run() -> void:
 
 	print("%d failures" % _failures)
 	quit(1 if _failures > 0 else 0)
+
+
+## Clears the open sketch, for the next tool check.
+func _blank(sk: Node) -> void:
+	sk.cancel_pending()
+	sk.sketch.points = []
+	sk.sketch.entities = []
+	sk.sketch.constraints = []
+	sk.construction_mode = false
+	sk.status = {ok = true, dof = 0, message = ""}
+	sk._index()
+
+
+## Id of the sketch point at uv, or "".
+func _pid(sk: Node, uv: Vector2) -> String:
+	for id in sk._pts:
+		if (sk._pts[id] as Vector2).distance_to(uv) < 1e-6:
+			return id
+	return ""
+
+
+func _clicks(sk: Node, tool_id: String, spots: Array) -> void:
+	sk.set_tool_id(tool_id)
+	for uv in spots:
+		sk.click_at(uv)
+
+
+func _ids(sk: Node, kind: String) -> Array:
+	var out := []
+	for e in sk.sketch.entities:
+		if e.kind == kind:
+			out.append(e.id)
+	return out
+
+
+func _has_constraint(sk: Node, kind: String) -> bool:
+	for c in sk.sketch.constraints:
+		if c.kind == kind:
+			return true
+	return false
+
+
+## Every drawing, editing and constraining tool in the sketcher, on a blank part's Top plane.
+func _sketch_tools(main: Node) -> void:
+	main._start_mode("new")
+	await _frames(2)
+	var top: Dictionary = main.doc.standard_plane("top")
+	main._on_sketch_requested(top.plane, top.name, "")
+	await _frames(2)
+	main.player.set_size(1.0)
+	var sk: Node = main.sketcher
+	var tree: Array = sk.wheel_tree()
+	_check(tree.size() == 7 and tree[0].name == "Lines" and tree[0].children.size() == 7 and tree[1].children.size() == 7,
+		"the sketch wheel groups Lines, Curves, Modify, Copy, Constrain, Construction and Delete")
+
+	# Points, and centre / 3-point rectangles.
+	_clicks(sk, "point", [Vector2(2, 2)])
+	_check(sk.sketch.points.size() == 1 and sk.sketch.entities.is_empty() and sk.status.ok and sk.status.dof == 2,
+		"Point places a stand-alone point with two degrees of freedom")
+	_clicks(sk, "erase", [Vector2(2, 2)])
+	_check(sk.sketch.points.is_empty(), "Delete removes a stand-alone point")
+	_clicks(sk, "rect_centre", [Vector2(0, 0), Vector2(0.5, 0.3)])
+	_check(_ids(sk, "line").size() == 6 and sk.count("line") == 6 and sk.status.ok and sk.status.dof == 2 and _has_constraint(sk, "midpoint"),
+		"a centre rectangle on the origin has construction diagonals and only width and height free (%s)" % sk.status.message)
+	_blank(sk)
+	_clicks(sk, "rect_3pt", [Vector2(0, 0), Vector2(1, 1), Vector2(0, 2)])
+	var p3: String = _pid(sk, Vector2(0, 2))
+	_check(sk.count("line") == 4 and sk.status.ok and sk.status.dof == 3 and p3 != "",
+		"a 3-point rectangle at an angle keeps square corners (angle, length and width free: %s)" % sk.status.message)
+	_blank(sk)
+
+	# Polygon and slot.
+	_clicks(sk, "polygon", [Vector2(0, 0), Vector2(1, 0)])
+	_check(sk.count("line") == 6 and sk.count("circle") == 1 and sk.status.ok and sk.status.dof == 2 and sk._fill.mesh != null,
+		"a hexagon on the origin is closed and leaves size and turn free (%s)" % sk.status.message)
+	sk.set_tool_id("polygon")
+	sk.press(false)
+	_check(sk.polygon_sides == 8, "the alternate button changes the number of sides")
+	_blank(sk)
+	_clicks(sk, "slot", [Vector2(0, 0), Vector2(1, 0), Vector2(0.5, 0.25)])
+	var area := 0.0
+	var tris: PackedVector2Array = main.doc.sketch_fill(sk.sketch)
+	for i in range(0, tris.size() - 2, 3):
+		area += absf((tris[i + 1] - tris[i]).cross(tris[i + 2] - tris[i])) / 2.0
+	_check(sk.count("arc") == 2 and sk.count("line") == 3 and sk.status.ok and sk.status.dof == 2 and absf(area - (0.5 + PI * 0.0625)) < 2e-3,
+		"a slot is two tangent arcs and two lines, closed (area %.4f, %s)" % [area, sk.status.message])
+	_blank(sk)
+
+	# Circles and arcs through points, tangent arcs, ellipses, splines.
+	_clicks(sk, "circle_3pt", [Vector2(1, 0), Vector2(0, 1), Vector2(-1, 0)])
+	_check(sk.count("circle") == 1 and absf(float(sk.sketch.entities[0].r) - 1.0) < 1e-6, "a 3-point circle passes through all three")
+	_blank(sk)
+	_clicks(sk, "arc_3pt", [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1)])
+	var arc3: Dictionary = sk.sketch.entities[0] if sk.count("arc") == 1 else {}
+	_check(not arc3.is_empty() and sk._p(arc3.pts[1]).is_equal_approx(Vector2(1, 0)),
+		"a 3-point arc runs from its start over the third point to its end")
+	_blank(sk)
+	_clicks(sk, "line", [Vector2(0, 0), Vector2(1, 0)])
+	sk.press(false)
+	_clicks(sk, "arc_tangent", [Vector2(1, 0), Vector2(1, 1)])
+	var tarc := _ids(sk, "arc")
+	_check(tarc.size() == 1 and _has_constraint(sk, "tangent") and sk.status.ok,
+		"a tangent arc leaves the line's end smoothly (%s)" % sk.status.message)
+	if tarc.size() == 1:
+		var ta: Dictionary = sk._ents[tarc[0]]
+		_check(sk._p(ta.pts[0]).distance_to(Vector2(1, 0.5)) < 1e-6, "and turns about the right centre")
+	sk.press(false)
+	_blank(sk)
+	_clicks(sk, "ellipse", [Vector2(0, 0), Vector2(0.5, 0), Vector2(0, 0.25)])
+	_check(sk.count("ellipse") == 1 and absf(float(sk.sketch.entities[0].r) - 0.25) < 1e-6 and sk._fill.mesh != null,
+		"an ellipse from its centre and two axes is a closed profile")
+	_blank(sk)
+	_clicks(sk, "spline", [Vector2(0, 0), Vector2(1, 1), Vector2(2, 0)])
+	sk.press(false)
+	_check(sk.count("spline") == 1 and sk._curves.size() == 1 and (sk._curves.values()[0] as PackedVector2Array).size() > 10,
+		"the alternate button finishes an open spline, drawn from the core's curve")
+	_clicks(sk, "spline", [Vector2(5, 0), Vector2(6, 1), Vector2(7, 0), Vector2(6, -1), Vector2(5, 0)])
+	_check(sk.count("spline") == 2 and sk._fill.mesh != null, "clicking the first point again closes a spline into a profile")
+	_blank(sk)
+
+	# Trim and extend.
+	_clicks(sk, "line", [Vector2(2, -1), Vector2(2, 1)])
+	sk.press(false)
+	_clicks(sk, "line", [Vector2(1, 0), Vector2(3, 0)])
+	sk.press(false)
+	_clicks(sk, "trim", [Vector2(2, 0.5)])
+	var v_top := _pid(sk, Vector2(2, 1))
+	var cut := _pid(sk, Vector2(2, 0))
+	_check(sk.count("line") == 2 and v_top == "" and cut != "" and _has_constraint(sk, "point_on_line") and sk.status.ok,
+		"Trim cuts a line back to where it crosses another (%s)" % sk.status.message)
+	_clicks(sk, "trim", [Vector2(2.5, 0)])
+	_check(sk.count("line") == 2 and _pid(sk, Vector2(3, 0)) == "" and sk.status.ok, "and the other back to that corner")
+	_blank(sk)
+	_clicks(sk, "circle", [Vector2(5, 0), Vector2(6, 0)])
+	_clicks(sk, "line", [Vector2(5, -2), Vector2(5, 2)])
+	sk.press(false)
+	_clicks(sk, "trim", [Vector2(6, 0)])
+	var half: Array = _ids(sk, "arc")
+	_check(sk.count("circle") == 0 and half.size() == 1 and sk.status.ok, "Trim turns a circle into the arc that is left")
+	if half.size() == 1:
+		_check(absf(sk._p(sk._ents[half[0]].pts[1]).y - 1.0) < 1e-6, "keeping the half away from the crosshair")
+	_blank(sk)
+	_clicks(sk, "line", [Vector2(0, 3), Vector2(1, 3)])
+	sk.press(false)
+	_clicks(sk, "line", [Vector2(2, 2.5), Vector2(2, 3.5)])
+	sk.press(false)
+	_clicks(sk, "extend", [Vector2(0.9, 3)])
+	_check(_pid(sk, Vector2(2, 3)) != "" and _pid(sk, Vector2(1, 3)) == "" and sk.status.ok, "Extend runs a line on to the next geometry")
+	_blank(sk)
+
+	# Fillet and chamfer corners.
+	_clicks(sk, "rect", [Vector2(10, 10), Vector2(11, 11)])
+	var dof_before: int = int(sk.status.dof)
+	_check(sk.fillet_corner(_pid(sk, Vector2(11, 10)), 0.2), "Fillet rounds a rectangle's corner")
+	_check(sk.count("arc") == 1 and sk.count("line") == 4 and int(sk.status.dof) == dof_before and _pid(sk, Vector2(11, 10)) == "",
+		"with tangent ends and a radius dimension, adding no freedom (%s)" % sk.status.message)
+	_check(sk.chamfer_corner(_pid(sk, Vector2(10, 11)), 0.1) and sk.count("line") == 5 and _pid(sk, Vector2(10, 11)) != "",
+		"Chamfer bevels a corner, keeping the sharp corner as a reference point")
+	_blank(sk)
+
+	# Offset, mirror, move and copy, patterns.
+	_clicks(sk, "rect", [Vector2(20, 0), Vector2(21, 1)])
+	var edge: String = _ids(sk, "line")[0]
+	_check(sk.offset_chain(edge, Vector2(20.5, 0.5), 0.1) and sk.count("line") == 8 and _pid(sk, Vector2(20.1, 0.1)) != "" and _pid(sk, Vector2(20.9, 0.9)) != "",
+		"Offset copies the whole rectangle 0.1 m inside (%s)" % sk.status.message)
+	_blank(sk)
+	sk.construction_mode = true
+	_clicks(sk, "line", [Vector2(30, -1), Vector2(30, 1)])
+	sk.press(false)
+	sk.construction_mode = false
+	var axis: String = _ids(sk, "line")[0]
+	_clicks(sk, "line", [Vector2(31, 0), Vector2(32, 0.5)])
+	sk.press(false)
+	var src: String = _ids(sk, "line")[1]
+	_check(sk.mirror_chain(src, axis) and _pid(sk, Vector2(29, 0)) != "" and _pid(sk, Vector2(28, 0.5)) != "" and _has_constraint(sk, "symmetric"),
+		"Mirror copies geometry across a centreline, held symmetric")
+	_blank(sk)
+	_clicks(sk, "line", [Vector2(40, 0), Vector2(41, 0)])
+	sk.press(false)
+	var mv: String = _ids(sk, "line")[0]
+	_check(sk.move_geometry("entity", mv, Vector2(0, 1), false) and _pid(sk, Vector2(40, 1)) != "" and _pid(sk, Vector2(40, 0)) == "",
+		"Move slides a line")
+	_check(sk.move_geometry("entity", mv, Vector2(0, 1), true) and sk.count("line") == 2 and _pid(sk, Vector2(41, 2)) != "",
+		"and Copy leaves the original where it was")
+	_blank(sk)
+	_clicks(sk, "line", [Vector2(40, 0), Vector2(41, 0.5)])
+	sk.press(false)
+	var rl: String = _ids(sk, "line")[0]
+	_check(sk.rotate_geometry(rl, Vector2(40, 0), PI / 2.0) and _pid(sk, Vector2(39.5, 1)) != "", "Rotate turns geometry about a centre")
+	_check(sk.scale_geometry(rl, Vector2(40, 0), 2.0) and _pid(sk, Vector2(39, 2)) != "", "and Scale grows it about one")
+	_blank(sk)
+	# Snap inference: a line started at another's midpoint, ended on a third line.
+	_clicks(sk, "line", [Vector2(0, 0), Vector2(2, 0)])
+	sk.press(false)
+	_clicks(sk, "line", [Vector2(3, -1), Vector2(3, 1)])
+	sk.press(false)
+	_clicks(sk, "line", [Vector2(1, 0), Vector2(3, 0.5)])
+	sk.press(false)
+	_check(_has_constraint(sk, "midpoint") and _has_constraint(sk, "point_on_line") and sk.status.ok,
+		"points placed on a line's middle, or on a line, stay there")
+	_blank(sk)
+	_clicks(sk, "circle", [Vector2(50, 0), Vector2(50.1, 0)])
+	var ring: String = _ids(sk, "circle")[0]
+	_check(sk.pattern_chain(ring, true, Vector2(51, 0), 4) and sk.count("circle") == 4 and _pid(sk, Vector2(52, 0)) != "",
+		"a circular pattern of four spreads copies round the centre")
+	_check(sk.pattern_chain(ring, false, Vector2(0, 0.5), 3) and sk.count("circle") == 6 and _pid(sk, Vector2(50, 1)) != "",
+		"a linear pattern of three steps copies along")
+	_blank(sk)
+
+	# New relations and dimensions, picked with the crosshair.
+	_clicks(sk, "circle", [Vector2(0, 0), Vector2(1, 0)])
+	_clicks(sk, "circle", [Vector2(0.25, 0.25), Vector2(0.5, 0.25)])
+	sk.set_tool_id("relation")
+	sk.set_option("relation", "concentric")
+	sk.click_at(Vector2(1, 0))
+	sk.click_at(Vector2(0.5, 0.25))
+	var kc: Array = _ids(sk, "circle")
+	_check(_has_constraint(sk, "concentric") and sk._p(sk._ents[kc[1]].pts[0]).length() < 1e-6, "Concentric pulls the second circle's centre onto the first")
+	_blank(sk)
+	_clicks(sk, "line", [Vector2(0, 0), Vector2(1, 0)])
+	sk.press(false)
+	_clicks(sk, "line", [Vector2(0, 0), Vector2(1, 1)])
+	sk.press(false)
+	sk.set_tool_id("dimension")
+	sk.click_at(Vector2(0.5, 0))
+	sk.click_at(Vector2(0.5, 0.5))
+	await _frames(1)
+	_check(main.numpad.visible, "two lines picked with Dimension ask for the angle")
+	for k in ["3", "0", "OK"]:
+		main.numpad._key(k)
+	await _frames(1)
+	var ang := 0.0
+	for c in sk.sketch.constraints:
+		if c.kind == "angle":
+			ang = float(c.value)
+	_check(absf(ang - deg_to_rad(30.0)) < 1e-9 and sk.status.ok, "an angle dimension of 30° turns the second line")
+	sk.click_at(Vector2(0.5, 0))
+	sk.click_at(Vector2(0.5, -0.5))
+	await _frames(1)
+	_check(main.numpad.visible, "a line, then empty space, asks for its length")
+	main.numpad.close()
+	_blank(sk)
+	_clicks(sk, "point", [Vector2(0.5, 0.75)])
+	_clicks(sk, "line", [Vector2(0, 0), Vector2(1, 0)])
+	sk.press(false)
+	sk.set_tool_id("dimension")
+	sk.click_at(Vector2(0.5, 0.75))
+	sk.click_at(Vector2(0.25, 0))
+	await _frames(1)
+	main.numpad.close()
+	_check(sk.set_dimension("500", "distance", [_pid(sk, Vector2(0.5, 0.75)), _ids(sk, "line")[0]]) and sk.status.ok and _pid(sk, Vector2(0.5, 0.5)) != "",
+		"a point-to-line distance holds the point square off the line")
+	sk.discard()
+	await _frames(2)
+
+	# Convert edges: a box's top face copied onto a Top-plane sketch.
+	main.doc.add_primitive("box", Vector3(0, 0, 0), {w = 0.4, d = 0.2, h = 0.1}, "add")
+	main._on_model_changed()
+	var hit: Dictionary = main.doc.pick(Vector3(0.05, 5, -0.02), Vector3(0, -1, 0), 20.0)
+	main._on_sketch_requested(top.plane, top.name, "")
+	await _frames(2)
+	_check(not hit.is_empty() and sk.convert_face(int(hit.body), int(hit.face)) and sk.count("line") == 4 and sk.defined(),
+		"Convert edges copies a face's outline in as fixed, fully defined lines")
+	sk.discard()
+	await _frames(2)
 
 
 func _frames(n: int) -> void:

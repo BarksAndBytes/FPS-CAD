@@ -1,7 +1,8 @@
 # FPS-CAD compared with professional CAD
 
 A capability-by-capability review of SOLIDWORKS, Autodesk Fusion and Autodesk Inventor against
-FPS-CAD as of build 39 (October 2026). It is a planning document: nothing here changes the code.
+FPS-CAD (first written at build 39, October 2026; the sketching section is updated for the
+November 2026 sketch tools). It is a planning document: nothing here changes the code.
 
 **Versions reviewed:** SOLIDWORKS 2026; Autodesk Fusion through its October 2026 update;
 Autodesk Inventor 2026, plus what Autodesk lists as new for Inventor 2027. Sources are at the end.
@@ -24,7 +25,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 
 | Area | Typical professional depth | FPS-CAD today | Coverage |
 | --- | --- | --- | --- |
-| Sketching | ~60 entity, edit and constraint tools | 6 drawing tools, dimensions, 8 relations in the UI (17 in the solver), construction geometry | Low–medium |
+| Sketching | ~60 entity, edit and constraint tools | 14 drawing tools (incl. polygon, slot, ellipse, spline), trim/extend/fillet/chamfer/offset/convert, move/copy/rotate/scale/mirror/patterns, smart dimensions, 12 relations, snap inference | Medium–high |
 | Part features | ~40 sketched and applied features | Extrude, revolve, sweep, loft, push/pull, primitives; fillet/chamfer in the core | Low–medium |
 | Patterns and mirror | Linear, circular, curve, sketch, table, fill; mirror | None | None |
 | Reference geometry | Planes, axes, points, coordinate systems | Standard planes and planar faces only | Low |
@@ -58,7 +59,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Sketch picture / canvas | Sketch Picture / Canvas / Image | ✗ | Tracing reference images |
 | Sketch blocks | Blocks / — / Sketch Blocks | ✗ | |
 | Grid and snapping | All three | ✓ | Snaps to points, origin, grid; snap step follows zoom |
-| Inferencing (snap to midpoints, alignment lines, tangency) | All three | ◐ | Points, origin, grid, and horizontal/vertical alignment with the previous point |
+| Inferencing (snap to midpoints, alignment lines, tangency) | All three | ◐ | Points, origin, midpoints and onto lines and curves (adding midpoint / point-on relations), grid, horizontal/vertical alignment with the previous point; no tangency inference |
 
 ### 1.2 Sketch entities
 
@@ -68,26 +69,33 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Centreline / construction line | Centerline / construction toggle / construction style | ✓ | Construction mode (LB) for every drawing tool, dashed |
 | Midpoint line | SW | ✗ | |
 | Rectangle: corner | All three | ✓ | Adds horizontal/vertical relations |
-| Rectangle: centre, 3-point, parallelogram | All three | ✗ | |
+| Rectangle: centre, 3-point | All three | ✓ | Centre rectangle with construction diagonals; 3-point at any angle |
+| Rectangle: parallelogram | SW, Inventor | ✗ | |
 | Circle: centre-radius | All three | ✓ | |
-| Circle: perimeter / 2-point / 3-point / tangent | All three | ✗ | |
+| Circle: 3-point | All three | ✓ | Existing points it passes through stay on it |
+| Circle: 2-point, tangent to three | All three | ✗ | |
 | Arc: centre-point | All three | ✓ | Takes the shorter way round |
-| Arc: tangent, 3-point | All three | ✗ | |
-| Slot (straight, centre-point, arc) | All three (Inventor added a slot feature in 2027) | ✗ | |
-| Polygon | All three | ✗ | |
-| Ellipse, partial ellipse | All three | ✗ | |
-| Spline (fit point, control point, style spline) | All three | ✗ | Needed for organic profiles |
+| Arc: tangent, 3-point | All three | ✓ | Tangent arc carries on from a line or arc end and chains |
+| Slot: straight centre-to-centre | All three (Inventor added a slot feature in 2027) | ✓ | Tangent lines and equal arcs, construction centreline |
+| Slot: overall, centre-point, arc | All three | ✗ | |
+| Polygon | All three | ✓ | 3–12 sides, inscribed in a construction circle, equal sides |
+| Ellipse | All three | ✓ | Centre, axis end, second semi-axis |
+| Partial ellipse | All three | ✗ | |
+| Spline: fit point | All three | ✓ | Open or closed; B-spline through the points |
+| Spline: control point / style spline, tangency handles | All three | ✗ | |
 | Conic, parabola | SW, Fusion (conic curve) | ✗ | |
-| Sketch fillet and chamfer | All three | ✗ | |
-| Point | All three | ◐ | Points exist as line ends and centres; no stand-alone point tool |
+| Sketch fillet and chamfer | All three | ✓ | Line-line corners; virtual sharp kept when referenced |
+| Point | All three | ✓ | Stand-alone points |
 | Text | All three | ✗ | Engraving and embossing |
-| Offset entities | Offset Entities / Offset / Offset | ✗ | High value |
-| Project / convert edges into the sketch | Convert Entities / Project / Project Geometry | ✗ | High value: sketching on faces relies on it |
+| Offset entities | Offset Entities / Offset / Offset | ✓ | Whole chains of lines and arcs, circles; parallel + distance held |
+| Project / convert edges into the sketch | Convert Entities / Project / Project Geometry | ◐ | A face's edges as fixed geometry; not linked to the model (they do not update) |
 | Intersection curve | All three | ✗ | |
-| Trim, extend, split, break | All three | ✗ | Delete is the only edit today |
-| Mirror entities | All three | ✗ | |
-| Sketch patterns (linear, circular) | All three | ✗ | |
-| Move, copy, rotate, scale, stretch | All three | ✗ | Dragging points is not yet possible either |
+| Trim, extend | All three | ✓ | Lines, arcs, circles; new ends stay on the crossing geometry |
+| Split, break | All three | ✗ | |
+| Mirror entities | All three | ✓ | Held symmetric about the mirror line |
+| Sketch patterns (linear, circular) | All three | ◐ | Copies are independent (no pattern relation or count to edit later) |
+| Move, copy, rotate, scale | All three | ✓ | Solved against existing relations; refused if they forbid it |
+| Stretch, live dragging | All three | ✗ | Move is pick-then-place, not a live drag |
 
 ### 1.3 Relations (constraints)
 
@@ -97,15 +105,16 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Coincident | All three | ✓ | Point on point, point on line, point on circle |
 | Parallel, perpendicular | All three | ✓ | |
 | Equal | All three | ✓ | Lines, or circles and arcs |
-| Tangent | All three | ◐ | Line to circle/arc only; no arc-to-arc |
+| Tangent | All three | ✓ | Line–circle/arc and circle/arc–circle/arc, inside or outside; no spline or ellipse tangency |
 | Fix / lock | Fix / Fix / Fix | ✓ | |
-| Midpoint | All three | ◐ | In the solver; no UI |
-| Concentric, coradial | All three | ✗ | |
-| Collinear | All three | ✗ | |
-| Symmetric | All three | ✗ | |
-| Curvature (G2), smooth | SW, Fusion, Inventor | ✗ | Needs splines |
+| Midpoint | All three | ✓ | |
+| Concentric | All three | ✓ | Circles, arcs, ellipses |
+| Coradial | SW | ✗ | Concentric plus equal does the same |
+| Collinear | All three | ✓ | |
+| Symmetric | All three | ✓ | Two points about a line |
+| Curvature (G2), smooth | SW, Fusion, Inventor | ✗ | Splines exist now; needs spline end conditions |
 | Pierce (to a 3D curve) | SW | ✗ | |
-| Automatic relations while drawing | All three | ◐ | Horizontal and vertical only |
+| Automatic relations while drawing | All three | ◐ | Horizontal, vertical, midpoint, point-on, tangent (tangent arc, fillet, slot), square corners (rectangles) |
 | Show / delete relations | Display/Delete Relations / show constraints / Show Constraints | ◐ | Delete tool's alternate action removes them; no on-screen glyphs |
 
 ### 1.4 Dimensions and sketch status
@@ -114,7 +123,8 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | --- | --- | --- | --- |
 | Linear, aligned, horizontal, vertical | All three | ✓ | |
 | Radius, diameter | All three | ✓ | |
-| Angular dimension | All three | ◐ | In the solver; no UI |
+| Angular dimension | All three | ✓ | Pick two lines |
+| Point-to-line and parallel-line distance | All three | ✓ | |
 | Ordinate / baseline dimensions | All three | ✗ | |
 | Driven (reference) dimensions | All three | ✗ | |
 | Dimensions as expressions | Equations / parameters / parameters | ✓ | `width / 2`, `25 mm`, part variables |
@@ -465,13 +475,13 @@ possible, then what suits a first-person game.
    - Fillet and chamfer with edge picking
    - Shell and draft
    - Extrude end conditions (up to face/next) and two-direction extrudes
-2. **Sketching depth**
-   - Project/convert edges and offset entities
-   - Trim and extend
-   - Slots, polygons and centre/3-point rectangles and circles
-   - Splines
-   - Angle and midpoint in the UI
-   - Dragging points
+2. **Sketching depth** (largely done in November 2026; what is left)
+   - Text, for engraving and embossing
+   - Linked projection (converted edges that follow the model)
+   - Pattern relations (editable count and spacing)
+   - Live dragging, split, stretch
+   - Spline tangency and curvature (G2) end conditions
+   - Construction planes for sketching off the model (§2)
 3. **Reference geometry**: offset/angled planes, axes, points.
 4. **History control**: rollback, reorder, suppress in the UI.
 5. **Inspection**: section views (walk inside a cut model), measure angle/radius/area, mass

@@ -542,6 +542,43 @@ PackedVector2Array CadPart::sketch_fill(const Dictionary& sketch) const {
   return out;
 }
 
+Array CadPart::sketch_curves(const Dictionary& sketch) const {
+  Array out;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    for (auto& c : fpcad::sketchCurves(s)) {
+      PackedVector2Array pts;
+      for (auto& q : c.points) pts.push_back(Vector2(float(q[0]), float(q[1])));
+      Dictionary d;
+      d["id"] = str(c.entityId);
+      d["construction"] = c.construction;
+      d["points"] = pts;
+      out.push_back(d);
+    }
+  } catch (const std::exception&) {
+  }
+  return out;
+}
+
+Array CadPart::project_face(int body, int face, const Dictionary& plane) const {
+  Array out;
+  try {
+    fpcad::SketchPlane pl = fpcad::SketchPlane::fromJson(variantToJson(plane));
+    for (auto& c : model_->projectFace(body, face, pl)) {
+      PackedVector2Array pts;
+      for (auto& q : c.pts) pts.push_back(Vector2(float(q[0]), float(q[1])));
+      Dictionary d;
+      d["kind"] = str(c.kind);
+      d["pts"] = pts;
+      d["r"] = c.r;
+      d["closed"] = c.closed;
+      out.push_back(d);
+    }
+  } catch (const std::exception&) {
+  }
+  return out;
+}
+
 String CadPart::add_sketch(const Dictionary& sketch) {
   fpcad::Feature f;
   f.type = "sketch";
@@ -765,6 +802,8 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("plane_uv", "plane", "world"), &CadPart::plane_uv);
   ClassDB::bind_method(D_METHOD("solve_sketch", "sketch"), &CadPart::solve_sketch);
   ClassDB::bind_method(D_METHOD("sketch_fill", "sketch"), &CadPart::sketch_fill);
+  ClassDB::bind_method(D_METHOD("sketch_curves", "sketch"), &CadPart::sketch_curves);
+  ClassDB::bind_method(D_METHOD("project_face", "body", "face", "plane"), &CadPart::project_face);
   ClassDB::bind_method(D_METHOD("add_sketch", "sketch"), &CadPart::add_sketch);
   ClassDB::bind_method(D_METHOD("set_sketch", "id", "sketch"), &CadPart::set_sketch);
   ClassDB::bind_method(D_METHOD("get_sketch", "id"), &CadPart::get_sketch);
