@@ -9,6 +9,10 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <BRep_Tool.hxx>
+#include <Poly_Triangulation.hxx>
+#include <TopLoc_Location.hxx>
 #include <ElSLib.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS.hxx>
@@ -308,6 +312,41 @@ SketchGeometry buildSketchGeometry(const Sketch& s) {
     }
   }
   return g;
+}
+
+std::vector<std::array<double, 2>> regionTriangles(const SketchGeometry& g, const SketchPlane& plane) {
+  std::vector<std::array<double, 2>> out;
+  double size = 0;
+  for (auto& o : g.regionOutlines)
+    for (auto& q : o) size = std::max({size, std::abs(q[0]), std::abs(q[1])});
+  double deflection = std::max(size * 0.002, 1e-7);
+  for (const TopoDS_Face& face : g.regions) {
+    try {
+      BRepMesh_IncrementalMesh mesher(face, deflection, false, 0.25);
+      TopLoc_Location loc;
+      Handle(Poly_Triangulation) tri = BRep_Tool::Triangulation(face, loc);
+      if (tri.IsNull()) continue;
+      for (int t = 1; t <= tri->NbTriangles(); ++t) {
+        int n[3];
+        tri->Triangle(t).Get(n[0], n[1], n[2]);
+        for (int k : n) {
+          gp_Pnt p = tri->Node(k).Transformed(loc.Transformation());
+          out.push_back(plane.toPlane({p.X(), p.Y(), p.Z()}));
+        }
+      }
+    } catch (const Standard_Failure&) {
+      // A face that will not mesh is simply left unshaded.
+    }
+  }
+  return out;
+}
+
+std::vector<std::array<double, 2>> sketchFill(const Sketch& s) {
+  try {
+    return regionTriangles(buildSketchGeometry(s), s.plane);
+  } catch (...) {
+    return {};
+  }
 }
 
 }  // namespace fpcad

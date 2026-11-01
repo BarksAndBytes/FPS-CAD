@@ -6,6 +6,7 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_vector2_array.hpp>
 
 #include "convert.h"
 #include "fpcad/Challenges.h"
@@ -531,6 +532,16 @@ Dictionary CadPart::solve_sketch(const Dictionary& sketch) const {
   return d;
 }
 
+PackedVector2Array CadPart::sketch_fill(const Dictionary& sketch) const {
+  PackedVector2Array out;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    for (auto& q : fpcad::sketchFill(s)) out.push_back(Vector2(float(q[0]), float(q[1])));
+  } catch (const std::exception&) {
+  }
+  return out;
+}
+
 String CadPart::add_sketch(const Dictionary& sketch) {
   fpcad::Feature f;
   f.type = "sketch";
@@ -572,6 +583,7 @@ Array CadPart::sketch_views() const {
     d["message"] = str(v.message);
     d["segments"] = points(v.segments);
     d["construction"] = points(v.constructionSegments);
+    d["fill"] = points(v.fill);
     out.push_back(d);
   }
   return out;
@@ -752,6 +764,7 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("plane_point", "plane", "uv"), &CadPart::plane_point);
   ClassDB::bind_method(D_METHOD("plane_uv", "plane", "world"), &CadPart::plane_uv);
   ClassDB::bind_method(D_METHOD("solve_sketch", "sketch"), &CadPart::solve_sketch);
+  ClassDB::bind_method(D_METHOD("sketch_fill", "sketch"), &CadPart::sketch_fill);
   ClassDB::bind_method(D_METHOD("add_sketch", "sketch"), &CadPart::add_sketch);
   ClassDB::bind_method(D_METHOD("set_sketch", "id", "sketch"), &CadPart::set_sketch);
   ClassDB::bind_method(D_METHOD("get_sketch", "id"), &CadPart::get_sketch);

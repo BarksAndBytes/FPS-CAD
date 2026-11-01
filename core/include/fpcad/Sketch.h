@@ -101,4 +101,8 @@ using SketchValueFn = std::function<double(const Json& value, Quantity q)>;
 // as possible to where they started. On failure the sketch is left at the best attempt.
 SolveResult solveSketch(Sketch& s, const SketchValueFn& value);
 
+// The sketch's closed regions (construction geometry excluded, holes cut out) as triangles in
+// plane coordinates, three points each, for shading. Empty when nothing is closed.
+std::vector<std::array<double, 2>> sketchFill(const Sketch& s);
+
 }  // namespace fpcad

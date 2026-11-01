@@ -14,21 +14,27 @@ signal changed
 
 const Units := preload("res://scripts/units.gd")
 const TOOLS := [
-	{id = "line", name = "Line", pri = "place point (chains)", alt = "end the chain", opt = ["solid", "construction"]},
-	{id = "rect", name = "Rectangle", pri = "corner, then opposite corner", alt = "cancel", opt = ["solid", "construction"]},
-	{id = "circle", name = "Circle", pri = "centre, then edge", alt = "cancel", opt = ["solid", "construction"]},
-	{id = "arc", name = "Arc", pri = "centre, start, end", alt = "cancel", opt = ["counter-clockwise", "clockwise"]},
+	{id = "line", name = "Line", pri = "place point (chains)", alt = "end the chain", opt = []},
+	{id = "rect", name = "Rectangle", pri = "corner, then opposite corner", alt = "cancel", opt = []},
+	{id = "circle", name = "Circle", pri = "centre, then edge", alt = "cancel", opt = []},
+	{id = "arc", name = "Arc", pri = "centre, start, end (the shorter way round)", alt = "cancel", opt = []},
+	{id = "construct", name = "Construction", pri = "switch geometry to construction and back", alt = "cancel", opt = []},
 	{id = "dimension", name = "Dimension", pri = "line, circle, arc or two points", alt = "cancel", opt = ["aligned", "horizontal", "vertical"]},
 	{id = "relation", name = "Relation", pri = "pick geometry to relate", alt = "cancel",
 		opt = ["horizontal", "vertical", "coincident", "parallel", "perpendicular", "equal", "tangent", "fix"]},
 	{id = "erase", name = "Delete", pri = "delete geometry", alt = "remove its relations and dimensions", opt = []},
 ]
-const COLOR_FREE := Color("7cc4ff")
-const COLOR_DEFINED := Color("f2f5f8")
-const COLOR_CONSTRUCTION := Color("8f9bab")
-const COLOR_ACTIVE := Color("ff8a3d")
+const FatLines := preload("res://scripts/fat_lines.gd")
+# Colours that read on the white room and on parts: blue while geometry can still move, near
+# black once fully defined, grey (dashed) for construction, orange for what is being worked on.
+const COLOR_FREE := Color("1f6fd1")
+const COLOR_DEFINED := Color("1b2129")
+const COLOR_CONSTRUCTION := Color("7d8794")
+const COLOR_ACTIVE := Color("ff7a1f")
 const COLOR_DIM := Color("ffd166")
-const COLOR_GRID := Color(0.78, 0.85, 0.93, 0.18)
+const COLOR_GRID := Color(0.22, 0.28, 0.36, 0.22)
+const FAT := {"1f6fd1": 3.0, "1b2129": 3.0, "7d8794": 2.0, "ff7a1f": 3.5}  # colour -> on-screen width
+const DRAW_TOOLS := ["line", "rect", "circle", "arc"]
 const KIND_NAMES := {line = "Line", circle = "Circle", arc = "Arc"}
 
 var game: Node  # main.gd
@@ -38,6 +44,9 @@ var edit_id := ""
 var status := {ok = true, dof = 0, message = ""}
 var index := 0
 var options := {}
+## New lines, rectangles, circles and arcs are construction geometry: dashed, for reference
+## (centrelines, revolve axes), never part of a closed profile. LB toggles it while drawing.
+var construction_mode := false
 
 var _o := Vector3.ZERO
 var _n := Vector3.UP
@@ -58,6 +67,10 @@ var _hover := {}
 var _lines := MeshInstance3D.new()
 var _grid := MeshInstance3D.new()
 var _labels: Array[Label3D] = []
+var _fat := {}        # colour -> this frame's line list
+var _fat_nodes := {}  # colour -> MeshInstance3D drawing it
+var _fill := MeshInstance3D.new()  # closed profiles, shaded
+var _fill_mat := StandardMaterial3D.new()
 var _pose := {}  # where the player was before the sketch, restored when it closes
 
 
@@ -80,6 +93,14 @@ func _ready() -> void:
 	_grid.material_override = grid_mat
 	_grid.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_grid)
+	_fill_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_fill_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_fill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_fill_mat.no_depth_test = true
+	_fill_mat.render_priority = 15
+	_fill.material_override = _fill_mat
+	_fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_fill)
 	visible = false
 
 
@@ -174,7 +195,7 @@ func cancel_pending() -> void:
 
 ## Sketch tools grouped for the tool wheel (values are TOOLS indices).
 const WHEEL := [
-	["Draw", "Lines, rectangles, circles and arcs", ["line", "rect", "circle", "arc"]],
+	["Draw", "Lines, rectangles, circles, arcs, and construction geometry", ["line", "rect", "circle", "arc", "construct"]],
 	["Constrain", "Dimensions and relations that hold the sketch", ["dimension", "relation"]],
 	"erase",
 ]
@@ -205,6 +226,8 @@ func tool() -> Dictionary:
 
 
 func option() -> String:
+	if tool().id in DRAW_TOOLS:
+		return "construction" if construction_mode else "solid"
 	var opts: Array = tool().opt
 	return "" if opts.is_empty() else opts[options.get(tool().id, 0)]
 
@@ -223,6 +246,10 @@ func set_tool_id(id: String) -> void:
 
 
 func cycle_option() -> void:
+	if tool().id in DRAW_TOOLS:
+		construction_mode = not construction_mode
+		game.hud.toast("Construction geometry " + ("on: dashed, never part of a profile" if construction_mode else "off"))
+		return
 	var opts: Array = tool().opt
 	if opts.is_empty():
 		game.hud.toast("%s has no options" % tool().name)
@@ -328,6 +355,8 @@ func press(primary: bool) -> void:
 			_relation(primary)
 		"erase":
 			_erase(primary)
+		"construct":
+			_construct(primary)
 
 
 # ---------- drawing tools ----------
@@ -426,8 +455,11 @@ func _arc(primary: bool, spot: Dictionary) -> void:
 	var idc := _point(s, _pending[0])
 	var ids := _point(s, _pending[1])
 	var ide := _point(s, end_spot)
-	var pts := [idc, ids, ide] if option() != "clockwise" else [idc, ide, ids]
-	s.entities.append({id = _new_id(s, "a"), kind = "arc", pts = pts})
+	# Arcs run counter-clockwise from their start to their end; take the shorter way round.
+	var ccw := fposmod((end_spot.uv - cu).angle() - (su - cu).angle(), TAU) <= PI
+	var pts := [idc, ids, ide] if ccw else [idc, ide, ids]
+	var arc := _entity(_new_id(s, "a"), "arc", pts)
+	s.entities.append(arc)
 	if _commit(s, "Arc"):
 		_pending.clear()
 
@@ -560,6 +592,22 @@ func _relation(primary: bool) -> void:
 	_commit(s, kind.capitalize())
 
 
+func _construct(primary: bool) -> void:
+	if not primary:
+		return
+	var t := _hover
+	if t.is_empty() or t.kind != "entity":
+		game.hud.toast("Aim at a line, circle or arc")
+		return
+	var s: Dictionary = sketch.duplicate(true)
+	for e in s.entities:
+		if e.id == t.id:
+			e.construction = not e.get("construction", false)
+			if _commit(s, "Construction"):
+				game.hud.toast(("%s is construction now" if e.construction else "%s is normal geometry again") % KIND_NAMES.get(e.kind, "Geometry"))
+			return
+
+
 func _erase(primary: bool) -> void:
 	var t := _hover
 	if t.is_empty() or t.id == "o":
@@ -651,6 +699,25 @@ func _index() -> void:
 	_ents = {}
 	for e in sketch.entities:
 		_ents[e.id] = e
+	_update_fill()
+
+
+## Shades every closed profile (construction geometry never closes one).
+func _update_fill() -> void:
+	var tris: PackedVector2Array = game.doc.sketch_fill(sketch) if game != null and game.doc != null else PackedVector2Array()
+	if tris.size() < 3:
+		_fill.mesh = null
+		return
+	var verts := PackedVector3Array()
+	verts.resize(tris.size())
+	for i in tris.size():
+		verts[i] = _w(tris[i])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_fill.mesh = m
 
 
 func _new_id(s: Dictionary, prefix: String) -> String:
@@ -675,7 +742,7 @@ func _point(s: Dictionary, spot: Dictionary) -> String:
 
 
 func _entity(id: String, kind: String, pts: Array) -> Dictionary:
-	return {id = id, kind = kind, pts = pts, construction = option() == "construction"}
+	return {id = id, kind = kind, pts = pts, construction = construction_mode}
 
 
 func _auto_hv(s: Dictionary, line_id: String, a: Vector2, b: Vector2) -> void:
@@ -705,6 +772,8 @@ func _prefer_points() -> bool:
 	match tool().id:
 		"dimension":
 			return true
+		"construct":
+			return false
 		"relation":
 			return option() == "fix" or (option() == "coincident" and _picks.is_empty())
 	return false
@@ -794,7 +863,9 @@ func _redraw() -> void:
 	var im: ImmediateMesh = _lines.mesh
 	im.clear_surfaces()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	_fat.clear()
 	var base := COLOR_DEFINED if defined() else COLOR_FREE
+	_fill_mat.albedo_color = Color(base, 0.16) if defined() else Color(base, 0.2)
 	var picked := {}
 	for p in _picks:
 		picked[p.id] = true
@@ -820,6 +891,15 @@ func _redraw() -> void:
 			_strip(im, PackedVector2Array([_cursor + Vector2(-k, -k), _cursor + Vector2(k, -k),
 				_cursor + Vector2(k, k), _cursor + Vector2(-k, k), _cursor + Vector2(-k, -k)]), COLOR_ACTIVE, false)
 	im.surface_end()
+	for key in FAT:
+		var node: MeshInstance3D = _fat_nodes.get(key)
+		if node == null:
+			node = MeshInstance3D.new()
+			node.material_override = FatLines.material(Color(key), FAT[key] * preload("res://scripts/ui_theme.gd").ui_scale, true)
+			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			add_child(node)
+			_fat_nodes[key] = node
+		node.mesh = FatLines.mesh(PackedVector3Array(_fat.get(key, [])))
 	_draw_grid()
 	_draw_labels()
 
@@ -830,26 +910,34 @@ func _rubber_band(im: ImmediateMesh) -> void:
 	var a: Vector2 = _pending[0].uv
 	match tool().id:
 		"line":
-			_seg(im, a, _cursor, COLOR_ACTIVE)
+			_strip(im, PackedVector2Array([a, _cursor]), COLOR_ACTIVE, construction_mode)
 		"rect":
-			_strip(im, PackedVector2Array([a, Vector2(_cursor.x, a.y), _cursor, Vector2(a.x, _cursor.y), a]), COLOR_ACTIVE, false)
+			_strip(im, PackedVector2Array([a, Vector2(_cursor.x, a.y), _cursor, Vector2(a.x, _cursor.y), a]), COLOR_ACTIVE, construction_mode)
 		"circle":
 			var r := _snapped_radius(a, {id = _snap_id, uv = _cursor})
 			var pts := PackedVector2Array()
 			for i in 65:
 				pts.append(a + Vector2.from_angle(TAU * i / 64.0) * r)
-			_strip(im, pts, COLOR_ACTIVE, false)
+			_strip(im, pts, COLOR_ACTIVE, construction_mode)
 		"arc":
 			if _pending.size() == 1:
 				_seg(im, a, _cursor, COLOR_ACTIVE)
 			else:
 				var s: Vector2 = _pending[1].uv
 				var end_angle := (_cursor - a).angle()
-				var pts := _arc_points(a, s, end_angle) if option() != "clockwise" else _arc_points(a, a + Vector2.from_angle(end_angle) * a.distance_to(s), (s - a).angle())
-				_strip(im, pts, COLOR_ACTIVE, false)
+				var ccw := fposmod(end_angle - (s - a).angle(), TAU) <= PI
+				var pts := _arc_points(a, s, end_angle) if ccw else _arc_points(a, a + Vector2.from_angle(end_angle) * a.distance_to(s), (s - a).angle())
+				_strip(im, pts, COLOR_ACTIVE, construction_mode)
 
 
 func _seg(im: ImmediateMesh, a: Vector2, b: Vector2, color: Color) -> void:
+	var key := color.to_html(false)
+	if FAT.has(key):  # sketch geometry: solid lines of a fixed on-screen width
+		if not _fat.has(key):
+			_fat[key] = []
+		_fat[key].append(_w(a))
+		_fat[key].append(_w(b))
+		return
 	im.surface_set_color(color)
 	im.surface_add_vertex(_w(a))
 	im.surface_set_color(color)

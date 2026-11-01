@@ -40,4 +40,7 @@ std::vector<SketchPolyline> sketchPolylines(const Sketch& s);
 
 bool pointInPolygon(const Poly2& poly, double u, double v);
 
+// The closed regions as triangles in plane coordinates (three points each), for shading.
+std::vector<std::array<double, 2>> regionTriangles(const SketchGeometry& g, const SketchPlane& plane);
+
 }  // namespace fpcad

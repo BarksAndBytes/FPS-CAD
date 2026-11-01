@@ -66,6 +66,7 @@ public:
   godot::Vector3 plane_point(const godot::Dictionary& plane, const godot::Vector2& uv) const;
   godot::Vector2 plane_uv(const godot::Dictionary& plane, const godot::Vector3& world) const;
   godot::Dictionary solve_sketch(const godot::Dictionary& sketch) const;  // {ok, dof, message, conflicts, sketch}
+  godot::PackedVector2Array sketch_fill(const godot::Dictionary& sketch) const;  // shaded regions, plane (u, v) triangles
   godot::String add_sketch(const godot::Dictionary& sketch);             // new feature id ("" on failure)
   godot::Dictionary set_sketch(const godot::String& id, const godot::Dictionary& sketch);
   godot::Dictionary get_sketch(const godot::String& id) const;

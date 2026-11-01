@@ -945,6 +945,7 @@ std::vector<SketchView> PartModel::sketchViews() const {
     v.dof = st.solve.dof;
     v.message = st.solve.message;
     v.regions = static_cast<int>(st.geom.regions.size());
+    for (auto& q : regionTriangles(st.geom, st.sketch.plane)) v.fill.push_back(st.sketch.plane.toWorld(q[0], q[1]));
     for (auto& pl : sketchPolylines(st.sketch)) {
       auto& dst = pl.construction ? v.constructionSegments : v.segments;
       for (size_t i = 0; i + 1 < pl.points.size(); ++i) {

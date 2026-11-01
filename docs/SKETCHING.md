@@ -31,7 +31,7 @@ and the grid (your snap step, which follows the zoom).
 | Hold RB | Hold Q | Sketch tools: **Draw** (Line, Rectangle, Circle, Arc), **Constrain** (Dimension, Relation), Delete |
 | RT | Left click | Place a point / pick geometry |
 | LT, B | Right click | End the line chain, drop the shape being drawn |
-| LB | E | Tool option (construction geometry, arc direction, dimension or relation type) |
+| LB | E | Drawing tools: construction geometry on/off. Dimension and Relation: their type |
 | Left stick / right stick (fine) | WASD / mouse | Pan across the sketch; the view stays square to it |
 | D-pad ↑ / ↓ | Scroll, = / − | Zoom in / out |
 | Y | I | Switch between the sketch view and free look (walk or fly around it) |
@@ -41,8 +41,11 @@ and the grid (your snap step, which follows the zoom).
 - **Line** chains point to point; ending on an existing point closes the chain. Horizontal and
   vertical relations are added automatically.
 - **Rectangle** takes two corners and adds horizontal and vertical relations.
-- **Circle**: centre, then a point on the edge. **Arc**: centre, start, end (counter-clockwise,
-  or clockwise with LB).
+- **Circle**: centre, then a point on the edge. **Arc**: centre, start, end; it takes the shorter
+  way round.
+- **Construction geometry** (LB with a drawing tool, or the **Construction** tool on existing
+  geometry) is drawn dashed. It is for reference, such as centrelines and revolve axes, and never
+  becomes part of a closed profile.
 - **Dimension**: aim at a line (length), circle (diameter), arc (radius), or two points
   (aligned, horizontal or vertical distance). A number pad opens; plain numbers are in the
   part's units, anything else is an expression (`width / 2`, `25 mm`).
@@ -50,8 +53,9 @@ and the grid (your snap step, which follows the zoom).
   perpendicular, equal, tangent, fix.
 - **Delete**: RT deletes geometry; LT removes only the relations and dimensions holding it.
 
-The HUD shows the sketch's state: blue while it has degrees of freedom left, white when fully
-defined. A change that would conflict with existing relations or dimensions is refused.
+Sketch lines are drawn solid and every closed profile is shaded, so you can see what will extrude.
+The HUD and the lines show the sketch's state: blue while it has degrees of freedom left, black
+when fully defined. A change that would conflict with existing relations or dimensions is refused.
 
 ## Features
 

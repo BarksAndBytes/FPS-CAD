@@ -5,7 +5,7 @@ extends RefCounted
 
 const SHADER := """
 shader_type spatial;
-render_mode unshaded, cull_disabled, shadows_disabled;
+render_mode unshaded, cull_disabled, shadows_disabled__ON_TOP__;
 
 uniform vec4 color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 uniform float width_px = 3.0;
@@ -34,6 +34,22 @@ void fragment() {
 """
 
 static var _shader: Shader
+static var _shader_on_top: Shader
+
+
+## The same line list cut into dashes dash long with equal gaps (world units).
+static func dashed(points: PackedVector3Array, dash: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if dash <= 0.0:
+		return points
+	for s in points.size() / 2:
+		var a := points[s * 2]
+		var b := points[s * 2 + 1]
+		var n := maxi(1, int(a.distance_to(b) / dash))
+		for k in range(0, n, 2):
+			out.append(a.lerp(b, float(k) / n))
+			out.append(a.lerp(b, float(mini(k + 1, n)) / n))
+	return out
 
 
 ## A mesh drawing every pair of points (a line list, as CadPart.build_edges returns) as a solid line.
@@ -78,12 +94,17 @@ static func mesh(points: PackedVector3Array) -> ArrayMesh:
 	return m
 
 
-static func material(color := Color.BLACK, width_px := 3.0) -> ShaderMaterial:
+## on_top: drawn over everything (sketch lines), instead of hidden behind nearer surfaces.
+static func material(color := Color.BLACK, width_px := 3.0, on_top := false) -> ShaderMaterial:
 	if _shader == null:
 		_shader = Shader.new()
-		_shader.code = SHADER
+		_shader.code = SHADER.replace("__ON_TOP__", "")
+		_shader_on_top = Shader.new()
+		_shader_on_top.code = SHADER.replace("__ON_TOP__", ", depth_test_disabled")
 	var mat := ShaderMaterial.new()
-	mat.shader = _shader
+	mat.shader = _shader_on_top if on_top else _shader
+	if on_top:
+		mat.render_priority = 20
 	mat.set_shader_parameter("color", color)
 	mat.set_shader_parameter("width_px", width_px)
 	return mat

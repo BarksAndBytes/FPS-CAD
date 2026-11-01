@@ -245,6 +245,7 @@ int main() {
     CHECK_NEAR(m.document().features[0].params["points"][1]["x"].get<double>(), 2.0, 1e-9);
     auto views = m.sketchViews();
     CHECK(views.size() == 1 && views[0].consumed && views[0].dof == 0 && views[0].regions == 1);
+    CHECK(views[0].fill.size() >= 6 && views[0].fill.size() % 3 == 0);  // the rectangle, shaded
     CHECK(views[0].segments.size() == 8);
     CHECK(m.latestUnusedSketch().empty());
 
@@ -272,6 +273,22 @@ int main() {
     PartModel m(d);
     CHECK(m.rebuild().ok);
     CHECK_NEAR(m.massProperties().volume, (2.0 - kPiT * 0.04) * 0.1, 1e-6);
+    {
+      // Shading covers the plate minus the hole; construction geometry does not close a loop.
+      Sketch sk = Sketch::fromJson(plate);
+      solveSketch(sk, [](const Json& v, Quantity) { return v.get<double>(); });
+      auto tris = sketchFill(sk);
+      double area = 0;
+      for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+        auto& a = tris[i];
+        auto& b = tris[i + 1];
+        auto& c = tris[i + 2];
+        area += std::abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
+      }
+      CHECK_NEAR(area, 2.0 - kPiT * 0.04, 2e-3);
+      for (auto& e : sk.entities) e.construction = true;
+      CHECK(sketchFill(sk).empty());
+    }
 
     // Sketch on the plate's top face and cut a slot through everything.
     auto top = m.pick({0.3, 0.3, 5}, {0, 0, -1});

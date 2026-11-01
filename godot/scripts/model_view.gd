@@ -7,8 +7,10 @@ const COLOR_PART := Color("b7bfc8")  # a cool grey that reads against the white 
 const COLOR_EDGE := Color("1c222a")
 const COLOR_ACCENT := Color("ff8a3d")
 const COLOR_MEASURE := Color("ffd166")
-const COLOR_SKETCH := Color("5aa9ff")
-const COLOR_SKETCH_BAD := Color("e0775f")
+const COLOR_SKETCH := Color("1f6fd1")
+const COLOR_SKETCH_BAD := Color("d64545")
+const COLOR_CONSTRUCTION := Color("7d8794")
+const FatLines := preload("res://scripts/fat_lines.gd")
 
 ## CadPart or CadAssembly (untyped so a missing extension shows an error instead of a parse failure)
 var doc: RefCounted
@@ -38,11 +40,14 @@ var _marker_b := MeshInstance3D.new()
 var _marker_snap := MeshInstance3D.new()
 var _measure_line := MeshInstance3D.new()
 var _hl_key := ""
-var _sketch_mat := StandardMaterial3D.new()
-var _sketch_bad_mat := StandardMaterial3D.new()
-var _sketch_hl_mat := StandardMaterial3D.new()
+var _sketch_mat: ShaderMaterial
+var _sketch_bad_mat: ShaderMaterial
+var _sketch_hl_mat: ShaderMaterial
+var _sketch_constr_mat: ShaderMaterial
+var _sketch_fill_mat := StandardMaterial3D.new()
 var _plane_mat := StandardMaterial3D.new()
-var _sketches := {}  # feature id -> MeshInstance3D (unused sketches only)
+var _sketches := {}  # feature id -> Node3D holding lines, construction and fill (unused sketches)
+var _sketch_lines := {}  # feature id -> the MeshInstance3D drawing its solid lines
 var _sketch_ok := {}
 var _plane := MeshInstance3D.new()
 var _hl_sketch := ""
@@ -67,12 +72,16 @@ func _ready() -> void:
 	_measure_mat.albedo_color = COLOR_MEASURE
 	_measure_mat.no_depth_test = true
 	_measure_mat.render_priority = 10
-	for pair in [[_sketch_mat, COLOR_SKETCH], [_sketch_bad_mat, COLOR_SKETCH_BAD], [_sketch_hl_mat, COLOR_ACCENT]]:
-		var m: StandardMaterial3D = pair[0]
-		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		m.albedo_color = pair[1]
-		m.no_depth_test = true
-		m.render_priority = 8
+	_sketch_mat = FatLines.material(COLOR_SKETCH, 3.0, true)
+	_sketch_bad_mat = FatLines.material(COLOR_SKETCH_BAD, 3.0, true)
+	_sketch_hl_mat = FatLines.material(COLOR_ACCENT, 3.5, true)
+	_sketch_constr_mat = FatLines.material(COLOR_CONSTRUCTION, 2.0, true)
+	_sketch_fill_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_sketch_fill_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_sketch_fill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_sketch_fill_mat.no_depth_test = true
+	_sketch_fill_mat.render_priority = 6
+	_sketch_fill_mat.albedo_color = Color(COLOR_SKETCH, 0.18)
 	_plane_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_plane_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_plane_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -118,6 +127,7 @@ func refresh(size: float = -1.0) -> void:
 	for id in _sketches:
 		_sketches[id].queue_free()
 	_sketches.clear()
+	_sketch_lines.clear()
 	_sketch_ok.clear()
 	_bodies.clear()
 	_edges.clear()
@@ -154,14 +164,37 @@ func _refresh_sketches() -> void:
 	for v in doc.sketch_views():
 		if v.consumed or v.id == hidden_sketch:
 			continue
-		var pts: PackedVector3Array = v.segments
-		pts.append_array(v.construction)
-		if pts.size() < 2:
+		var segs: PackedVector3Array = v.segments
+		var constr: PackedVector3Array = v.construction
+		if segs.size() < 2 and constr.size() < 2:
 			continue
-		var mi := _make_edges(pts)
+		var holder := Node3D.new()
+		add_child(holder)
 		var good: bool = v.ok and v.regions > 0
-		mi.material_override = _sketch_mat if good else _sketch_bad_mat
-		_sketches[v.id] = mi
+		var lines := MeshInstance3D.new()
+		lines.mesh = FatLines.mesh(segs)
+		lines.material_override = _sketch_mat if good else _sketch_bad_mat
+		lines.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(lines)
+		var dashes := MeshInstance3D.new()
+		dashes.mesh = FatLines.mesh(FatLines.dashed(constr, 0.012 * maxf(_mesh_size, 1e-4)))
+		dashes.material_override = _sketch_constr_mat
+		dashes.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		holder.add_child(dashes)
+		var fill: PackedVector3Array = v.get("fill", PackedVector3Array())
+		if fill.size() >= 3:
+			var arrays := []
+			arrays.resize(Mesh.ARRAY_MAX)
+			arrays[Mesh.ARRAY_VERTEX] = fill
+			var fm := ArrayMesh.new()
+			fm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+			var shade := MeshInstance3D.new()
+			shade.mesh = fm
+			shade.material_override = _sketch_fill_mat
+			shade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			holder.add_child(shade)
+		_sketches[v.id] = holder
+		_sketch_lines[v.id] = lines
 		_sketch_ok[v.id] = good
 	if _hl_sketch != "":
 		var keep := _hl_sketch
@@ -173,11 +206,11 @@ func _refresh_sketches() -> void:
 func highlight_sketch(id: String) -> void:
 	if id == _hl_sketch:
 		return
-	if _sketches.has(_hl_sketch):
-		_sketches[_hl_sketch].material_override = _sketch_mat if _sketch_ok.get(_hl_sketch, true) else _sketch_bad_mat
+	if _sketch_lines.has(_hl_sketch):
+		_sketch_lines[_hl_sketch].material_override = _sketch_mat if _sketch_ok.get(_hl_sketch, true) else _sketch_bad_mat
 	_hl_sketch = id
-	if _sketches.has(id):
-		_sketches[id].material_override = _sketch_hl_mat
+	if _sketch_lines.has(id):
+		_sketch_lines[id].material_override = _sketch_hl_mat
 
 
 ## A translucent square showing a sketch plane (basis from CadPart.plane_basis), or none.

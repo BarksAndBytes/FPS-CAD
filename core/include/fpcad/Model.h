@@ -85,6 +85,7 @@ struct SketchView {
   std::string message;
   std::vector<Vec3> segments;
   std::vector<Vec3> constructionSegments;
+  std::vector<Vec3> fill;  // closed regions as triangles (three points each)
 };
 
 struct SketchHit {
