@@ -2,7 +2,8 @@ extends Control
 ## The tool wheel, opened like a weapon wheel, with tools gathered into groups.
 ##
 ## The inner ring holds the groups (and single tools). Aiming at a group shows its tools
-## branching outward from it on an outer ring. Choosing the group (let go of the wheel button,
+## branching outward from it on an outer ring. With a controller, the right stick picks the group
+## and the left stick picks a tool on its branch; letting go of the wheel button takes that tool. Choosing the group (let go of the wheel button,
 ## press A / RT / click, or tap it) moves the selection out onto that branch; aim at a tool and
 ## press A / RT / click (or tap) to pick it. B / Esc steps back to the groups, then closes.
 ##
@@ -24,6 +25,7 @@ var group := -1   # open group (index into tree), or -1 at the inner ring
 var hover := -1   # hovered node: in tree at the inner ring, in the group's children on a branch
 var current := -1  # value of the tool in use, highlighted
 var _shown := -1   # group whose branch is drawn (open, or hovered at the inner ring)
+var branch := -1   # at the inner ring: the tool on the hovered group's branch picked by the left stick
 var _vec := Vector2.ZERO
 var _slots: Array[Button] = []
 var _kids: Array[Button] = []
@@ -94,6 +96,7 @@ func open(current_value: int) -> void:
 	current = current_value
 	group = -1
 	hover = -1
+	branch = -1
 	_vec = Vector2.ZERO
 	visible = true
 	_layout()
@@ -137,6 +140,9 @@ func commit() -> int:
 		if hover < 0:
 			visible = false
 			return -1
+		if branch >= 0 and tree[hover].has("children"):
+			visible = false
+			return int(tree[hover].children[branch].value)
 		if tree[hover].has("children"):
 			enter(hover)
 			return ENTERED
@@ -172,6 +178,28 @@ func point(delta: Vector2) -> void:
 			if absf(angle_difference(a, _kid_angle(group, k))) < absf(angle_difference(a, _kid_angle(group, best))):
 				best = k
 		_set_hover(best)
+
+
+## Left stick: picks the tool on the branch of the group the right stick points at (or on the open
+## branch), by direction, since the branch fans out around its group.
+func aim_branch(stick: Vector2) -> void:
+	if stick.length() < 0.5 or tree.is_empty():
+		return
+	if group >= 0:
+		aim(stick)
+		return
+	if hover < 0 or not tree[hover].has("children"):
+		return
+	var a := stick.angle()
+	var kids: Array = tree[hover].children
+	var best := 0
+	for k in kids.size():
+		if absf(angle_difference(a, _kid_angle(hover, k))) < absf(angle_difference(a, _kid_angle(hover, best))):
+			best = k
+	if best != branch:
+		branch = best
+		Input.start_joy_vibration(0, 0.1, 0.0, 0.03)
+		_refresh()
 
 
 ## Absolute stick direction (right stick held away from centre).
@@ -248,6 +276,8 @@ func _set_hover(i: int) -> void:
 	if i == hover:
 		return
 	hover = i
+	if group < 0:
+		branch = -1  # a new group: its tools start unpicked
 	Input.start_joy_vibration(0, 0.1, 0.0, 0.03)
 	if group < 0:
 		_show_branch(i if i >= 0 and tree[i].has("children") else -1)
@@ -295,6 +325,8 @@ func _refresh() -> void:
 		var col := Color(1, 1, 1, 0.55)  # a preview of the branch
 		if group == _shown:
 			col = ACCENT if k == hover else (Color(1, 1, 1, 1) if int(kid.get("value", -99)) == current else Color(0.85, 0.88, 0.92, 0.9))
+		elif k == branch:
+			col = ACCENT
 		_kids[k].modulate = col
 	_back.visible = group >= 0
 	if tree.is_empty():
@@ -303,7 +335,7 @@ func _refresh() -> void:
 	if group >= 0:
 		node = tree[group].children[hover] if hover >= 0 else tree[group]
 	elif hover >= 0:
-		node = tree[hover]
+		node = tree[hover].children[branch] if branch >= 0 and tree[hover].has("children") else tree[hover]
 	else:
 		for n in tree:
 			if _holds_current(n):

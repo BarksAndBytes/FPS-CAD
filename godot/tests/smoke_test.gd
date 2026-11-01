@@ -257,6 +257,12 @@ func _run() -> void:
 	var picked_value: int = main.wheel.commit()
 	main._wheel_pick(picked_value)
 	_check(not main.wheel.visible and main.tools.tool().id == "revolve", "aiming along the branch and choosing picks Revolve")
+	# Controller: right stick on the group, left stick on its tool, let go to pick.
+	main._open_wheel(false)
+	main.wheel.aim(Vector2.from_angle(main.wheel._slot_angle(solids)))
+	main.wheel.aim_branch(Vector2.from_angle(main.wheel._kid_angle(solids, 2)))
+	main._wheel_pick(main.wheel.commit())
+	_check(not main.wheel.visible and main.tools.tool().id == "sweep", "right stick picks Solids, left stick picks Sweep, letting go takes it")
 	main._open_wheel(true)
 	main.wheel.enter(solids)
 	main.wheel.back()

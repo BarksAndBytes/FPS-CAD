@@ -135,8 +135,9 @@ func _check_grow() -> bool:
 func _text_wheel() -> String:
 	if Actions.last_device == "touch":
 		return "Tap the tool name at the top left to open the tool wheel. Tap Modify: its tools branch out. Tap Push / Pull."
-	return "Hold %s to open the tool wheel and point at Modify: its tools branch out. Let go to open it, point at Push / Pull and press %s." % [
-		_p(&"tool_wheel"), _p(&"ui_accept")]
+	if Actions.last_device == "controller":
+		return "Hold RB to open the tool wheel. Point the right stick at Modify: its tools branch out. Point the left stick at Push / Pull, then let go of RB."
+	return "Hold Q to open the tool wheel. Point the mouse at Modify: its tools branch out. Press the WASD key towards Push / Pull, then let go of Q."
 
 
 func _check_wheel() -> bool:

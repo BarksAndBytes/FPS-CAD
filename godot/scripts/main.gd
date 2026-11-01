@@ -593,7 +593,10 @@ func _wheel_current() -> int:
 func _open_wheel(from_button: bool, group := -1) -> void:
 	_wheel_from_button = from_button
 	var title := "SKETCH TOOLS" if sketcher.active else "TOOLS"
-	var how := "aim, then %s" % Actions.prompt(&"ui_accept") if from_button else "aim, let go to choose"
+	var how := "aim, then %s" % Actions.prompt(&"ui_accept")
+	if not from_button:
+		how = ("right stick: group · left stick: tool · let go to pick" if Actions.last_device == "controller"
+			else "mouse: group · WASD: tool · let go to pick")
 	wheel.setup(_wheel_tree(), title, how + "   ·   %s back" % Actions.prompt(&"ui_cancel"))
 	wheel.open(_wheel_current())
 	if group >= 0:
@@ -624,7 +627,9 @@ func _wheel_shortcut(i: int) -> void:
 
 func _gameplay_input() -> void:
 	if wheel.visible:
+		# Right stick: the group. Left stick (or WASD): the tool on its branch.
 		wheel.aim(Input.get_vector(&"look_left", &"look_right", &"look_up", &"look_down"))
+		wheel.aim_branch(Input.get_vector(&"move_left", &"move_right", &"move_forward", &"move_back"))
 		if _wheel_from_button and Input.is_action_just_pressed(&"tool_wheel"):
 			wheel.close()
 			return
