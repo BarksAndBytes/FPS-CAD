@@ -70,6 +70,9 @@ public:
   godot::Array sketch_curves(const godot::Dictionary& sketch) const;  // [{id, construction, points}] in plane (u, v)
   // A face's edges flattened onto a sketch plane: [{kind, pts, r, closed}] (see PartModel::projectFace).
   godot::Array project_face(int body, int face, const godot::Dictionary& plane) const;
+  // Converts a face's edges into the sketch, linked so they follow the model: {ok, message, sketch}.
+  // probe: a point on the face (Godot space), e.g. where the player aimed.
+  godot::Dictionary convert_face(const godot::Dictionary& sketch, int body, int face, const godot::Vector3& probe);
   godot::String add_sketch(const godot::Dictionary& sketch);             // new feature id ("" on failure)
   godot::Dictionary set_sketch(const godot::String& id, const godot::Dictionary& sketch);
   godot::Dictionary get_sketch(const godot::String& id) const;

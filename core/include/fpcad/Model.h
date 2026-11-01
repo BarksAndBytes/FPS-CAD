@@ -142,6 +142,11 @@ public:
   };
   std::vector<ProjectedCurve> projectFace(int body, int face, const SketchPlane& plane) const;
 
+  // Converts a face's edges into the sketch as fixed geometry linked to the face: on every rebuild
+  // the face (found again near probe, a point on it) is projected afresh and the geometry follows,
+  // keeping its ids so dimensions and relations to it survive.
+  bool convertFace(Sketch& sketch, int body, int face, const Vec3& probe, std::string* message = nullptr);
+
   // ----- Sketches -----
 
   // Solves a sketch against the part's variables (for live editing before it is committed).

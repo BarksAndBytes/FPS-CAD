@@ -33,7 +33,9 @@ const TOOLS := [
 	{id = "arc_tangent", name = "Tangent arc", pri = "end of a line or arc, then the arc's end (chains)", alt = "end the chain", opt = []},
 	{id = "ellipse", name = "Ellipse", pri = "centre, end of one axis, then the other axis", alt = "cancel", opt = []},
 	{id = "spline", name = "Spline", pri = "points it passes through; the first again closes it", alt = "finish the spline", opt = []},
+	{id = "text", name = "Text", pri = "where the text starts, or text to change", alt = "cancel", opt = []},
 	{id = "trim", name = "Trim", pri = "the piece to cut away, up to where it crosses", alt = "cancel", opt = []},
+	{id = "split", name = "Split", pri = "where to split a line or arc (a circle takes two)", alt = "cancel", opt = []},
 	{id = "extend", name = "Extend", pri = "a line, near the end to lengthen", alt = "cancel", opt = []},
 	{id = "fillet", name = "Fillet", pri = "a corner where two lines meet", alt = "set the radius", opt = []},
 	{id = "chamfer", name = "Chamfer", pri = "a corner where two lines meet", alt = "set the distance", opt = []},
@@ -59,8 +61,8 @@ const COLOR_DIM := Color("ffd166")
 const COLOR_GRID := Color(0.22, 0.28, 0.36, 0.22)
 const FAT := {"1f6fd1": 3.0, "1b2129": 3.0, "7d8794": 2.0, "ff7a1f": 3.5}  # colour -> on-screen width
 const DRAW_TOOLS := ["line", "rect", "rect_centre", "rect_3pt", "polygon", "slot", "point", "circle", "circle_3pt",
-	"arc", "arc_3pt", "arc_tangent", "ellipse", "spline"]
-const KIND_NAMES := {line = "Line", circle = "Circle", arc = "Arc", ellipse = "Ellipse", spline = "Spline"}
+	"arc", "arc_3pt", "arc_tangent", "ellipse", "spline", "text"]
+const KIND_NAMES := {line = "Line", circle = "Circle", arc = "Arc", ellipse = "Ellipse", spline = "Spline", text = "Text"}
 const SIDES := [3, 4, 5, 6, 8, 10, 12]
 
 var game: Node  # main.gd
@@ -79,6 +81,8 @@ var polygon_sides := 6
 var fillet_radius: Variant = null
 var chamfer_distance: Variant = null
 var offset_distance: Variant = null
+## Cap height for new text (SI); dimension a text to change it.
+var text_height := 0.0
 
 var _o := Vector3.ZERO
 var _n := Vector3.UP
@@ -108,6 +112,8 @@ var _fat_nodes := {}  # colour -> MeshInstance3D drawing it
 var _fill := MeshInstance3D.new()  # closed profiles, shaded
 var _fill_mat := StandardMaterial3D.new()
 var _pose := {}  # where the player was before the sketch, restored when it closes
+var _drag := {}       # Move: the solved sketch as it would be at the cursor, shown while moving
+var _drag_delta := Vector2(INF, INF)
 
 
 func _ready() -> void:
@@ -225,6 +231,7 @@ func has_pending() -> bool:
 func cancel_pending() -> void:
 	_pending.clear()
 	_picks.clear()
+	_drag = {}
 
 
 # ---------- tools ----------
@@ -233,9 +240,10 @@ func cancel_pending() -> void:
 const WHEEL := [
 	["Lines", "Lines, rectangles, polygons, slots and points", ["line", "rect", "rect_centre", "rect_3pt", "polygon", "slot", "point"]],
 	["Curves", "Circles, arcs, ellipses and splines", ["circle", "circle_3pt", "arc", "arc_3pt", "arc_tangent", "ellipse", "spline"]],
-	["Modify", "Trim, extend, fillet, chamfer, offset, convert edges", ["trim", "extend", "fillet", "chamfer", "offset", "convert"]],
+	["Modify", "Trim, extend, split, fillet, chamfer, offset, convert edges", ["trim", "extend", "split", "fillet", "chamfer", "offset", "convert"]],
 	["Copy", "Move, copy, rotate, scale, mirror and pattern", ["move", "mirror", "pattern_linear", "pattern_circular"]],
 	["Constrain", "Dimensions and relations that hold the sketch", ["dimension", "relation"]],
+	"text",
 	"construct",
 	"erase",
 ]
@@ -335,6 +343,7 @@ func update() -> void:
 		return
 	_aim(game.player.eye_position(), game.player.aim_direction())
 	_hover = _target(_prefer_points()) if _valid else {}
+	_update_drag()
 	_redraw()
 	game.hud.set_aim(_aim_label(), _snap_id != "" or _snap_mid != "" or _snap_on != "" or not _hover.is_empty())
 
@@ -453,6 +462,10 @@ func press(primary: bool) -> void:
 			_ellipse(primary, spot)
 		"spline":
 			_spline(primary, spot)
+		"text":
+			_text_tool(primary, spot)
+		"split":
+			_split(primary)
 		"trim":
 			_trim(primary)
 		"extend":
@@ -786,6 +799,9 @@ func _end_tangent(point_id: String) -> Dictionary:
 		elif e.kind == "arc" and (e.pts[1] == point_id or e.pts[2] == point_id):
 			var r := _p(point_id) - _p(e.pts[0])
 			t = Vector2(-r.y, r.x).normalized() * (1.0 if e.pts[2] == point_id else -1.0)
+		elif e.kind == "spline" and _curves.has(id) and (e.pts[0] == point_id or e.pts[-1] == point_id) and e.pts[0] != e.pts[-1]:
+			var c: PackedVector2Array = _curves[id]
+			t = ((c[0] - c[1]) if e.pts[0] == point_id else (c[c.size() - 1] - c[c.size() - 2])).normalized()
 		else:
 			continue
 		if found.is_empty() or (found.construction and not e.get("construction", false)):
@@ -821,7 +837,7 @@ func _arc_tangent(primary: bool, spot: Dictionary) -> void:
 	var idq := _point(s, spot)
 	var aid := _new_id(s, "a")
 	s.entities.append(_entity(aid, "arc", [idc, p0.id, idq] if left else [idc, idq, p0.id]))
-	_con(s, "tangent", [p0.ent, aid])
+	_con(s, "tangent", [aid, p0.ent] if _ents[p0.ent].kind == "spline" else [p0.ent, aid])
 	if _commit(s, "Tangent arc"):
 		if spot.id != "":
 			_pending.clear()
@@ -884,6 +900,255 @@ func _snapped_radius(centre: Vector2, spot: Dictionary) -> float:
 
 # ---------- editing tools ----------
 
+func _split(primary: bool) -> void:
+	if not primary:
+		_picks.clear()
+		return
+	var t := _hover
+	if t.is_empty() or t.kind != "entity" or not _ents[t.id].kind in ["line", "arc", "circle"]:
+		game.hud.toast("Aim at a line, arc or circle where it should split")
+		return
+	if _is_copy(t.id):
+		game.hud.toast("That is a pattern copy: change the original")
+		return
+	var e: Dictionary = _ents[t.id]
+	var prim := _prim(e)
+	var at: Vector2 = Geometry2D.get_closest_point_to_segment(_raw, prim.a, prim.b) if e.kind == "line" \
+		else (prim.c as Vector2) + (_raw - prim.c).normalized() * float(prim.r)
+	if e.kind == "circle":
+		if _picks.is_empty() or _picks[0].id != t.id:
+			_picks = [{kind = "entity", id = t.id, at = at}]
+			game.hud.toast("A circle splits in two places: now the second")
+			return
+		var first: Vector2 = _picks[0].at
+		_picks.clear()
+		split_circle(t.id, first, at)
+		return
+	split_at(t.id, at)
+
+
+## Splits a line or arc in two at the point on it nearest at; the pieces stay in line (lines) or
+## on one circle (arcs).
+func split_at(eid: String, at: Vector2) -> bool:
+	var e: Dictionary = _ents[eid]
+	var prim := _prim(e)
+	var u := SG.param(prim, at)
+	var span := SG.span(prim)
+	if u < span * 1e-4 or u > span * (1.0 - 1e-4):
+		game.hud.toast("Too near an end to split")
+		return false
+	var s: Dictionary = sketch.duplicate(true)
+	_detach(s, eid)
+	var ent := _find(s, eid)
+	var first := 0 if e.kind == "line" else 1
+	var end_id: String = ent.pts[first + 1]
+	var mid := _point(s, _free(at))
+	ent.pts[first + 1] = mid
+	var piece: Dictionary = ent.duplicate(true)
+	piece.id = _new_id(s, "l" if e.kind == "line" else "a")
+	piece.pts[first] = mid
+	piece.pts[first + 1] = end_id
+	s.entities.append(piece)
+	_con(s, "collinear" if e.kind == "line" else "equal", [eid, piece.id])
+	_drop_length(s, eid)
+	return _commit(s, "Split")
+
+
+## Splits a circle into two arcs at the points on it nearest a and b.
+func split_circle(eid: String, a: Vector2, b: Vector2) -> bool:
+	var e: Dictionary = _ents[eid]
+	var c := _p(e.pts[0])
+	var r := float(e.r)
+	var pa := c + (a - c).normalized() * r
+	var pb := c + (b - c).normalized() * r
+	if pa.distance_to(pb) < r * 1e-4:
+		game.hud.toast("Pick a second place away from the first")
+		return false
+	var s: Dictionary = sketch.duplicate(true)
+	_detach(s, eid)
+	var ent := _find(s, eid)
+	var ia := _point(s, _free(pa))
+	var ib := _point(s, _free(pb))
+	ent.kind = "arc"
+	ent.pts = [ent.pts[0], ia, ib]
+	ent.erase("r")
+	var other := ent.duplicate(true)
+	other.id = _new_id(s, "a")
+	other.pts = [ent.pts[0], ib, ia]
+	s.entities.append(other)
+	_con(s, "equal", [eid, other.id])
+	return _commit(s, "Split")
+
+
+func _text_tool(primary: bool, spot: Dictionary) -> void:
+	if not primary:
+		return
+	var t := _hover
+	if not t.is_empty() and t.kind == "entity" and _ents[t.id].kind == "text":
+		var tid: String = t.id
+		game.numpad.ask_text("Change the text", String(_ents[tid].text), "Letters, digits and spaces.",
+			func(text: String) -> void: set_text(tid, text))
+		return
+	var anchor := spot.duplicate()
+	game.numpad.ask_text("Text", "", "It starts at the point you picked. Dimension it to set its height.",
+		func(text: String) -> void: add_text(anchor, text))
+
+
+## Adds text starting at spot (its baseline's left end), with a height dimension.
+func add_text(spot: Dictionary, text: String) -> bool:
+	var contours := glyph_contours(text)
+	if contours.is_empty():
+		game.hud.toast("Nothing to draw: type some letters")
+		return false
+	var h: float = text_height if text_height > 0.0 else float(game.player.snap_step()) * 2.0
+	var s: Dictionary = sketch.duplicate(true)
+	var tid := _new_id(s, "t")
+	var e := _entity(tid, "text", [_point(s, spot)])
+	e.r = h
+	e.text = text
+	e.contours = contours
+	s.entities.append(e)
+	_con(s, "distance", [tid], h)
+	return _commit(s, "Text")
+
+
+func set_text(tid: String, text: String) -> bool:
+	var contours := glyph_contours(text)
+	if contours.is_empty():
+		game.hud.toast("Nothing to draw: type some letters")
+		return false
+	var s: Dictionary = sketch.duplicate(true)
+	var e := _find(s, tid)
+	e.text = text
+	e.contours = contours
+	return _commit(s, "Text")
+
+
+## Outlines of text in the UI font as closed polygons [[x, y], …] for a cap height of 1, starting
+## at (0, 0) on the baseline, y up. Curves are flattened into short straight pieces.
+static func glyph_contours(text: String) -> Array:
+	var out := []
+	if text.strip_edges() == "":
+		return out
+	var ui := preload("res://scripts/ui_theme.gd")
+	var font: Font = ui.body_font if ui.body_font != null else ThemeDB.fallback_font
+	var ts := TextServerManager.get_primary_interface()
+	var size := 256
+	var cap := 0.0
+	var probe := ts.create_shaped_text()
+	ts.shaped_text_add_string(probe, "H", font.get_rids(), size)
+	for g in ts.shaped_text_get_glyphs(probe):
+		for c in _glyph_polys(ts, g, 0.0):
+			for q in c:
+				cap = maxf(cap, -float(q.y))
+	ts.free_rid(probe)
+	if cap <= 0.0:
+		cap = size * 0.7
+	var rid := ts.create_shaped_text()
+	ts.shaped_text_add_string(rid, text, font.get_rids(), size)
+	var x := 0.0
+	for g in ts.shaped_text_get_glyphs(rid):
+		var off: Vector2 = g.get("offset", Vector2.ZERO)
+		for c in _glyph_polys(ts, g, x + off.x):
+			var poly := []
+			for q in c:
+				poly.append([float(q.x) / cap, -float(q.y + off.y) / cap])
+			if poly.size() >= 3:
+				out.append(poly)
+		x += float(g.get("advance", 0.0))
+	ts.free_rid(rid)
+	return out
+
+
+## One glyph's contours as polygons (font pixels, y down), shifted right by dx.
+static func _glyph_polys(ts: TextServer, g: Dictionary, dx: float) -> Array:
+	var polys := []
+	var frid: RID = g.get("font_rid", RID())
+	if not frid.is_valid():
+		return polys
+	var info: Dictionary = ts.font_get_glyph_contours(frid, int(g.get("font_size", 256)), int(g.get("index", 0)))
+	if info.is_empty():
+		return polys
+	var pts: PackedVector3Array = info.get("points", PackedVector3Array())
+	var ends: PackedInt32Array = info.get("contours", PackedInt32Array())
+	var start := 0
+	for e in ends:
+		var raw := []
+		for i in range(start, e + 1):
+			raw.append(pts[i])
+		start = e + 1
+		var poly := _flatten(raw)
+		for i in poly.size():
+			poly[i] = Vector2(poly[i].x + dx, poly[i].y)
+		if poly.size() >= 3:
+			polys.append(poly)
+	return polys
+
+
+## A TrueType / CFF contour (points with on / conic / cubic tags in z) as a polygon.
+static func _flatten(raw: Array) -> Array:
+	var n := raw.size()
+	if n < 2:
+		return []
+	var on := func(p: Vector3) -> bool: return int(p.z) == TextServer.CONTOUR_CURVE_TAG_ON
+	var first := -1
+	for i in n:
+		if on.call(raw[i]):
+			first = i
+			break
+	var pts := []
+	var start: Vector2
+	if first < 0:  # all conic: start between the first two
+		start = (Vector2(raw[0].x, raw[0].y) + Vector2(raw[1].x, raw[1].y)) / 2.0
+		first = 0
+	else:
+		start = Vector2(raw[first].x, raw[first].y)
+	pts.append(start)
+	var cur := start
+	var i := 1
+	while i <= n:
+		var p: Vector3 = raw[(first + i) % n]
+		var pv := Vector2(p.x, p.y)
+		var tag := int(p.z)
+		if tag == TextServer.CONTOUR_CURVE_TAG_ON:
+			pts.append(pv)
+			cur = pv
+			i += 1
+		elif tag == TextServer.CONTOUR_CURVE_TAG_OFF_CONIC:
+			var nx: Vector3 = raw[(first + i + 1) % n]
+			var end := Vector2(nx.x, nx.y)
+			if int(nx.z) == TextServer.CONTOUR_CURVE_TAG_OFF_CONIC:
+				end = (pv + end) / 2.0
+				i += 1
+			else:
+				i += 2
+			if i > n + 1:
+				end = start
+			for k in range(1, 7):
+				var t := k / 6.0
+				pts.append(cur.lerp(pv, t).lerp(pv.lerp(end, t), t))
+			cur = end
+		else:  # cubic: two controls, then an end
+			var c2v: Vector3 = raw[(first + i + 1) % n]
+			var ev: Vector3 = raw[(first + i + 2) % n]
+			var c2 := Vector2(c2v.x, c2v.y)
+			var end := Vector2(ev.x, ev.y)
+			for k in range(1, 9):
+				var t := k / 8.0
+				var u := 1.0 - t
+				pts.append(cur * u * u * u + pv * 3.0 * u * u * t + c2 * 3.0 * u * t * t + end * t * t * t)
+			cur = end
+			i += 3
+	# Drop the closing repeat and any doubled points.
+	var clean := []
+	for q in pts:
+		if clean.is_empty() or (q as Vector2).distance_to(clean[-1]) > 1e-6:
+			clean.append(q)
+	if clean.size() > 1 and (clean[0] as Vector2).distance_to(clean[-1]) < 1e-6:
+		clean.pop_back()
+	return clean
+
+
 ## The pieces a crossing splits an entity into, as places along it.
 func _cuts(eid: String) -> Array:
 	var e: Dictionary = _ents[eid]
@@ -891,7 +1156,7 @@ func _cuts(eid: String) -> Array:
 	var span := SG.span(prim)
 	var out := []
 	for id in _ents:
-		if id == eid:
+		if id == eid or _ents[id].kind == "text":
 			continue
 		for x in SG.hits(prim, _prim(_ents[id])):
 			var u := SG.param(prim, x)
@@ -913,6 +1178,9 @@ func _trim(primary: bool) -> void:
 	if not e.kind in ["line", "circle", "arc"]:
 		game.hud.toast("Trim works on lines, circles and arcs; delete the %s instead" % String(e.kind))
 		return
+	if _is_copy(eid):
+		game.hud.toast("That is a pattern copy: change the original")
+		return
 	var prim := _prim(e)
 	var cuts := _cuts(eid)
 	var uc := SG.param(prim, _raw)
@@ -924,6 +1192,7 @@ func _trim(primary: bool) -> void:
 		if c.u > uc and (hi.is_empty() or c.u < hi.u):
 			hi = c
 	var s: Dictionary = sketch.duplicate(true)
+	_detach(s, eid)
 	if e.kind == "circle":
 		if cuts.size() < 2:
 			_remove(s, {eid: true})
@@ -993,6 +1262,9 @@ func _extend(primary: bool) -> void:
 		game.hud.toast("Aim at a line, near the end to lengthen")
 		return
 	var e: Dictionary = _ents[t.id]
+	if _is_copy(t.id):
+		game.hud.toast("That is a pattern copy: change the original")
+		return
 	var a := _p(e.pts[0])
 	var b := _p(e.pts[1])
 	var which := 0 if _raw.distance_to(a) < _raw.distance_to(b) else 1
@@ -1007,7 +1279,7 @@ func _extend(primary: bool) -> void:
 	var ray := SG.seg(tip + dir * (tip.distance_to(tail) * 1e-6 + 1e-12), tip + dir * reach)
 	var best := {}
 	for id in _ents:
-		if id == t.id:
+		if id == t.id or _ents[id].kind == "text":
 			continue
 		for x in SG.hits(ray, _prim(_ents[id])):
 			var d := tip.distance_to(x)
@@ -1017,6 +1289,7 @@ func _extend(primary: bool) -> void:
 		game.hud.toast("Nothing ahead of that end to extend to")
 		return
 	var s: Dictionary = sketch.duplicate(true)
+	_detach(s, t.id)
 	for p in s.points:
 		if p.id == end_id:
 			p.x = (best.at as Vector2).x
@@ -1036,7 +1309,7 @@ func _corner_lines(pid: String) -> Array:
 	for id in _ents:
 		var e: Dictionary = _ents[id]
 		if pid in e.pts:
-			if e.kind != "line" or e.get("construction", false):
+			if e.kind != "line" or e.get("construction", false) or String(e.get("pattern", "")) != "":
 				lines.append("")
 			else:
 				lines.append(id)
@@ -1145,6 +1418,8 @@ func fillet_corner(pid: String, radius: Variant) -> bool:
 	var lines := [k.ends[0].line, k.ends[1].line]
 	var keep := _sharp_needed(pid, lines)
 	var s: Dictionary = sketch.duplicate(true)
+	for en in k.ends:
+		_detach(s, en.line)
 	var i1 := _point(s, _free(t1))
 	var i2 := _point(s, _free(t2))
 	var ic := _point(s, _free(c))
@@ -1175,6 +1450,8 @@ func chamfer_corner(pid: String, dist: Variant) -> bool:
 		return false
 	var p: Vector2 = k.p
 	var s: Dictionary = sketch.duplicate(true)
+	for en in k.ends:
+		_detach(s, en.line)
 	var i1 := _point(s, _free(p + (k.ends[0].u as Vector2) * d))
 	var i2 := _point(s, _free(p + (k.ends[1].u as Vector2) * d))
 	_reattach(s, k.ends[0].line, pid, i1)
@@ -1465,6 +1742,7 @@ func _copy(s: Dictionary, ids: Array, xf: Callable, reflects := false, share_sti
 	for id in ids:
 		var e: Dictionary = (_ents[id] as Dictionary).duplicate(true)
 		e.id = _new_id(s, String(id).left(1))
+		e.erase("pattern")  # a copy of a pattern copy is ordinary geometry
 		var pts := []
 		for p in e.pts:
 			pts.append(pmap[p])
@@ -1505,7 +1783,12 @@ func _move(primary: bool) -> void:
 			game.numpad.ask("Scale by", "2", "A factor: 2 doubles, 0.5 halves.",
 				func(text: String) -> void: scale_geometry(pick.id, centre, text.to_float()))
 		_:
-			move_geometry(pick.kind, pick.id, _cursor - (pick.from as Vector2), option() == "copy")
+			if not _drag.is_empty():
+				var moved := _drag
+				_drag = {}
+				_commit(moved, "Move")
+			else:
+				move_geometry(pick.kind, pick.id, _cursor - (pick.from as Vector2), option() == "copy")
 
 
 ## Moves (or copies) a point, or the chain holding an entity, by delta.
@@ -1526,6 +1809,9 @@ func move_geometry(kind: String, id: String, delta: Vector2, copy: bool) -> bool
 func rotate_geometry(eid: String, centre: Vector2, angle: float) -> bool:
 	if absf(angle) < 1e-12:
 		return false
+	if _ents.get(eid, {}).get("kind", "") == "text":
+		game.hud.toast("Text stays level: move it instead")
+		return false
 	return _transform("entity", eid, func(u: Vector2) -> Vector2: return centre + (u - centre).rotated(angle), 1.0, "Rotate")
 
 
@@ -1541,6 +1827,14 @@ func scale_geometry(eid: String, centre: Vector2, factor: float) -> bool:
 ## sizes times rscale), then solves with them held there, so dimensions and relations either
 ## follow or refuse.
 func _transform(kind: String, id: String, xf: Callable, rscale: float, what: String) -> bool:
+	var moved := _transformed(kind, id, xf, rscale, true)
+	if moved.is_empty():
+		return false
+	return _commit(moved, what)
+
+
+## The solved sketch after _transform's move, or {} (with a message unless quiet is false).
+func _transformed(kind: String, id: String, xf: Callable, rscale: float, tell: bool) -> Dictionary:
 	var s: Dictionary = sketch.duplicate(true)
 	var chain := [] if kind == "point" else _chain(id)
 	var ids := [id] if kind == "point" else []
@@ -1549,9 +1843,10 @@ func _transform(kind: String, id: String, xf: Callable, rscale: float, what: Str
 			if not p in ids:
 				ids.append(p)
 	for p in ids:
-		if p == "o" or _fixed.has(p):
-			game.hud.toast("That is fixed in place")
-			return false
+		if p == "o" or _fixed.has(p) or String(p).contains("."):
+			if tell:
+				game.hud.toast("That is fixed in place" if not String(p).contains(".") else "That is a pattern copy: move the original")
+			return {}
 	# Hold everything moved where it was put while the rest catches up, then let go.
 	var k := 0
 	for p in s.points:
@@ -1562,15 +1857,30 @@ func _transform(kind: String, id: String, xf: Callable, rscale: float, what: Str
 			s.constraints.append({id = "_drag%d" % k, kind = "fix", refs = [p.id]})
 			k += 1
 	for e in s.entities:
-		if e.id in chain and e.kind in ["circle", "ellipse"]:
+		if e.id in chain and e.kind in ["circle", "ellipse", "text"]:
 			e.r = float(e.r) * rscale
 	var r: Dictionary = game.doc.solve_sketch(s)
 	if not r.ok:
-		game.hud.toast("Its dimensions and relations hold it where it is")
-		return false
+		if tell:
+			game.hud.toast("Its dimensions and relations hold it where it is")
+		return {}
 	var moved: Dictionary = r.sketch
 	moved.constraints = (moved.constraints as Array).filter(func(c): return not String(c.id).begins_with("_drag"))
-	return _commit(moved, what)
+	return moved
+
+
+## Move: while geometry is picked, solve it at the cursor so it follows live; the click keeps it.
+func _update_drag() -> void:
+	if tool().id != "move" or _picks.is_empty() or option() != "move" or not _valid:
+		_drag = {}
+		_drag_delta = Vector2(INF, INF)
+		return
+	var pick: Dictionary = _picks[0]
+	var delta: Vector2 = _cursor - (pick.from as Vector2)
+	if delta == _drag_delta:
+		return
+	_drag_delta = delta
+	_drag = {} if delta.length() < 1e-12 else _transformed(pick.kind, pick.id, func(u: Vector2) -> Vector2: return u + delta, 1.0, false)
 
 
 func _mirror(primary: bool) -> void:
@@ -1601,6 +1911,9 @@ func mirror_chain(eid: String, axis: String) -> bool:
 	var b := _p(_ents[axis].pts[1])
 	var ids := _chain(eid)
 	ids.erase(axis)
+	if _ents[eid].kind == "text":
+		game.hud.toast("Text cannot be mirrored")
+		return false
 	var s: Dictionary = sketch.duplicate(true)
 	var made := _copy(s, ids, func(u: Vector2) -> Vector2: return SG.reflect(u, a, b), true, true)
 	for p in made.points:
@@ -1619,7 +1932,11 @@ func _pattern(primary: bool, circular: bool) -> void:
 	if _picks.is_empty():
 		var t := _hover
 		if t.is_empty() or t.kind != "entity":
-			game.hud.toast("Aim at the geometry to pattern")
+			game.hud.toast("Aim at the geometry to pattern, or at a pattern to change it")
+			return
+		var existing := _pattern_of(t.id)
+		if not existing.is_empty():
+			edit_pattern(existing.id)
 			return
 		_picks = [{kind = "entity", id = t.id, from = _cursor}]
 		game.hud.toast("Now the centre to turn about" if circular else "Now where the first copy goes")
@@ -1627,28 +1944,86 @@ func _pattern(primary: bool, circular: bool) -> void:
 	var pick: Dictionary = _picks[0]
 	_picks.clear()
 	var to := _cursor
-	var title := "Copies round the circle (with the original)" if circular else "Copies in the row (with the original)"
+	var centre_id := _snap_id
+	var title := "Instances round the circle (with the original)" if circular else "Instances in the row (with the original)"
 	game.numpad.ask(title, "6" if circular else "3", "A whole number, 2 or more.",
-		func(text: String) -> void: pattern_chain(pick.id, circular, to if circular else to - (pick.from as Vector2), text.to_int()))
+		func(text: String) -> void: pattern_chain(pick.id, circular, to if circular else to - (pick.from as Vector2), text.to_int(), centre_id))
 
 
-## Copies the chain holding eid count − 1 times: along step (linear), or round centre spread
-## evenly over a full turn (circular).
-func pattern_chain(eid: String, circular: bool, step_or_centre: Vector2, count_total: int) -> bool:
+## Patterns the chain holding eid: count instances in all, step apart (linear), or spread round
+## centre over a full turn (circular; centre_id names an existing point, else one is placed).
+## The core makes the copies and holds them to the originals; edit_pattern changes it later.
+func pattern_chain(eid: String, circular: bool, step_or_centre: Vector2, count_total: int, centre_id := "") -> bool:
 	if count_total < 2 or count_total > 100:
 		game.hud.toast("Pick between 2 and 100")
 		return false
-	var ids := _chain(eid)
+	var ids := _chain(eid).filter(func(id): return not _is_copy(id))
+	if ids.is_empty():
+		game.hud.toast("Pattern the original, not a copy")
+		return false
 	var s: Dictionary = sketch.duplicate(true)
-	for k in range(1, count_total):
-		var xf: Callable
-		if circular:
-			var turn := TAU * k / count_total
-			xf = func(u: Vector2) -> Vector2: return step_or_centre + (u - step_or_centre).rotated(turn)
-		else:
-			var shift := step_or_centre * k
-			xf = func(u: Vector2) -> Vector2: return u + shift
-		_copy(s, ids, xf)
+	if not s.has("patterns"):
+		s.patterns = []
+	var pat := {id = _new_id(s, "pt"), kind = "circular" if circular else "linear", entities = ids, count = count_total}
+	if circular:
+		pat.centre = centre_id if centre_id != "" else _point(s, _free(step_or_centre))
+	else:
+		if step_or_centre.length() < 1e-12:
+			game.hud.toast("Pick a spot away from the first one")
+			return false
+		pat.spacing = step_or_centre.length()
+		pat.angle = step_or_centre.angle()
+	s.patterns.append(pat)
+	return _commit(s, "Pattern")
+
+
+## The pattern eid is a copy or an original of, or {}.
+func _pattern_of(eid: String) -> Dictionary:
+	var e: Dictionary = _ents.get(eid, {})
+	for p in sketch.get("patterns", []):
+		if e.get("pattern", "") == p.id or eid in p.entities:
+			return p
+	return {}
+
+
+func _is_copy(eid: String) -> bool:
+	return String(_ents.get(eid, {}).get("pattern", "")) != ""
+
+
+## Asks for a pattern's number of instances, then its spacing (linear) or spread (circular).
+func edit_pattern(pid: String) -> void:
+	var pat := {}
+	for p in sketch.get("patterns", []):
+		if p.id == pid:
+			pat = p
+	if pat.is_empty():
+		return
+	var circular: bool = pat.kind == "circular"
+	game.numpad.ask("Instances (with the original)", str(int(pat.count)), "A whole number, 2 or more.",
+		func(text: String) -> void:
+			var n := text.to_int()
+			var units: String = game.hud.units
+			if circular:
+				game.numpad.ask("Spread", Units.show(pat.get("total", TAU), units, true), "Degrees: 360 spaces them evenly round the full turn.",
+					func(t2: String) -> void: set_pattern(pid, n, Units.parse(t2, units, true)))
+			else:
+				game.numpad.ask("Spacing", Units.show(pat.spacing, units), "In %s, or an expression." % units,
+					func(t2: String) -> void: set_pattern(pid, n, Units.parse(t2, units))))
+
+
+## Changes a pattern: instance count and spacing (linear) or spread angle (circular).
+func set_pattern(pid: String, count_total: int, value: Variant) -> bool:
+	if count_total < 2 or count_total > 100:
+		game.hud.toast("Pick between 2 and 100")
+		return false
+	var s: Dictionary = sketch.duplicate(true)
+	for p in s.get("patterns", []):
+		if p.id == pid:
+			p.count = count_total
+			if p.kind == "circular":
+				p.total = value
+			else:
+				p.spacing = value
 	return _commit(s, "Pattern")
 
 
@@ -1660,50 +2035,31 @@ func _convert(primary: bool) -> void:
 	if hit.is_empty() or not hit.has("face"):
 		game.hud.toast("Aim at a face of the model")
 		return
-	convert_face(int(hit.body), int(hit.face))
+	convert_face(int(hit.body), int(hit.face), hit.point)
 
 
-## Copies a model face's edges onto the sketch plane as fixed geometry (they do not follow later
-## changes to the model).
-func convert_face(body: int, face: int) -> bool:
-	var curves: Array = game.doc.project_face(body, face, sketch.plane)
-	if curves.is_empty():
-		game.hud.toast("That face has no edges to copy onto this sketch")
+## Copies a model face's edges onto the sketch plane (probe: a point on the face). The copies are
+## fixed and linked: when the model changes they follow their edges, keeping their dimensions and
+## relations. Editing one (trim, split…) unlinks just that one.
+func convert_face(body: int, face: int, probe: Vector3) -> bool:
+	var r: Dictionary = game.doc.convert_face(sketch, body, face, probe)
+	if not r.ok:
+		game.hud.toast(String(r.message).capitalize() if r.message != "" else "That face could not be copied")
 		return false
-	var s: Dictionary = sketch.duplicate(true)
-	for c in curves:
-		var pts: PackedVector2Array = c.pts
-		match String(c.kind):
-			"line":
-				s.entities.append(_entity(_new_id(s, "l"), "line", [_fixed_point(s, pts[0]), _fixed_point(s, pts[1])]))
-			"circle":
-				var kid := _new_id(s, "k")
-				var k := _entity(kid, "circle", [_fixed_point(s, pts[0])])
-				k.r = float(c.r)
-				s.entities.append(k)
-				_con(s, "radius", [kid], float(c.r))
-			"arc":
-				s.entities.append(_entity(_new_id(s, "a"), "arc", [_fixed_point(s, pts[0]), _fixed_point(s, pts[1]), _fixed_point(s, pts[2])]))
-			"spline":
-				var ids := []
-				for q in pts:
-					ids.append(_fixed_point(s, q))
-				if c.closed:
-					ids.append(ids[0])
-				s.entities.append(_entity(_new_id(s, "s"), "spline", ids))
-	return _commit(s, "Convert edges")
+	return _commit(r.sketch, "Convert edges")
 
 
-func _fixed_point(s: Dictionary, uv: Vector2) -> String:
-	var tol := 1e-9 * maxf(1.0, uv.length())
-	if uv.length() < tol:
-		return "o"
-	for p in s.points:
-		if p.get("fixed", false) and Vector2(float(p.x), float(p.y)).distance_to(uv) < tol:
-			return p.id
-	var id := _new_id(s, "p")
-	s.points.append({id = id, x = uv.x, y = uv.y, fixed = true})
-	return id
+## Stops eid following the model (it is being edited by hand).
+func _detach(s: Dictionary, eid: String) -> void:
+	for l in s.get("links", []):
+		l.entities = (l.entities as Array).filter(func(x): return x != eid)
+
+
+func _is_linked(eid: String) -> bool:
+	for l in sketch.get("links", []):
+		if eid in l.entities:
+			return true
+	return false
 
 
 # ---------- dimensions and relations ----------
@@ -1732,6 +2088,8 @@ func _dimension(primary: bool) -> void:
 				ask_dimension("radius", [t.id], _p(e.pts[0]).distance_to(_p(e.pts[1])))
 			"ellipse":
 				ask_dimension("radius", [t.id], float(e.r))
+			"text":
+				ask_dimension("distance", [t.id], float(e.r))
 			_:
 				game.hud.toast("Dimension a spline through its points")
 		return
@@ -1800,6 +2158,8 @@ func ask_dimension(kind: String, refs: Array, current: float) -> void:
 	var title: String = titles.get(kind, "Dimension")
 	if kind == "radius" and _ents.has(refs[0]) and _ents[refs[0]].kind == "ellipse":
 		title = "Ellipse semi-axis"
+	elif kind == "distance" and refs.size() == 1 and _ents.has(refs[0]) and _ents[refs[0]].kind == "text":
+		title = "Text height"
 	elif kind == "distance" and refs.size() == 2 and (_ents.has(refs[0]) or _ents.has(refs[1])):
 		title = "Distance square to the line"
 	var units: String = game.hud.units
@@ -1823,6 +2183,8 @@ func set_dimension(text: String, kind: String, refs: Array) -> bool:
 			found = true
 	if not found:
 		s.constraints.append({id = _new_id(s, "d"), kind = kind, refs = refs, value = value})
+	if kind == "distance" and refs.size() == 1 and _ents.has(refs[0]) and _ents[refs[0]].kind == "text" and value is float:
+		text_height = value  # the next text starts at this height
 	return _commit(s, "Dimension")
 
 
@@ -1872,7 +2234,13 @@ func _relation(primary: bool) -> void:
 			done = picks.size() == 1
 		"tangent":
 			if picks.is_empty():
-				want = "" if k in ["line", "circle", "arc"] else "a line, circle or arc"
+				want = "" if k in ["line", "circle", "arc", "spline"] else "a line, curve or spline"
+			elif picks[0] == "spline" or k == "spline":
+				var other: String = t.id if picks[0] == "spline" else _picks[0].id
+				var spl: String = _picks[0].id if picks[0] == "spline" else t.id
+				var ok: bool = _kind_of(t if picks[0] == "spline" else _picks[0]) in ["line", "arc"] and _shares_end(spl, other)
+				want = "" if ok else "a line or arc that the spline ends on"
+				done = true
 			else:
 				want = "" if k in round_ or (k == "line" and picks[0] in round_) else ("a circle or arc" if picks[0] == "line" else "a line, circle or arc")
 				done = true
@@ -1916,11 +2284,19 @@ func _relation(primary: bool) -> void:
 			elif kinds[1] in round_:
 				ckind = "point_on_circle"
 		"tangent":
-			if kinds[1] == "line":
+			if kinds[1] == "line" and kinds[0] != "spline":
 				refs = [ids[1], ids[0]]
 	var s: Dictionary = sketch.duplicate(true)
 	s.constraints.append({id = _new_id(s, "c"), kind = ckind, refs = refs})
 	_commit(s, kind.capitalize())
+
+
+## Whether a spline's first or last point ends a line or arc.
+func _shares_end(spline_id: String, other_id: String) -> bool:
+	var sp: Dictionary = _ents[spline_id]
+	var o: Dictionary = _ents[other_id]
+	var ends := _ends_of(o)
+	return sp.pts[0] in ends or sp.pts[-1] in ends
 
 
 func _construct(primary: bool) -> void:
@@ -1970,9 +2346,21 @@ func _erase(primary: bool) -> void:
 ## either). Stand-alone points elsewhere stay.
 func _remove(s: Dictionary, gone: Dictionary, points := []) -> void:
 	var touched := points.duplicate()
+	var dead_patterns := {}  # deleting a copy deletes its pattern
 	for e in s.entities:
 		if gone.has(e.id):
 			touched.append_array(e.pts)
+			if String(e.get("pattern", "")) != "":
+				dead_patterns[e.pattern] = true
+	if s.has("patterns"):
+		var keep := []
+		for p in s.patterns:
+			p.entities = (p.entities as Array).filter(func(x): return not gone.has(x))
+			if not dead_patterns.has(p.id) and not (p.entities as Array).is_empty():
+				keep.append(p)
+		s.patterns = keep
+	for id in gone:
+		_detach(s, id)
 	s.entities = (s.entities as Array).filter(func(e): return not gone.has(e.id))
 	s.constraints = (s.constraints as Array).filter(func(c):
 		for r in c.refs:
@@ -2149,8 +2537,8 @@ func _extent() -> float:
 
 func _new_id(s: Dictionary, prefix: String) -> String:
 	var used := {}
-	for k in ["points", "entities", "constraints"]:
-		for item in s[k]:
+	for k in ["points", "entities", "constraints", "patterns", "links"]:
+		for item in s.get(k, []):
 			used[item.id] = true
 	var i := 1
 	while used.has("%s%d" % [prefix, i]):
@@ -2246,7 +2634,29 @@ func _target(prefer_points: bool) -> Dictionary:
 
 
 func _distance_to(e: Dictionary, p: Vector2) -> float:
+	if e.kind == "text":
+		var best := INF
+		for c in _polylines(e):
+			best = minf(best, SG.distance(SG.poly(c), p))
+		return best
 	return SG.distance(_prim(e), p)
+
+
+## Every outline of the entity (several for text, one for anything else).
+func _polylines(e: Dictionary) -> Array:
+	if e.kind != "text":
+		return [_polyline(e)]
+	var out := []
+	var a := _p(e.pts[0])
+	var h := float(e.r)
+	for c in e.get("contours", []):
+		var poly := PackedVector2Array()
+		for q in c:
+			poly.append(a + Vector2(float(q[0]), float(q[1])) * h)
+		if poly.size() > 0:
+			poly.append(poly[0])
+		out.append(poly)
+	return out
 
 
 ## The entity as one primitive for sketch_geom.gd.
@@ -2316,6 +2726,25 @@ func _arc_points(c: Vector2, s: Vector2, end_angle: float) -> PackedVector2Array
 # ---------- display ----------
 
 func _redraw() -> void:
+	if not _drag.is_empty():
+		# Show the sketch as it would be after the move.
+		var keep := [_pts, _fixed, _ents]
+		_pts = {"o": Vector2.ZERO}
+		_fixed = {}
+		for p in _drag.points:
+			_pts[p.id] = Vector2(float(p.x), float(p.y))
+		_ents = {}
+		for e in _drag.entities:
+			_ents[e.id] = e
+		_paint()
+		_pts = keep[0]
+		_fixed = keep[1]
+		_ents = keep[2]
+		return
+	_paint()
+
+
+func _paint() -> void:
 	var im: ImmediateMesh = _lines.mesh
 	im.clear_surfaces()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
@@ -2330,7 +2759,8 @@ func _redraw() -> void:
 		var color := COLOR_CONSTRUCTION if e.get("construction", false) else base
 		if picked.has(id) or (_hover.get("kind", "") == "entity" and _hover.id == id):
 			color = COLOR_ACTIVE
-		_strip(im, _polyline(e), color, e.get("construction", false))
+		for poly in _polylines(e):
+			_strip(im, poly, color, e.get("construction", false))
 	# Points, the origin axes and the cursor.
 	var d := _tol * 0.35
 	for id in _pts:
@@ -2538,6 +2968,24 @@ func _draw_labels() -> void:
 		shown += 1
 		l.position = _w(pos)
 		l.text = _dimension_text(c)
+	# Each pattern: its count and spacing (or spread) beside its first copy.
+	for p in sketch.get("patterns", []):
+		var where := Vector2.ZERO
+		var n := 0
+		for id in _pts:
+			if String(id).begins_with(String(p.id) + ".1."):
+				where += _pts[id]
+				n += 1
+		if n == 0:
+			continue
+		var l := _label(shown)
+		shown += 1
+		l.position = _w(where / n + Vector2(0, _tol * 2.0))
+		if p.kind == "circular":
+			var total: Variant = p.get("total", TAU)
+			l.text = "×%d · %s" % [int(p.count), String(total) if total is String else "%.0f°" % rad_to_deg(float(total))]
+		else:
+			l.text = "×%d · %s" % [int(p.count), String(p.spacing) if p.spacing is String else game.hud.length(float(p.spacing))]
 	for i in range(shown, _labels.size()):
 		_labels[i].visible = false
 
@@ -2565,6 +3013,8 @@ func _label_position(c: Dictionary) -> Variant:
 	var refs: Array = c.refs
 	match c.kind:
 		"distance", "hdistance", "vdistance":
+			if refs.size() == 1 and _ents.has(refs[0]) and _ents[refs[0]].kind == "text":
+				return _p(_ents[refs[0]].pts[0]) + Vector2(0, -_tol * 1.5)
 			if refs.size() == 1 and _ents.has(refs[0]):
 				var e: Dictionary = _ents[refs[0]]
 				var a := _p(e.pts[0])
@@ -2607,6 +3057,8 @@ func _label_position(c: Dictionary) -> Variant:
 
 func _dimension_text(c: Dictionary) -> String:
 	var prefix: String = {diameter = "⌀", radius = "R", hdistance = "↔ ", vdistance = "↕ ", angle = "∠ "}.get(c.kind, "")
+	if c.kind == "distance" and c.refs.size() == 1 and _ents.has(c.refs[0]) and _ents[c.refs[0]].kind == "text":
+		prefix = "H "
 	if c.value is String:
 		return prefix + String(c.value)
 	if c.kind == "angle":
@@ -2690,6 +3142,13 @@ func _aim_label() -> String:
 		"extend":
 			if what == "line":
 				return "Extend line"
+		"split":
+			if what in ["line", "arc", "circle"]:
+				return "Split " + what + (" (second place)" if not _picks.is_empty() else "")
+		"text":
+			if what == "text":
+				return "Change text"
+			return "Text starts here"
 		"fillet", "chamfer":
 			if _hover.get("kind", "") == "point" and not _corner_lines(_hover.id).is_empty():
 				var v: Variant = fillet_radius if id == "fillet" else chamfer_distance
@@ -2697,7 +3156,12 @@ func _aim_label() -> String:
 		"offset":
 			if what != "" and _hover.kind == "entity":
 				return "Offset %s%s" % [what, "" if offset_distance == null else " · " + (game.hud.length(float(offset_distance)) if offset_distance is float else String(offset_distance))]
-		"move", "pattern_linear", "pattern_circular", "construct":
+		"pattern_linear", "pattern_circular":
+			if what != "" and _hover.kind == "entity" and not _pattern_of(_hover.id).is_empty():
+				return "Change this pattern"
+			if what != "":
+				return "%s %s" % [tool().name, what]
+		"move", "construct":
 			if what != "":
 				return "%s %s" % [tool().name, what]
 		"mirror":

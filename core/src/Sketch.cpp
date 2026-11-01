@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 #include <stdexcept>
 
 namespace fpcad {
@@ -96,7 +97,7 @@ public:
       X_.push_back(p.y);
     }
     for (auto& e : s_.entities) {
-      if (e.kind != "circle" && e.kind != "ellipse") continue;
+      if (e.kind != "circle" && e.kind != "ellipse" && e.kind != "text") continue;
       ridx_[e.id] = static_cast<int>(X_.size());
       X_.push_back(e.r);
     }
@@ -113,12 +114,15 @@ public:
         if (e.pts.size() != 2) throw std::invalid_argument("ellipse " + e.id + " needs a centre and an axis end");
       } else if (e.kind == "spline") {
         if (e.pts.size() < 2) throw std::invalid_argument("spline " + e.id + " needs at least two points");
+      } else if (e.kind == "text") {
+        if (e.pts.size() != 1) throw std::invalid_argument("text " + e.id + " needs an anchor point");
       } else {
         throw std::invalid_argument("unknown sketch entity kind '" + e.kind + "'");
       }
       for (auto& id : e.pts) need(id);
     }
     for (auto& c : s_.constraints) addConstraint(c);
+    for (auto& p : s_.patterns) addPattern(p);
   }
 
   using V = std::vector<double>;
@@ -244,7 +248,7 @@ private:
 
   // Radius of a circle (unknown) or an arc (centre to start); an ellipse's free semi-axis.
   double radius(const V& X, const SketchEntity& e) const {
-    if (e.kind == "circle" || e.kind == "ellipse") return X[ridx_.at(e.id)];
+    if (e.kind == "circle" || e.kind == "ellipse" || e.kind == "text") return X[ridx_.at(e.id)];
     return dist(X, e.pts[0], e.pts[1]);
   }
 
@@ -391,6 +395,19 @@ private:
       std::string p = c.refs[0];
       add(id, [this, p, l](const V& X) { return pt(X, p).x - 0.5 * (pt(X, l.pts[0]).x + pt(X, l.pts[1]).x); });
       add(id, [this, p, l](const V& X) { return pt(X, p).y - 0.5 * (pt(X, l.pts[0]).y + pt(X, l.pts[1]).y); });
+    } else if (k == "tangent" && c.refs.size() == 2 && s_.entity(c.refs[0]) && s_.entity(c.refs[1]) &&
+               (s_.entity(c.refs[0])->kind == "spline" || s_.entity(c.refs[1])->kind == "spline")) {
+      // Shapes the spline (its end leaves along the other's direction) rather than moving points.
+      const SketchEntity& a = *s_.entity(c.refs[0]);
+      const SketchEntity& b = *s_.entity(c.refs[1]);
+      const SketchEntity& sp = a.kind == "spline" ? a : b;
+      const SketchEntity& other = a.kind == "spline" ? b : a;
+      if (other.kind != "line" && other.kind != "arc")
+        throw std::invalid_argument("a spline can be tangent to a line or an arc");
+      bool joined = false;
+      for (auto& q : endsOf(other))
+        if (q == sp.pts.front() || q == sp.pts.back()) joined = true;
+      if (!joined) throw std::invalid_argument("a spline is tangent where it shares an end with the line or arc");
     } else if (k == "tangent" && s_.entity(c.refs.empty() ? "" : c.refs[0]) &&
                s_.entity(c.refs[0])->kind != "line") {
       // Two circles or arcs touching: centres r1 + r2 apart (outside) or |r1 − r2| (inside),
@@ -450,7 +467,10 @@ private:
       double d = val(Quantity::Length);
       const SketchEntity* e0 = c.refs.empty() ? nullptr : s_.entity(c.refs[0]);
       const SketchEntity* e1 = c.refs.size() < 2 ? nullptr : s_.entity(c.refs[1]);
-      if (c.refs.size() == 1) {
+      if (c.refs.size() == 1 && e0 && e0->kind == "text") {
+        const SketchEntity& t = *e0;
+        add(id, [this, t, d](const V& X) { return radius(X, t) - d; });
+      } else if (c.refs.size() == 1) {
         const SketchEntity& l = ent(c.refs[0], "line");
         add(id, [this, l, d](const V& X) { return dist(X, l.pts[0], l.pts[1]) - d; });
       } else if (e0 || e1) {
@@ -497,6 +517,58 @@ private:
       });
     } else {
       throw std::invalid_argument("unknown sketch relation '" + k + "'");
+    }
+  }
+
+  // Every copy point follows its source point through the pattern's move; copied circles,
+  // ellipses and text keep their source's size.
+  void addPattern(const SketchPattern& p) {
+    if (p.count < 2) return;
+    const bool circular = p.kind == "circular";
+    double dx = 0, dy = 0, step = 0;
+    if (circular) {
+      if (!cs().point(p.centre)) return;  // its centre was deleted: the copies are gone too
+      double total = p.total.is_null() ? 2 * kPi : value_(p.total, Quantity::Angle);
+      step = std::abs(total - 2 * kPi) < 1e-9 ? total / p.count : total / (p.count - 1);
+    } else {
+      double sp = value_(p.spacing, Quantity::Length);
+      double an = p.angle.is_null() ? 0.0 : value_(p.angle, Quantity::Angle);
+      dx = sp * std::cos(an);
+      dy = sp * std::sin(an);
+    }
+    std::set<std::string> srcPts;
+    for (auto& eid : p.entities)
+      if (const SketchEntity* e = s_.entity(eid))
+        for (auto& q : e->pts) srcPts.insert(q);
+    for (int k = 1; k < p.count; ++k) {
+      std::string pre = p.id + "." + std::to_string(k) + ".";
+      for (auto& sp : srcPts) {
+        std::string cp = pre + sp;
+        if (!cs().point(cp)) continue;
+        if (circular) {
+          std::string ctr = p.centre;
+          double ca = std::cos(step * k), sa = std::sin(step * k);
+          add(p.id, [this, sp, cp, ctr, ca, sa](const V& X) {
+            P c = pt(X, ctr), a = pt(X, sp);
+            return pt(X, cp).x - (c.x + ca * (a.x - c.x) - sa * (a.y - c.y));
+          });
+          add(p.id, [this, sp, cp, ctr, ca, sa](const V& X) {
+            P c = pt(X, ctr), a = pt(X, sp);
+            return pt(X, cp).y - (c.y + sa * (a.x - c.x) + ca * (a.y - c.y));
+          });
+        } else {
+          double ox = dx * k, oy = dy * k;
+          add(p.id, [this, sp, cp, ox](const V& X) { return pt(X, cp).x - pt(X, sp).x - ox; });
+          add(p.id, [this, sp, cp, oy](const V& X) { return pt(X, cp).y - pt(X, sp).y - oy; });
+        }
+      }
+      for (auto& eid : p.entities) {
+        const SketchEntity* src = s_.entity(eid);
+        const SketchEntity* cpy = s_.entity(pre + eid);
+        if (!src || !cpy || !ridx_.count(src->id) || !ridx_.count(cpy->id)) continue;
+        int a = ridx_.at(src->id), b = ridx_.at(cpy->id);
+        add(p.id, [a, b](const V& X) { return X[b] - X[a]; });
+      }
     }
   }
 
@@ -607,7 +679,41 @@ Sketch Sketch::fromJson(const Json& j) {
     se.pts = e.value("pts", std::vector<std::string>{});
     se.r = e.value("r", 0.0);
     se.construction = e.value("construction", false);
+    se.pattern = e.value("pattern", std::string());
+    se.text = e.value("text", std::string());
+    for (auto& c : e.value("contours", Json::array())) {
+      std::vector<std::array<double, 2>> poly;
+      for (auto& q : c) poly.push_back({q.at(0).get<double>(), q.at(1).get<double>()});
+      se.contours.push_back(poly);
+    }
     s.entities.push_back(se);
+  }
+  for (auto& p : j.value("patterns", Json::array())) {
+    SketchPattern sp;
+    sp.id = p.at("id").get<std::string>();
+    sp.kind = p.value("kind", std::string("linear"));
+    sp.entities = p.value("entities", std::vector<std::string>{});
+    sp.count = p.value("count", 2);
+    sp.spacing = p.value("spacing", Json());
+    sp.angle = p.value("angle", Json());
+    sp.centre = p.value("centre", std::string());
+    sp.total = p.value("total", Json());
+    s.patterns.push_back(sp);
+  }
+  for (auto& l : j.value("links", Json::array())) {
+    SketchLink sl;
+    sl.id = l.at("id").get<std::string>();
+    auto v3 = [&](const char* k, std::array<double, 3> d) {
+      if (!l.contains(k)) return d;
+      const Json& a = l.at(k);
+      return std::array<double, 3>{a.at(0).get<double>(), a.at(1).get<double>(), a.at(2).get<double>()};
+    };
+    sl.probe = v3("probe", sl.probe);
+    sl.normal = v3("normal", sl.normal);
+    sl.feature = l.value("feature", std::string());
+    sl.entities = l.value("entities", std::vector<std::string>{});
+    sl.points = l.value("points", std::vector<std::string>{});
+    s.links.push_back(sl);
   }
   for (auto& c : j.value("constraints", Json::array())) {
     SketchConstraint sc;
@@ -629,17 +735,45 @@ Json Sketch::toJson() const {
   }
   for (auto& e : entities) {
     Json o = {{"id", e.id}, {"kind", e.kind}, {"pts", e.pts}};
-    if (e.kind == "circle" || e.kind == "ellipse") o["r"] = e.r;
+    if (e.kind == "circle" || e.kind == "ellipse" || e.kind == "text") o["r"] = e.r;
     if (e.construction) o["construction"] = true;
+    if (!e.pattern.empty()) o["pattern"] = e.pattern;
+    if (e.kind == "text") {
+      o["text"] = e.text;
+      Json cs = Json::array();
+      for (auto& c : e.contours) {
+        Json poly = Json::array();
+        for (auto& q : c) poly.push_back({q[0], q[1]});
+        cs.push_back(poly);
+      }
+      o["contours"] = cs;
+    }
     ents.push_back(o);
+  }
+  Json pats = Json::array(), links = Json::array();
+  for (auto& p : patterns) {
+    Json o = {{"id", p.id}, {"kind", p.kind}, {"entities", p.entities}, {"count", p.count}};
+    if (!p.spacing.is_null()) o["spacing"] = p.spacing;
+    if (!p.angle.is_null()) o["angle"] = p.angle;
+    if (!p.centre.empty()) o["centre"] = p.centre;
+    if (!p.total.is_null()) o["total"] = p.total;
+    pats.push_back(o);
+  }
+  for (auto& l : this->links) {
+    Json o = {{"id", l.id}, {"probe", l.probe}, {"normal", l.normal}, {"entities", l.entities}, {"points", l.points}};
+    if (!l.feature.empty()) o["feature"] = l.feature;
+    links.push_back(o);
   }
   for (auto& c : constraints) {
     Json o = {{"id", c.id}, {"kind", c.kind}, {"refs", c.refs}};
     if (!c.value.is_null()) o["value"] = c.value;
     cons.push_back(o);
   }
-  return {{"plane", plane.toJson()}, {"planeName", planeName}, {"points", pts}, {"entities", ents},
-          {"constraints", cons}};
+  Json out = {{"plane", plane.toJson()}, {"planeName", planeName}, {"points", pts}, {"entities", ents},
+              {"constraints", cons}};
+  if (!patterns.empty()) out["patterns"] = pats;
+  if (!this->links.empty()) out["links"] = links;
+  return out;
 }
 
 const SketchPoint* Sketch::point(const std::string& id) const {
@@ -658,8 +792,113 @@ const SketchEntity* Sketch::entity(const std::string& id) const {
   return nullptr;
 }
 
+std::string freshSketchId(const Sketch& s, const std::string& prefix) {
+  std::set<std::string> used{"o"};
+  for (auto& p : s.points) used.insert(p.id);
+  for (auto& e : s.entities) used.insert(e.id);
+  for (auto& c : s.constraints) used.insert(c.id);
+  for (auto& p : s.patterns) used.insert(p.id);
+  for (auto& l : s.links) used.insert(l.id);
+  for (int i = 1;; ++i) {
+    std::string id = prefix + std::to_string(i);
+    if (!used.count(id)) return id;
+  }
+}
+
+void expandPatterns(Sketch& s, const SketchValueFn& value) {
+  const Sketch& cs = s;  // lookups that see the origin "o"
+  // What every pattern should have: copy entities and copy points, with fresh positions.
+  std::map<std::string, SketchEntity> want;
+  std::map<std::string, std::array<double, 2>> wantPts;
+  std::set<std::string> srcIds;
+  for (auto& p : s.patterns) {
+    if (p.count < 2) continue;
+    bool circular = p.kind == "circular";
+    double dx = 0, dy = 0, step = 0, cx = 0, cy = 0;
+    try {
+      if (circular) {
+        const SketchPoint* c = cs.point(p.centre);
+        if (!c) continue;
+        cx = c->x;
+        cy = c->y;
+        double total = p.total.is_null() ? 2 * kPi : value(p.total, Quantity::Angle);
+        step = std::abs(total - 2 * kPi) < 1e-9 ? total / p.count : total / (p.count - 1);
+      } else {
+        double sp = value(p.spacing, Quantity::Length);
+        double an = p.angle.is_null() ? 0.0 : value(p.angle, Quantity::Angle);
+        dx = sp * std::cos(an);
+        dy = sp * std::sin(an);
+      }
+    } catch (const std::exception&) {
+      continue;  // the solve reports the bad value
+    }
+    for (int k = 1; k < p.count; ++k) {
+      std::string pre = p.id + "." + std::to_string(k) + ".";
+      double ca = std::cos(step * k), sa = std::sin(step * k);
+      for (auto& eid : p.entities) {
+        const SketchEntity* src = s.entity(eid);
+        if (!src || !src->pattern.empty()) continue;
+        SketchEntity e = *src;
+        e.id = pre + eid;
+        e.pattern = p.id;
+        for (auto& q : e.pts) {
+          const SketchPoint* sp = cs.point(q);
+          if (!sp) continue;
+          std::array<double, 2> to = circular
+              ? std::array<double, 2>{cx + ca * (sp->x - cx) - sa * (sp->y - cy), cy + sa * (sp->x - cx) + ca * (sp->y - cy)}
+              : std::array<double, 2>{sp->x + dx * k, sp->y + dy * k};
+          wantPts[pre + q] = to;
+          q = pre + q;
+        }
+        want[e.id] = e;
+      }
+    }
+  }
+  // Remove stale copies and their points, add or refresh the rest.
+  std::set<std::string> gone;
+  std::vector<SketchEntity> ents;
+  for (auto& e : s.entities) {
+    if (!e.pattern.empty() && !want.count(e.id)) { gone.insert(e.id); continue; }
+    if (want.count(e.id)) {
+      SketchEntity w = want[e.id];
+      w.construction = e.construction;  // a copy can be switched to construction on its own
+      if (e.r > 0 && e.kind == w.kind) w.r = e.r;
+      ents.push_back(w);
+      want.erase(e.id);
+    } else {
+      ents.push_back(e);
+    }
+  }
+  for (auto& [id, e] : want) ents.push_back(e);
+  s.entities = ents;
+  std::vector<SketchPoint> pts;
+  for (auto& p : s.points) {
+    bool copy = p.id.find('.') != std::string::npos;
+    if (copy && !wantPts.count(p.id)) { gone.insert(p.id); continue; }
+    if (copy) {
+      p.x = wantPts[p.id][0];
+      p.y = wantPts[p.id][1];
+      p.fixed = false;
+      wantPts.erase(p.id);
+    }
+    pts.push_back(p);
+  }
+  for (auto& [id, at] : wantPts) pts.push_back({id, at[0], at[1], false});
+  s.points = pts;
+  if (!gone.empty()) {
+    std::vector<SketchConstraint> keep;
+    for (auto& c : s.constraints) {
+      bool drop = false;
+      for (auto& r : c.refs) drop = drop || gone.count(r);
+      if (!drop) keep.push_back(c);
+    }
+    s.constraints = keep;
+  }
+}
+
 SolveResult solveSketch(Sketch& s, const SketchValueFn& value) {
   try {
+    expandPatterns(s, value);
     System sys(s, value);
     return sys.solve();
   } catch (const std::exception& e) {

@@ -33,7 +33,7 @@ const SKETCH := [
 	["Let go of RB", "Let go of Q", "Pick it; without a tool picked, the wheel closes and your tool stays the same"],
 	["B", "Esc", "Back from a branch to the groups, then close"],
 	["", "", "WHILE SKETCHING"],
-	["RB", "Hold Q", "Sketch tools: Lines, Curves, Modify (trim, extend, fillet, chamfer, offset, convert edges), Copy (move, mirror, patterns), Constrain, Construction, Delete"],
+	["RB", "Hold Q", "Sketch tools: Lines, Curves, Modify (trim, extend, split, fillet, chamfer, offset, convert edges), Copy (move, mirror, patterns), Constrain, Text, Construction, Delete"],
 	["RT", "Left click", "Place a point (snaps to points, the origin and the grid), or pick for the tool"],
 	["LT", "Right click", "End a chain, finish a spline. Polygon: number of sides. Fillet, chamfer, offset: set the size"],
 	["B", "—", "Drop what is being drawn or picked"],

@@ -48,9 +48,10 @@ what the cursor is on.
 | --- | --- |
 | **Lines** | Line, Corner rectangle, Centre rectangle, 3-point rectangle, Polygon, Slot, Point |
 | **Curves** | Circle, 3-point circle, Centre arc, 3-point arc, Tangent arc, Ellipse, Spline |
-| **Modify** | Trim, Extend, Fillet, Chamfer, Offset, Convert edges |
+| **Modify** | Trim, Extend, Split, Fillet, Chamfer, Offset, Convert edges |
 | **Copy** | Move (move, copy, rotate, scale), Mirror, Linear pattern, Circular pattern |
 | **Constrain** | Dimension, Relation |
+| Text | Words as outlines, ready to extrude or cut |
 | Construction | Switch geometry between normal and construction |
 | Delete | Delete geometry, or only what holds it |
 
@@ -74,6 +75,11 @@ what the cursor is on.
 - **Spline**: a smooth curve through the points you place. LT finishes it; placing the first
   point again closes it into a loop. Splines are fit-point curves (they pass through every point),
   so moving or dimensioning those points reshapes them.
+- **Text**: pick where the text starts (its baseline's left end), then type the words (on a
+  keyboard, or with the on-screen letters on a controller or touch). The letters are closed
+  outlines in the game's font, with holes where letters have them, so they extrude or cut like any
+  profile. Dimension the text to set its cap height; aim the Text tool at existing text to change
+  the words. Text moves and scales, but stays level (it does not rotate or mirror).
 - **Construction geometry** (LB with a drawing tool, or the **Construction** tool on existing
   geometry) is drawn dashed. It is for reference, such as centrelines and revolve axes, and never
   becomes part of a closed profile.
@@ -86,6 +92,8 @@ what the cursor is on.
   in line (collinear, or equal arcs on one centre).
 - **Extend**: aim at a line near the end to lengthen; it runs on to the next line or curve ahead
   and stays on it.
+- **Split**: aim at a line or arc where it should split; the two pieces stay in line (or on one
+  circle). A circle needs two places and becomes two arcs.
 - **Fillet**: aim at a corner where two lines meet. The corner becomes a tangent arc with a
   radius dimension. LT sets the radius (it is asked for the first time otherwise) and it is reused
   for each corner. If anything referred to the corner, it stays as a reference point where the
@@ -97,33 +105,42 @@ what the cursor is on.
   arcs share their originals' centres. LT sets the distance.
 - **Convert edges**: aim at a face of the model. Its edges are copied onto the sketch plane as
   fixed geometry (lines, circles and arcs where they lie square to the sketch, splines
-  otherwise), ready to trim, offset or dimension against. They do not follow later changes to the
-  model.
+  otherwise), ready to dimension, offset or draw against. They are **linked**: when the model
+  changes (a dimension, a variable, an earlier feature), each converted edge follows its edge on
+  the next rebuild and keeps its id, so dimensions and relations to it still hold. Editing one by
+  hand (trim, extend, split, fillet, chamfer) unlinks just that one; deleting one leaves it gone.
+  An edge that no longer exists is removed with whatever referred to it.
 
 ### Copying
 
-- **Move**: pick a point, or geometry (its whole chain moves), then where it goes. LB switches to
-  **copy** (the original stays), **rotate** (pick the centre, then type the angle) and **scale**
-  (pick the centre, then type the factor). Geometry held by dimensions or relations is solved as
-  it moves; if they forbid the move it is refused.
+- **Move**: pick a point, or geometry (its whole chain moves); it then follows the crosshair live,
+  solved as it goes, so you see how the rest of the sketch responds. Press again to place it. LB
+  switches to **copy** (the original stays), **rotate** (pick the centre, then type the angle) and
+  **scale** (pick the centre, then type the factor). If dimensions or relations forbid a move, the
+  geometry stays put.
 - **Mirror**: pick the mirror line (often a construction centreline), then each piece of
   geometry to mirror. Every copied point is held symmetric to its original; points on the line are
   shared.
 - **Linear pattern**: pick the geometry, then where its first copy goes, then how many in all.
-  **Circular pattern**: pick the geometry, then the centre, then how many round the full turn.
-  The copies are independent geometry (they are not held to the original).
+  **Circular pattern**: pick the geometry, then the centre (a point, or a new one), then how many
+  round the full turn. Patterns stay **live**: the copies are held to the original, so moving,
+  resizing or dimensioning the original moves them all, and a label shows the count and spacing.
+  Aim either pattern tool at a pattern to change its count and its spacing (linear) or spread
+  angle (circular, 360° spaces them evenly). Copies cannot be edited on their own; deleting one
+  removes the pattern.
 
 ### Constraining
 
-- **Dimension**: aim at a circle (diameter), arc (radius), ellipse (its second semi-axis), a
-  line, or a point. After a line: aim off the geometry for its length, at a second line for the
+- **Dimension**: aim at a circle (diameter), arc (radius), ellipse (its second semi-axis), text
+  (its height), a line, or a point. After a line: aim off the geometry for its length, at a second line for the
   angle between them (or the distance between them if they are parallel), or at a point for its
   distance square to the line. After a point: a second point for the aligned, horizontal or
   vertical distance (LB), or a line. A number pad opens; plain numbers are in the part's units
   (degrees for angles), anything else is an expression (`width / 2`, `25 mm`, `90 deg - taper`).
 - **Relation** (LB chooses): horizontal and vertical (a line, or two points level or one above the
   other), coincident (a point onto a point, line, circle or arc), parallel, perpendicular,
-  tangent (a line and a circle or arc, or two circles or arcs), equal (lines, or curves' radii),
+  tangent (a line and a circle or arc, two circles or arcs, or a spline and the line or arc it
+  ends on: the spline then leaves along it), equal (lines, or curves' radii),
   collinear, concentric, midpoint (a point, then the line), symmetric (two points, then the line of
   symmetry), fix.
 - **Delete**: RT deletes geometry; LT removes only the relations and dimensions holding it.
@@ -162,8 +179,10 @@ sketch extrudes: pushing the end face changes the depth.
 
 - `fpcad/Sketch.h` — sketch data and the constraint solver (Levenberg–Marquardt with a
   minimum-norm step, degrees of freedom from the Jacobian's rank, conflicts named). Entities:
-  line, circle, arc, ellipse, spline (fit points, open or closed) and stand-alone points. 22
-  relation and dimension kinds, listed at the top of the header. Tangency where a line or arc
+  line, circle, arc, ellipse, spline (fit points, open or closed, with tangent ends), text
+  (glyph outlines) and stand-alone points. 22 relation and dimension kinds, listed at the top of
+  the header. Patterns (`expandPatterns`) regenerate their copies on every solve and hold them to
+  their originals; links re-project converted faces on every rebuild (`PartModel::convertFace`). Tangency where a line or arc
   shares an end with an arc is solved as a square radius (or centres in line with the joint), so
   the solver always has a slope to follow and the degrees of freedom count correctly.
 - `core/src/SketchGeom.*` — closed regions with holes, loops and open paths as Open CASCADE

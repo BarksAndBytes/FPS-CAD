@@ -50,6 +50,10 @@
 #include "SketchGeom.h"
 
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp_Face.hxx>
+#include <set>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
@@ -135,6 +139,239 @@ FaceTags remap(BRepBuilderAPI_MakeShape& op, const FaceTags& old, const TopoDS_S
 bool hasSolid(const TopoDS_Shape& s) {
   TopExp_Explorer e(s, TopAbs_SOLID);
   return e.More();
+}
+
+// A face's edges flattened onto a sketch plane (see PartModel::projectFace).
+std::vector<PartModel::ProjectedCurve> projectFaceEdges(const TopoDS_Face& faceShape, const SketchPlane& plane) {
+  std::vector<PartModel::ProjectedCurve> out;
+  const gp_Dir N(plane.normal[0], plane.normal[1], plane.normal[2]);
+  auto flat = [&](const gp_Pnt& p) { return plane.toPlane({p.X(), p.Y(), p.Z()}); };
+  auto gap = [](const std::array<double, 2>& a, const std::array<double, 2>& c) {
+    return std::hypot(a[0] - c[0], a[1] - c[1]);
+  };
+  ShapeIndex edges;
+  TopExp::MapShapes(faceShape, TopAbs_EDGE, edges);
+  for (int i = 1; i <= edges.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(edges(i));
+    if (BRep_Tool::Degenerated(edge)) continue;
+    try {
+      BRepAdaptor_Curve c(edge);
+      double t0 = c.FirstParameter(), t1 = c.LastParameter();
+      gp_Pnt s3 = c.Value(t0), e3 = c.Value(t1);
+      bool closedEdge = s3.Distance(e3) < 1e-9;
+      PartModel::ProjectedCurve pc;
+      if (c.GetType() == GeomAbs_Line) {
+        pc.kind = "line";
+        pc.pts = {flat(s3), flat(e3)};
+        if (gap(pc.pts[0], pc.pts[1]) < 1e-9) continue;
+      } else if (c.GetType() == GeomAbs_Circle && std::abs(c.Circle().Axis().Direction().Dot(N)) > 1 - 1e-9) {
+        gp_Circ circ = c.Circle();
+        auto centre = flat(circ.Location());
+        if (closedEdge) {
+          pc.kind = "circle";
+          pc.pts = {centre};
+          pc.r = circ.Radius();
+        } else {
+          pc.kind = "arc";
+          // Parameters run counter-clockwise about the circle's own axis.
+          bool ccw = circ.Axis().Direction().Dot(N) > 0;
+          pc.pts = {centre, flat(ccw ? s3 : e3), flat(ccw ? e3 : s3)};
+        }
+      } else {
+        // Anything else is sampled into a spline; one that flattens to a straight run is a line.
+        int n = closedEdge ? 16 : 9;
+        std::vector<std::array<double, 2>> pts;
+        for (int k = 0; k < n; ++k) pts.push_back(flat(c.Value(t0 + (t1 - t0) * k / (closedEdge ? n : n - 1))));
+        size_t ia = 0, ib = 0;
+        double span = 0;
+        for (size_t a = 0; a < pts.size(); ++a)
+          for (size_t z = a + 1; z < pts.size(); ++z)
+            if (gap(pts[a], pts[z]) > span) { span = gap(pts[a], pts[z]); ia = a; ib = z; }
+        if (span < 1e-9) continue;
+        double off = 0;
+        auto A = pts[ia], B = pts[ib];
+        for (auto& q : pts)
+          off = std::max(off, std::abs((B[0] - A[0]) * (q[1] - A[1]) - (B[1] - A[1]) * (q[0] - A[0])) / span);
+        if (off < 1e-7 * std::max(1.0, span)) {
+          pc.kind = "line";
+          pc.pts = {A, B};
+        } else {
+          pc.kind = "spline";
+          pc.pts = pts;
+          pc.closed = closedEdge;
+        }
+      }
+      out.push_back(pc);
+    } catch (const Standard_Failure&) {
+      continue;
+    }
+  }
+  return out;
+}
+
+// The point of face f nearest p, and the face's outward normal there.
+bool nearestOnFace(const TopoDS_Face& f, const gp_Pnt& p, gp_Pnt& at, gp_Dir& n) {
+  BRepExtrema_DistShapeShape d(BRepBuilderAPI_MakeVertex(p).Vertex(), f);
+  if (!d.IsDone() || d.NbSolution() < 1) return false;
+  at = d.PointOnShape2(1);
+  double u = 0, v = 0;
+  if (d.SupportTypeShape2(1) == BRepExtrema_IsInFace) {
+    d.ParOnFaceS2(1, u, v);
+  } else {
+    BRepAdaptor_Surface sa(f);
+    u = (sa.FirstUParameter() + sa.LastUParameter()) / 2;
+    v = (sa.FirstVParameter() + sa.LastVParameter()) / 2;
+  }
+  BRepGProp_Face gf(f);
+  gp_Pnt q;
+  gp_Vec nv;
+  gf.Normal(u, v, q, nv);
+  if (nv.Magnitude() < 1e-15) return false;
+  n = gp_Dir(nv);
+  return true;
+}
+
+// Key points of a sketch entity and of a projected curve, for matching one to the other.
+std::vector<std::string> keyIds(const SketchEntity& e) {
+  if (e.kind == "spline" && e.pts.size() > 2 && e.pts.front() == e.pts.back())
+    return std::vector<std::string>(e.pts.begin(), e.pts.end() - 1);
+  return e.pts;
+}
+
+// Lays projected curves into the sketch under link l. Entities the link made before keep their
+// ids (moved onto the new edges); edges that went away are removed along with the relations that
+// mention them. New edges are added only when addNew (the first conversion), so a converted line
+// the player deleted or unlinked stays gone. Converted points are fixed.
+void applyLink(Sketch& s, SketchLink& l, const std::vector<PartModel::ProjectedCurve>& curves, bool addNew) {
+  const Sketch& cs = s;
+  auto pos = [&](const std::string& id) {
+    const SketchPoint* p = cs.point(id);
+    return p ? std::array<double, 2>{p->x, p->y} : std::array<double, 2>{1e300, 1e300};
+  };
+  auto gap = [](const std::array<double, 2>& a, const std::array<double, 2>& b) { return std::hypot(a[0] - b[0], a[1] - b[1]); };
+  double scale = 1e-3;
+  for (auto& c : curves)
+    for (auto& q : c.pts) scale = std::max({scale, std::abs(q[0]), std::abs(q[1])});
+  const double tol = 1e-9 * scale;
+
+  // Match old entities to new curves, cheapest first.
+  struct Pair { double cost; size_t e, c; bool rev; };
+  std::vector<SketchEntity> old;  // copies: s.entities grows below
+  for (auto& id : l.entities)
+    if (const SketchEntity* e = s.entity(id)) old.push_back(*e);
+  std::vector<Pair> pairs;
+  for (size_t i = 0; i < old.size(); ++i)
+    for (size_t j = 0; j < curves.size(); ++j) {
+      auto ids = keyIds(old[i]);
+      const auto& c = curves[j];
+      if (old[i].kind != c.kind || ids.size() != c.pts.size()) continue;
+      for (int rev = 0; rev < (c.kind == "line" ? 2 : 1); ++rev) {
+        double cost = 0;
+        for (size_t k = 0; k < ids.size(); ++k) cost += gap(pos(ids[k]), c.pts[rev ? ids.size() - 1 - k : k]);
+        if (c.kind == "circle") cost += std::abs(old[i].r - c.r);
+        pairs.push_back({cost, i, j, rev == 1});
+      }
+    }
+  std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.cost < b.cost; });
+  std::vector<int> matchOf(curves.size(), -1);
+  std::vector<bool> revOf(curves.size(), false), oldUsed(old.size(), false);
+  for (auto& p : pairs) {
+    if (oldUsed[p.e] || matchOf[p.c] >= 0) continue;
+    oldUsed[p.e] = true;
+    matchOf[p.c] = static_cast<int>(p.e);
+    revOf[p.c] = p.rev;
+  }
+
+  // Where each point goes this time; a point asked to be in two places is split.
+  std::map<std::string, std::array<double, 2>> placed;
+  auto pointAt = [&](const std::string& want, const std::array<double, 2>& at) -> std::string {
+    if (gap(at, {0, 0}) < tol) return "o";
+    for (auto& [id, q] : placed)
+      if (gap(q, at) < tol) return id;
+    if (!want.empty() && want != "o" && !placed.count(want)) {
+      if (SketchPoint* p = s.point(want)) {
+        p->x = at[0];
+        p->y = at[1];
+        p->fixed = true;
+        placed[want] = at;
+        return want;
+      }
+    }
+    for (auto& p : s.points)
+      if (p.fixed && gap({p.x, p.y}, at) < tol) {
+        placed[p.id] = at;
+        return p.id;
+      }
+    std::string id = freshSketchId(s, l.id + "p");
+    s.points.push_back({id, at[0], at[1], true});
+    placed[id] = at;
+    return id;
+  };
+
+  std::vector<std::string> keep;
+  for (size_t j = 0; j < curves.size(); ++j) {
+    const auto& c = curves[j];
+    std::vector<std::string> want(c.pts.size());
+    SketchEntity* e = nullptr;
+    if (matchOf[j] >= 0) {
+      for (auto& x : s.entities)
+        if (x.id == old[static_cast<size_t>(matchOf[j])].id) e = &x;
+      auto ids = keyIds(*e);
+      for (size_t k = 0; k < ids.size(); ++k) want[revOf[j] ? ids.size() - 1 - k : k] = ids[k];
+    } else if (!addNew) {
+      continue;
+    }
+    std::vector<std::string> ids;
+    for (size_t k = 0; k < c.pts.size(); ++k) ids.push_back(pointAt(want[k], c.pts[k]));
+    if (c.kind == "spline" && c.closed) ids.push_back(ids.front());
+    if (!e) {
+      SketchEntity ne;
+      ne.id = freshSketchId(s, c.kind == "line" ? "l" : c.kind == "circle" ? "k" : c.kind == "arc" ? "a" : "s");
+      ne.kind = c.kind;
+      s.entities.push_back(ne);
+      e = &s.entities.back();
+      if (c.kind == "circle") s.constraints.push_back({freshSketchId(s, "d"), "radius", {ne.id}, c.r});
+    }
+    e->pts = ids;
+    if (c.kind == "circle") {
+      e->r = c.r;
+      for (auto& k : s.constraints)
+        if (k.kind == "radius" && k.refs.size() == 1 && k.refs[0] == e->id && k.value.is_number()) k.value = c.r;
+    }
+    keep.push_back(e->id);
+  }
+
+  // Edges that are gone: their entities, then points nothing uses, then relations to either.
+  std::set<std::string> gone;
+  for (size_t i = 0; i < old.size(); ++i)
+    if (!oldUsed[i]) gone.insert(old[i].id);
+  std::vector<SketchEntity> ents;
+  for (auto& e : s.entities)
+    if (!gone.count(e.id)) ents.push_back(e);
+  s.entities = ents;
+  std::set<std::string> used;
+  for (auto& e : s.entities)
+    for (auto& q : e.pts) used.insert(q);
+  std::vector<SketchPoint> pts;
+  for (auto& p : s.points) {
+    bool mine = std::find(l.points.begin(), l.points.end(), p.id) != l.points.end();
+    if (mine && !used.count(p.id)) gone.insert(p.id);
+    else pts.push_back(p);
+  }
+  s.points = pts;
+  std::vector<SketchConstraint> cons;
+  for (auto& c : s.constraints) {
+    bool drop = false;
+    for (auto& r : c.refs) drop = drop || gone.count(r);
+    if (!drop) cons.push_back(c);
+  }
+  s.constraints = cons;
+  l.entities = keep;
+  l.points.clear();
+  for (auto& id : keep)
+    if (const SketchEntity* e = s.entity(id))
+      for (auto& q : e->pts)
+        if (q != "o" && std::find(l.points.begin(), l.points.end(), q) == l.points.end()) l.points.push_back(q);
 }
 
 }  // namespace
@@ -241,6 +478,7 @@ struct PartModel::Impl {
   void processSketch(Feature& f) {
     SketchState st;
     st.sketch = Sketch::fromJson(f.params);
+    refreshLinks(st.sketch);
     st.solve = solveSketch(st.sketch, valueFn());
     if (st.solve.ok) {
       Json solved = st.sketch.toJson();
@@ -252,6 +490,43 @@ struct PartModel::Impl {
     sketches[f.id] = std::move(st);
     const SketchState& done = sketches[f.id];
     if (!done.solve.ok) throw FeatureError("sketch: " + done.solve.message);
+  }
+
+  // Converted edges follow the model: each link's face is found again in the bodies built so far
+  // and projected afresh. A face that cannot be found leaves the geometry as it was.
+  void refreshLinks(Sketch& sk) {
+    for (auto& l : sk.links) {
+      gp_Pnt probe(l.probe[0], l.probe[1], l.probe[2]);
+      gp_Dir want(l.normal[0], l.normal[1], l.normal[2]);
+      double best = 1e300;
+      bool bestOwned = false;
+      TopoDS_Face found;
+      gp_Pnt at;
+      gp_Dir n;
+      for (size_t b = 0; b < bodies.size(); ++b) {
+        for (TopExp_Explorer ex(bodies[b], TopAbs_FACE); ex.More(); ex.Next()) {
+          const TopoDS_Face& f = TopoDS::Face(ex.Current());
+          gp_Pnt q;
+          gp_Dir fn;
+          if (!nearestOnFace(f, probe, q, fn) || fn.Dot(want) < 0.9) continue;
+          bool owned = !l.feature.empty() && ownerOf(static_cast<int>(b), f) == l.feature;
+          double d = q.Distance(probe);
+          if ((owned && !bestOwned) || (owned == bestOwned && d < best)) {
+            best = d;
+            bestOwned = owned;
+            found = f;
+            at = q;
+            n = fn;
+          }
+        }
+      }
+      if (found.IsNull()) continue;
+      auto curves = projectFaceEdges(found, sk.plane);
+      if (curves.empty()) continue;
+      applyLink(sk, l, curves, false);
+      l.probe = {at.X(), at.Y(), at.Z()};
+      l.normal = {n.X(), n.Y(), n.Z()};
+    }
   }
 
   const SketchState& sketchRef(const Json& params, const char* key) const {
@@ -905,73 +1180,34 @@ std::vector<Vec3> PartModel::faceVertices(int b, int face) const {
 }
 
 std::vector<PartModel::ProjectedCurve> PartModel::projectFace(int b, int face, const SketchPlane& plane) const {
-  std::vector<ProjectedCurve> out;
-  if (b < 0 || b >= bodyCount()) return out;
+  if (b < 0 || b >= bodyCount()) return {};
   const ShapeIndex& faces = d_->faceIndex[static_cast<size_t>(b)];
-  if (face < 0 || face >= faces.Extent()) return out;
-  const gp_Dir N(plane.normal[0], plane.normal[1], plane.normal[2]);
-  auto flat = [&](const gp_Pnt& p) { return plane.toPlane({p.X(), p.Y(), p.Z()}); };
-  auto gap = [](const std::array<double, 2>& a, const std::array<double, 2>& c) {
-    return std::hypot(a[0] - c[0], a[1] - c[1]);
+  if (face < 0 || face >= faces.Extent()) return {};
+  return projectFaceEdges(TopoDS::Face(faces(face + 1)), plane);
+}
+
+bool PartModel::convertFace(Sketch& s, int b, int face, const Vec3& probe, std::string* message) {
+  auto fail = [&](const char* m) {
+    if (message) *message = m;
+    return false;
   };
-  ShapeIndex edges;
-  TopExp::MapShapes(faces(face + 1), TopAbs_EDGE, edges);
-  for (int i = 1; i <= edges.Extent(); ++i) {
-    const TopoDS_Edge& edge = TopoDS::Edge(edges(i));
-    if (BRep_Tool::Degenerated(edge)) continue;
-    try {
-      BRepAdaptor_Curve c(edge);
-      double t0 = c.FirstParameter(), t1 = c.LastParameter();
-      gp_Pnt s3 = c.Value(t0), e3 = c.Value(t1);
-      bool closedEdge = s3.Distance(e3) < 1e-9;
-      ProjectedCurve pc;
-      if (c.GetType() == GeomAbs_Line) {
-        pc.kind = "line";
-        pc.pts = {flat(s3), flat(e3)};
-        if (gap(pc.pts[0], pc.pts[1]) < 1e-9) continue;
-      } else if (c.GetType() == GeomAbs_Circle && std::abs(c.Circle().Axis().Direction().Dot(N)) > 1 - 1e-9) {
-        gp_Circ circ = c.Circle();
-        auto centre = flat(circ.Location());
-        if (closedEdge) {
-          pc.kind = "circle";
-          pc.pts = {centre};
-          pc.r = circ.Radius();
-        } else {
-          pc.kind = "arc";
-          // Parameters run counter-clockwise about the circle's own axis.
-          bool ccw = circ.Axis().Direction().Dot(N) > 0;
-          pc.pts = {centre, flat(ccw ? s3 : e3), flat(ccw ? e3 : s3)};
-        }
-      } else {
-        // Anything else is sampled into a spline; one that flattens to a straight run is a line.
-        int n = closedEdge ? 16 : 9;
-        std::vector<std::array<double, 2>> pts;
-        for (int k = 0; k < n; ++k) pts.push_back(flat(c.Value(t0 + (t1 - t0) * k / (closedEdge ? n : n - 1))));
-        size_t ia = 0, ib = 0;
-        double span = 0;
-        for (size_t a = 0; a < pts.size(); ++a)
-          for (size_t z = a + 1; z < pts.size(); ++z)
-            if (gap(pts[a], pts[z]) > span) { span = gap(pts[a], pts[z]); ia = a; ib = z; }
-        if (span < 1e-9) continue;
-        double off = 0;
-        auto A = pts[ia], B = pts[ib];
-        for (auto& q : pts)
-          off = std::max(off, std::abs((B[0] - A[0]) * (q[1] - A[1]) - (B[1] - A[1]) * (q[0] - A[0])) / span);
-        if (off < 1e-7 * std::max(1.0, span)) {
-          pc.kind = "line";
-          pc.pts = {A, B};
-        } else {
-          pc.kind = "spline";
-          pc.pts = pts;
-          pc.closed = closedEdge;
-        }
-      }
-      out.push_back(pc);
-    } catch (const Standard_Failure&) {
-      continue;
-    }
-  }
-  return out;
+  if (b < 0 || b >= bodyCount()) return fail("no such body");
+  const ShapeIndex& faces = d_->faceIndex[static_cast<size_t>(b)];
+  if (face < 0 || face >= faces.Extent()) return fail("no such face");
+  const TopoDS_Face& f = TopoDS::Face(faces(face + 1));
+  auto curves = projectFaceEdges(f, s.plane);
+  if (curves.empty()) return fail("that face has no edges to copy onto this sketch");
+  SketchLink l;
+  l.id = freshSketchId(s, "lk");
+  gp_Pnt at;
+  gp_Dir n;
+  if (!nearestOnFace(f, gp_Pnt(probe[0], probe[1], probe[2]), at, n)) return fail("could not measure that face");
+  l.probe = {at.X(), at.Y(), at.Z()};
+  l.normal = {n.X(), n.Y(), n.Z()};
+  l.feature = d_->ownerOf(b, f);
+  applyLink(s, l, curves, true);
+  s.links.push_back(l);
+  return true;
 }
 
 // ----- Sketches -----

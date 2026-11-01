@@ -487,6 +487,8 @@ func _blank(sk: Node) -> void:
 	sk.sketch.points = []
 	sk.sketch.entities = []
 	sk.sketch.constraints = []
+	sk.sketch.erase("patterns")
+	sk.sketch.erase("links")
 	sk.construction_mode = false
 	sk.status = {ok = true, dof = 0, message = ""}
 	sk._index()
@@ -531,8 +533,8 @@ func _sketch_tools(main: Node) -> void:
 	main.player.set_size(1.0)
 	var sk: Node = main.sketcher
 	var tree: Array = sk.wheel_tree()
-	_check(tree.size() == 7 and tree[0].name == "Lines" and tree[0].children.size() == 7 and tree[1].children.size() == 7,
-		"the sketch wheel groups Lines, Curves, Modify, Copy, Constrain, Construction and Delete")
+	_check(tree.size() == 8 and tree[0].name == "Lines" and tree[0].children.size() == 7 and tree[1].children.size() == 7 and tree[2].children.size() == 7,
+		"the sketch wheel groups Lines, Curves, Modify, Copy, Constrain, Text, Construction and Delete")
 
 	# Points, and centre / 3-point rectangles.
 	_clicks(sk, "point", [Vector2(2, 2)])
@@ -686,6 +688,68 @@ func _sketch_tools(main: Node) -> void:
 		"a circular pattern of four spreads copies round the centre")
 	_check(sk.pattern_chain(ring, false, Vector2(0, 0.5), 3) and sk.count("circle") == 6 and _pid(sk, Vector2(50, 1)) != "",
 		"a linear pattern of three steps copies along")
+	var lin: String = sk.sketch.patterns[1].id
+	_check(sk.set_pattern(lin, 5, 0.25) and sk.count("circle") == 8 and _pid(sk, Vector2(50, 1)) != "" and _pid(sk, Vector2(50, 0.75)) != "",
+		"a pattern's count and spacing can be changed later")
+	_check(sk.move_geometry("entity", ring, Vector2(0, -1), false) and _pid(sk, Vector2(50, -0.75)) != "",
+		"pattern copies follow their original when it moves")
+	var copy_id := ""
+	for e in sk.sketch.entities:
+		if String(e.get("pattern", "")) == lin:
+			copy_id = e.id
+	sk.set_tool_id("erase")
+	sk._hover = {kind = "entity", id = copy_id}
+	sk._valid = true
+	sk._erase(true)
+	_check(sk.count("circle") == 4 and sk.sketch.patterns.size() == 1, "deleting a copy deletes its pattern")
+	_blank(sk)
+
+	# Split, live dragging, text, spline tangency.
+	_clicks(sk, "line", [Vector2(0, 0), Vector2(2, 0)])
+	sk.press(false)
+	var long_line: String = _ids(sk, "line")[0]
+	_check(sk.split_at(long_line, Vector2(0.5, 0)) and sk.count("line") == 2 and _has_constraint(sk, "collinear") and sk.status.ok,
+		"Split cuts a line in two, kept in line")
+	_blank(sk)
+	_clicks(sk, "circle", [Vector2(0, 0), Vector2(1, 0)])
+	_clicks(sk, "split", [Vector2(1, 0), Vector2(-1, 0)])
+	_check(sk.count("arc") == 2 and sk.count("circle") == 0 and sk.status.ok, "a circle split in two places becomes two arcs")
+	_blank(sk)
+	_clicks(sk, "line", [Vector2(3, 0), Vector2(4, 0)])
+	sk.press(false)
+	sk.set_tool_id("move")
+	sk.click_at(Vector2(3.5, 0))
+	sk._cursor = Vector2(3.5, 1)
+	sk._valid = true
+	sk._update_drag()
+	_check(not sk._drag.is_empty() and _pid(sk, Vector2(3, 0)) != "", "Move solves the geometry live at the cursor before placing it")
+	sk.click_at(Vector2(3.5, 1))
+	_check(_pid(sk, Vector2(3, 1)) != "" and sk._drag.is_empty(), "and the click places it there")
+	_blank(sk)
+	var typed := [""]
+	main.numpad.ask_text("Text", "", "", func(t: String) -> void: typed[0] = t)
+	for k in ["H", "aA", "I", "Space", "2", "OK"]:
+		main.numpad._key(k)
+	_check(typed[0] == "Hi 2" and not main.numpad.visible, "the on-screen letters type words (%s)" % typed[0])
+	var contours: Array = sk.glyph_contours("Ab")
+	_check(contours.size() >= 3, "text outlines come from the font (%d contours for Ab)" % contours.size())
+	_check(sk.add_text({id = "", uv = Vector2(0, 0)}, "FPS") and sk.count("text") == 1 and sk._fill.mesh != null and sk.status.ok,
+		"Text adds letters as closed profiles, with a height dimension (%s)" % sk.status.message)
+	var tid: String = _ids(sk, "text")[0]
+	_check(sk.set_dimension("1000", "distance", [tid]) and absf(float(sk._ents[tid].r) - 1.0) < 1e-9, "dimensioning text sets its height")
+	_check(sk.set_text(tid, "CAD") and sk._ents[tid].text == "CAD", "and the words can be changed")
+	_blank(sk)
+	_clicks(sk, "line", [Vector2(0, 0), Vector2(1, 0)])
+	sk.press(false)
+	_clicks(sk, "spline", [Vector2(1, 0), Vector2(1.5, 0.75), Vector2(2, 0)])
+	sk.press(false)
+	sk.set_tool_id("relation")
+	sk.set_option("relation", "tangent")
+	sk.click_at(Vector2(1.5, 0.75))
+	sk.click_at(Vector2(0.5, 0))
+	var sc: PackedVector2Array = sk._curves.values()[0] if sk._curves.size() == 1 else PackedVector2Array()
+	_check(_has_constraint(sk, "tangent") and sc.size() > 2 and absf(sc[1].y - sc[0].y) < 0.15 * absf(sc[1].x - sc[0].x),
+		"a spline tangent to the line it starts on leaves along the line")
 	_blank(sk)
 
 	# New relations and dimensions, picked with the crosshair.
@@ -740,10 +804,23 @@ func _sketch_tools(main: Node) -> void:
 	var hit: Dictionary = main.doc.pick(Vector3(0.05, 5, -0.02), Vector3(0, -1, 0), 20.0)
 	main._on_sketch_requested(top.plane, top.name, "")
 	await _frames(2)
-	_check(not hit.is_empty() and sk.convert_face(int(hit.body), int(hit.face)) and sk.count("line") == 4 and sk.defined(),
+	_check(not hit.is_empty() and sk.convert_face(int(hit.body), int(hit.face), hit.point) and sk.count("line") == 4 and sk.defined(),
 		"Convert edges copies a face's outline in as fixed, fully defined lines")
-	sk.discard()
+	sk.finish()
 	await _frames(2)
+	var box_id := ""
+	var conv_id := ""
+	for f in main.doc.get_features():
+		if f.type == "box":
+			box_id = f.id
+		elif f.type == "sketch":
+			conv_id = f.id
+	main.doc.set_param(box_id, "w", 0.6)
+	var after: Dictionary = main.doc.get_sketch(conv_id)
+	var wide := 0.0
+	for p in after.points:
+		wide = maxf(wide, float(p.x))
+	_check(absf(wide - 0.3) < 1e-6, "converted edges follow the model when the box widens (%.3f)" % wide)
 
 
 func _frames(n: int) -> void:

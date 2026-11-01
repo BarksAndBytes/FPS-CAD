@@ -579,6 +579,23 @@ Array CadPart::project_face(int body, int face, const Dictionary& plane) const {
   return out;
 }
 
+Dictionary CadPart::convert_face(const Dictionary& sketch, int body, int face, const Vector3& probe) {
+  Dictionary d;
+  d["sketch"] = sketch;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    std::string message;
+    bool ok = model_->convertFace(s, body, face, toCad(probe), &message);
+    d["ok"] = ok;
+    d["message"] = str(message);
+    if (ok) d["sketch"] = jsonToVariant(s.toJson());
+  } catch (const std::exception& e) {
+    d["ok"] = false;
+    d["message"] = str(e.what());
+  }
+  return d;
+}
+
 String CadPart::add_sketch(const Dictionary& sketch) {
   fpcad::Feature f;
   f.type = "sketch";
@@ -804,6 +821,7 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("sketch_fill", "sketch"), &CadPart::sketch_fill);
   ClassDB::bind_method(D_METHOD("sketch_curves", "sketch"), &CadPart::sketch_curves);
   ClassDB::bind_method(D_METHOD("project_face", "body", "face", "plane"), &CadPart::project_face);
+  ClassDB::bind_method(D_METHOD("convert_face", "sketch", "body", "face", "probe"), &CadPart::convert_face);
   ClassDB::bind_method(D_METHOD("add_sketch", "sketch"), &CadPart::add_sketch);
   ClassDB::bind_method(D_METHOD("set_sketch", "id", "sketch"), &CadPart::set_sketch);
   ClassDB::bind_method(D_METHOD("get_sketch", "id"), &CadPart::get_sketch);

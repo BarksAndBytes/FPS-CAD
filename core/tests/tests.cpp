@@ -383,6 +383,104 @@ int main() {
     }
   });
 
+  run("sketch patterns regenerate and follow their sources; spline end tangency; text", [] {
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    Json j = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    j["points"] = Json::array({{{"id", "c"}, {"x", 1.0}, {"y", 0.0}}});
+    j["entities"] = Json::array({{{"id", "k"}, {"kind", "circle"}, {"pts", {"c"}}, {"r", 0.1}}});
+    j["constraints"] = Json::array({{{"id", "r"}, {"kind", "radius"}, {"refs", {"k"}}, {"value", 0.1}}});
+    j["patterns"] = Json::array({{{"id", "pt1"}, {"kind", "circular"}, {"entities", {"k"}}, {"count", 4}, {"centre", "o"}}});
+    Sketch s = Sketch::fromJson(j);
+    SolveResult r = solveSketch(s, noVars);
+    CHECK(r.ok && s.entities.size() == 4);
+    const SketchPoint* q = static_cast<const Sketch&>(s).point("pt1.1.c");
+    CHECK(q && std::abs(q->x) < 1e-9 && std::abs(q->y - 1.0) < 1e-9);
+    CHECK(r.dof == 2);  // only the source circle's centre is free; the copies follow
+    // Moving the source moves the copies; a bigger radius grows them; fewer copies are removed.
+    s.point("c")->x = 2.0;
+    s.constraints[0].value = 0.2;
+    s.patterns[0].count = 3;
+    r = solveSketch(s, noVars);
+    CHECK(r.ok && s.entities.size() == 3);
+    const SketchPoint* q2 = static_cast<const Sketch&>(s).point("pt1.1.c");
+    CHECK(q2 && std::abs(std::hypot(q2->x, q2->y) - 2.0) < 1e-9);
+    CHECK(std::abs(s.entities.back().r - 0.2) < 1e-9);
+    // A linear pattern of a square, three across: the profiles extrude as three blocks.
+    Json sq = rectSketch(standardPlane("top"), 0, 0, 0.1, 0.1);
+    std::vector<std::string> sides;
+    for (auto& e : sq["entities"]) sides.push_back(e["id"].get<std::string>());
+    sq["patterns"] = Json::array({{{"id", "pl"}, {"kind", "linear"}, {"entities", sides}, {"count", 3}, {"spacing", 0.25}, {"angle", 0.0}}});
+    PartDocument d;
+    std::string sid = d.add(feature("sketch", sq)).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    CHECK_NEAR(m.massProperties().volume, 3 * 0.001, 1e-9);
+
+    // A spline leaving a line's end carries on in the line's direction.
+    Json sp = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    sp["points"] = Json::array({{{"id", "a"}, {"x", 0}, {"y", 0}}, {{"id", "b"}, {"x", 1}, {"y", 0}},
+                                {{"id", "m"}, {"x", 1.5}, {"y", 0.8}}, {{"id", "e"}, {"x", 2}, {"y", 0}}});
+    sp["entities"] = Json::array({{{"id", "l"}, {"kind", "line"}, {"pts", {"a", "b"}}},
+                                  {{"id", "s"}, {"kind", "spline"}, {"pts", {"b", "m", "e"}}}});
+    sp["constraints"] = Json::array({{{"id", "t"}, {"kind", "tangent"}, {"refs", {"s", "l"}}}});
+    Sketch ts = Sketch::fromJson(sp);
+    CHECK(solveSketch(ts, noVars).ok);
+    auto curves = sketchCurves(ts);
+    CHECK(curves.size() == 2 && curves[1].points.size() > 2);
+    if (curves.size() == 2 && curves[1].points.size() > 2) {
+      auto p0 = curves[1].points[0], p1 = curves[1].points[1];
+      CHECK(std::abs(p1[1] - p0[1]) < 0.15 * std::abs(p1[0] - p0[0]));  // leaves heading along +x (untangent: ~3)
+    }
+
+    // Text: a square letter with a square hole, 20 mm cap height, as a profile with a hole.
+    Json tx = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    tx["points"] = Json::array({{{"id", "t0"}, {"x", 0}, {"y", 0}}});
+    Json outer = Json::array({{0, 0}, {1, 0}, {1, 1}, {0, 1}}), inner = Json::array({{0.25, 0.25}, {0.25, 0.75}, {0.75, 0.75}, {0.75, 0.25}});
+    tx["entities"] = Json::array({{{"id", "x"}, {"kind", "text"}, {"pts", {"t0"}}, {"r", 0.02}, {"text", "O"},
+                                   {"contours", Json::array({outer, inner})}}});
+    tx["constraints"] = Json::array({{{"id", "h"}, {"kind", "distance"}, {"refs", {"x"}}, {"value", 0.02}}});
+    PartDocument d3;
+    std::string tid = d3.add(feature("sketch", tx)).id;
+    d3.add(feature("extrude", {{"sketch", tid}, {"depth", 0.01}}));
+    PartModel m3(d3);
+    CHECK(m3.rebuild().ok);
+    CHECK_NEAR(m3.massProperties().volume, (0.02 * 0.02 - 0.01 * 0.01) * 0.01, 1e-12);
+  });
+
+  run("converted edges follow the model when it changes", [] {
+    // A plate from a sketch, then a sketch on its top face with the face's edges converted.
+    PartDocument d;
+    d.variables = {{"w", "200 mm"}};
+    Json plate = rectSketch(standardPlane("top"), 0, 0, 0.2, 0.1);
+    plate["constraints"][4]["value"] = "w";
+    std::string pid = d.add(feature("sketch", plate)).id;
+    d.add(feature("extrude", {{"sketch", pid}, {"depth", 0.02}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    auto top = m.pick({0.05, 0.05, 5}, {0, 0, -1});
+    CHECK(top.has_value());
+    if (!top) return;
+    SketchPlane pl = standardPlane("top");
+    pl.origin = {0, 0, 0.02};
+    Sketch s;
+    s.plane = pl;
+    CHECK(m.convertFace(s, top->body, top->face, top->point));
+    CHECK(s.entities.size() == 4 && s.links.size() == 1 && s.links[0].entities.size() == 4);
+    Json sj = s.toJson();
+    std::string ids0 = s.links[0].entities[0];
+    m.document().add(feature("sketch", sj));
+    CHECK(m.rebuild().ok);
+    // Widen the plate: the converted outline widens with it, keeping its entity ids.
+    for (auto& v : m.document().variables) v.expr = "300 mm";
+    CHECK(m.rebuild().ok);
+    Sketch after = Sketch::fromJson(m.document().features.back().params);
+    double maxX = 0;
+    for (auto& p : after.points) maxX = std::max(maxX, p.x);
+    CHECK_NEAR(maxX, 0.3, 1e-9);
+    CHECK(after.entities.size() == 4 && after.entity(ids0) != nullptr);
+  });
+
   run("sketch extrude follows its dimensions and variables", [] {
     PartDocument d;
     d.variables = {{"width", "1000 mm"}};

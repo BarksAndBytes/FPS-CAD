@@ -25,7 +25,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 
 | Area | Typical professional depth | FPS-CAD today | Coverage |
 | --- | --- | --- | --- |
-| Sketching | ~60 entity, edit and constraint tools | 14 drawing tools (incl. polygon, slot, ellipse, spline), trim/extend/fillet/chamfer/offset/convert, move/copy/rotate/scale/mirror/patterns, smart dimensions, 12 relations, snap inference | Medium–high |
+| Sketching | ~60 entity, edit and constraint tools | 15 drawing tools (incl. polygon, slot, ellipse, spline, text), trim/extend/split/fillet/chamfer/offset/linked convert, live move, copy/rotate/scale/mirror, live patterns, smart dimensions, 12 relations, snap inference | High |
 | Part features | ~40 sketched and applied features | Extrude, revolve, sweep, loft, push/pull, primitives; fillet/chamfer in the core | Low–medium |
 | Patterns and mirror | Linear, circular, curve, sketch, table, fill; mirror | None | None |
 | Reference geometry | Planes, axes, points, coordinate systems | Standard planes and planar faces only | Low |
@@ -82,20 +82,22 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Ellipse | All three | ✓ | Centre, axis end, second semi-axis |
 | Partial ellipse | All three | ✗ | |
 | Spline: fit point | All three | ✓ | Open or closed; B-spline through the points |
-| Spline: control point / style spline, tangency handles | All three | ✗ | |
+| Spline: tangent ends | All three | ✓ | Tangent to the line or arc a spline ends on |
+| Spline: control point / style spline, curvature handles | All three | ✗ | |
 | Conic, parabola | SW, Fusion (conic curve) | ✗ | |
 | Sketch fillet and chamfer | All three | ✓ | Line-line corners; virtual sharp kept when referenced |
 | Point | All three | ✓ | Stand-alone points |
-| Text | All three | ✗ | Engraving and embossing |
+| Text | All three | ✓ | Single font (the game's UI font), stays level; extrudes and cuts |
 | Offset entities | Offset Entities / Offset / Offset | ✓ | Whole chains of lines and arcs, circles; parallel + distance held |
-| Project / convert edges into the sketch | Convert Entities / Project / Project Geometry | ◐ | A face's edges as fixed geometry; not linked to the model (they do not update) |
+| Project / convert edges into the sketch | Convert Entities / Project / Project Geometry | ✓ | A face's edges, linked: they follow the model on rebuild and keep their ids |
 | Intersection curve | All three | ✗ | |
 | Trim, extend | All three | ✓ | Lines, arcs, circles; new ends stay on the crossing geometry |
-| Split, break | All three | ✗ | |
+| Split, break | All three | ✓ | Lines, arcs; circles at two places |
 | Mirror entities | All three | ✓ | Held symmetric about the mirror line |
-| Sketch patterns (linear, circular) | All three | ◐ | Copies are independent (no pattern relation or count to edit later) |
+| Sketch patterns (linear, circular) | All three | ✓ | Live: copies held to the original; count, spacing and spread editable |
 | Move, copy, rotate, scale | All three | ✓ | Solved against existing relations; refused if they forbid it |
-| Stretch, live dragging | All three | ✗ | Move is pick-then-place, not a live drag |
+| Live dragging | All three | ✓ | Move solves the sketch live at the crosshair before placing |
+| Stretch (move some points of a selection) | SW, Inventor | ✗ | |
 
 ### 1.3 Relations (constraints)
 
@@ -112,7 +114,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Coradial | SW | ✗ | Concentric plus equal does the same |
 | Collinear | All three | ✓ | |
 | Symmetric | All three | ✓ | Two points about a line |
-| Curvature (G2), smooth | SW, Fusion, Inventor | ✗ | Splines exist now; needs spline end conditions |
+| Curvature (G2), smooth | SW, Fusion, Inventor | ✗ | Tangent (G1) spline ends only |
 | Pierce (to a 3D curve) | SW | ✗ | |
 | Automatic relations while drawing | All three | ◐ | Horizontal, vertical, midpoint, point-on, tangent (tangent arc, fillet, slot), square corners (rectangles) |
 | Show / delete relations | Display/Delete Relations / show constraints / Show Constraints | ◐ | Delete tool's alternate action removes them; no on-screen glyphs |
@@ -475,12 +477,9 @@ possible, then what suits a first-person game.
    - Fillet and chamfer with edge picking
    - Shell and draft
    - Extrude end conditions (up to face/next) and two-direction extrudes
-2. **Sketching depth** (largely done in November 2026; what is left)
-   - Text, for engraving and embossing
-   - Linked projection (converted edges that follow the model)
-   - Pattern relations (editable count and spacing)
-   - Live dragging, split, stretch
-   - Spline tangency and curvature (G2) end conditions
+2. **Sketching depth** (done in November 2026; what is left)
+   - Fonts and rotated text
+   - Stretch, curvature (G2) spline ends, control-point splines
    - Construction planes for sketching off the model (§2)
 3. **Reference geometry**: offset/angled planes, axes, points.
 4. **History control**: rollback, reorder, suppress in the UI.
