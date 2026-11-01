@@ -83,3 +83,31 @@ export templates and set a debug keystore in Editor Settings first).
 godot --headless --path godot --import
 godot --headless --path godot --script res://tests/smoke_test.gd
 ```
+
+## Android builds and updates
+
+The **Android APK** workflow publishes every push as the `android-dev` pre-release with the APK and
+`latest.json` (build number, commit, APK link). The version code is the workflow's run number,
+and every build is signed with the same key, so a newer build installs over an older one as an
+update without uninstalling. The app reads `latest.json` at launch and offers newer builds on
+the title screen and in the pause menu (`godot/scripts/updater.gd`). Choosing one downloads the
+APK into the app's storage, checks its size and SHA-256 against `latest.json`, and opens
+Android's installer through Godot's FileProvider (`OS.shell_open` on the file). The app declares
+`REQUEST_INSTALL_PACKAGES`, so the first update asks the player to allow installs from FPS-CAD.
+
+The key lives in two repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | The PKCS#12 keystore, base64-encoded on one line (key alias `fpscad`) |
+| `ANDROID_KEYSTORE_PASSWORD` | Its password (store and key) |
+
+Without them the workflow signs with a throwaway debug key, warns, and marks `latest.json` as
+debug-signed so installed apps do not offer that build. Keep a private backup of the keystore:
+if it is lost, later builds cannot update installed ones. To make a new key:
+
+```bash
+keytool -genkeypair -keystore fpscad.p12 -storetype PKCS12 -alias fpscad -keyalg RSA \
+  -keysize 4096 -validity 12000 -dname "CN=FPS-CAD"
+base64 -w0 fpscad.p12   # paste into ANDROID_KEYSTORE_BASE64
+```

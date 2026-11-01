@@ -1,5 +1,8 @@
 #include "convert.h"
 
+#include <godot_cpp/variant/packed_float64_array.hpp>
+#include <godot_cpp/variant/packed_string_array.hpp>
+
 #include <godot_cpp/variant/basis.hpp>
 #include <godot_cpp/variant/quaternion.hpp>
 
@@ -41,6 +44,19 @@ fpcad::Json variantToJson(const Variant& v) {
       fpcad::Json a = fpcad::Json::array();
       Array arr = v;
       for (int64_t i = 0; i < arr.size(); ++i) a.push_back(variantToJson(arr[i]));
+      return a;
+    }
+    case Variant::PACKED_STRING_ARRAY: {
+      fpcad::Json a = fpcad::Json::array();
+      PackedStringArray arr = v;
+      for (int64_t i = 0; i < arr.size(); ++i) a.push_back(str(arr[i]));
+      return a;
+    }
+    case Variant::PACKED_FLOAT32_ARRAY:
+    case Variant::PACKED_FLOAT64_ARRAY: {
+      fpcad::Json a = fpcad::Json::array();
+      PackedFloat64Array arr = v;
+      for (int64_t i = 0; i < arr.size(); ++i) a.push_back(arr[i]);
       return a;
     }
     case Variant::DICTIONARY: {
