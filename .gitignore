@@ -18,6 +18,9 @@
 /godot/export_credentials.cfg
 *.import
 *.uid
+# Textures the editor extracts from imported models (the .glb holds them)
+/godot/models/*.jpg
+/godot/models/*.png
 
 # Editors and OS
 .vscode/
