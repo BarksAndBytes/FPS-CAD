@@ -22,11 +22,13 @@ export to STEP, IGES, STL and 3MF.
 | `extension/` | Godot 4 GDExtension exposing the core as `CadPart` and `CadAssembly` |
 | `godot/` | The game: first-person player, self-scaling, tool wheel, HUD, touch controls |
 | `prototypes/web-v1/` | The original browser prototype |
-| `docs/` | Engineering spec summary, build guide, Phase 0 checklist |
+| `docs/` | Engineering spec summary, build guide, Phase 0 checklist, comparison with professional CAD |
 | `tools/` | Open CASCADE build and staging scripts |
 
 The full product spec is the shared doc **First-Person CAD — Product Spec**;
 [docs/SPEC.md](docs/SPEC.md) pins the decisions the code depends on.
+[docs/CAD_COMPARISON.md](docs/CAD_COMPARISON.md) reviews FPS-CAD against SOLIDWORKS, Fusion and
+Inventor, area by area, with a suggested order for closing the gaps.
 
 ## Quick start (Linux or Windows)
 

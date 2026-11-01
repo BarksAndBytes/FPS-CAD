@@ -53,6 +53,8 @@ lines / circles / arcs, constraints) solved by the core; `extrude`, `revolve`, `
 reference them by id, so editing a sketch's dimension rebuilds everything after it. Feature
 parameters are set in a property panel with a live preview. Direct tools (push/pull, boxes,
 cylinders, spheres) remain for quick blocking-out. Details: [`docs/SKETCHING.md`](SKETCHING.md).
+How this compares with SOLIDWORKS, Fusion and Inventor, and which gaps matter most:
+[`docs/CAD_COMPARISON.md`](CAD_COMPARISON.md).
 
 ## The room
 
