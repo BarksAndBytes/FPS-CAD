@@ -152,8 +152,10 @@ PartDocument PartDocument::deskSample() {
     f.params = std::move(params);
     return f;
   };
+  // The base stands a wall's thickness proud of the walls all round, so its corners are its own
+  // edges and the fillet below finds them on every platform.
   d.add(feature("box", "Base", BodyOp::Add,
-                {{"x", 0}, {"y", 0}, {"z", 0}, {"w", "width"}, {"d", "depth"}, {"h", "wall"}}));
+                {{"x", 0}, {"y", 0}, {"z", 0}, {"w", "width + 2 * wall"}, {"d", "depth + 2 * wall"}, {"h", "wall"}}));
   d.add(feature("box", "Back", BodyOp::Add,
                 {{"x", 0}, {"y", "depth / 2 - wall / 2"}, {"z", 0}, {"w", "width"}, {"d", "wall"}, {"h", "height"}}));
   d.add(feature("box", "Left side", BodyOp::Add,
