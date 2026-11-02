@@ -258,6 +258,7 @@ func _build_panel(root: Control) -> void:
 	col.add_child(_tree)
 	scroll.add_child(col)
 	_panel.add_child(scroll)
+	UiTheme.scroll_everywhere(scroll)
 	_panel.visible = false
 	root.add_child(_panel)
 

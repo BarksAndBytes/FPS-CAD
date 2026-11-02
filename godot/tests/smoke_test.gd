@@ -146,6 +146,23 @@ func _run() -> void:
 	await _pad(JOY_BUTTON_START)
 	await _frames(5)
 	_check(main.state == "title" and main.title.visible, "Start skips the splash to the title screen")
+	# The challenge list scrolls: focus follows down the list and drags on its buttons scroll it.
+	var win_size: Vector2i = main.get_window().size
+	main.get_window().size = Vector2i(900, 400)  # a phone in landscape: the list overflows
+	main._show_levels()
+	await _frames(3)
+	var lscroll: ScrollContainer = main.title._levels_scroll
+	var lbuttons: Array = main.title._levels.get_children().filter(func(c): return c is Button)
+	_check(lscroll.follow_focus and lbuttons.size() == 11 and lbuttons.all(func(b): return b.mouse_filter == Control.MOUSE_FILTER_PASS),
+		"the challenge list follows focus and passes drags to its scroll")
+	var bar := lscroll.get_v_scroll_bar()
+	_check(bar.max_value > bar.page + 1.0, "on a short screen the list is longer than its view (%.0f > %.0f)" % [bar.max_value, bar.page])
+	(lbuttons[-1] as Button).grab_focus()
+	await _frames(3)
+	_check(lscroll.scroll_vertical > 0, "focusing the last entry scrolls it into view (%d)" % lscroll.scroll_vertical)
+	main.get_window().size = win_size
+	main.title.show_menu()
+	main.title.focus_default()
 
 	await _frames(3)
 	await _pad(JOY_BUTTON_A)

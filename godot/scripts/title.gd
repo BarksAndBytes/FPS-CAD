@@ -87,6 +87,7 @@ func _ready() -> void:
 	_levels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_levels_scroll.add_child(_levels)
 	col.add_child(_levels_scroll)
+	UiTheme.scroll_everywhere(_levels_scroll)
 	_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(_spacer)
 	_footer = UiTheme.text("", 15, UiTheme.MUTED)

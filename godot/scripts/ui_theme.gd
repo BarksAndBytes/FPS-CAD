@@ -144,6 +144,25 @@ static func text(content: String, size := 17, color := FG) -> Label:
 
 
 ## First visible, enabled, focusable button or line edit under node, depth first.
+## Makes a ScrollContainer usable everywhere: it scrolls to keep the focused control in view
+## (controller and keyboard), and dragging a finger over its buttons scrolls it (touch) instead of
+## the buttons swallowing the drag. Buttons added later, when a list is rebuilt, are covered too.
+static func scroll_everywhere(scroll: ScrollContainer) -> void:
+	scroll.follow_focus = true
+	scroll.scroll_deadzone = 12
+	pass_drags(scroll)
+
+
+## Lets drags on buttons under node reach the scroll container above them (a tap still presses).
+static func pass_drags(node: Node) -> void:
+	if node is BaseButton:
+		(node as Control).mouse_filter = Control.MOUSE_FILTER_PASS
+	for c in node.get_children():
+		pass_drags(c)
+	if not node.child_entered_tree.is_connected(pass_drags):
+		node.child_entered_tree.connect(pass_drags)
+
+
 static func first_focusable(node: Node) -> Control:
 	for c in node.get_children():
 		if c is Control and not (c as Control).is_visible_in_tree():
