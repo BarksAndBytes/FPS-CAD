@@ -436,6 +436,7 @@ func _run() -> void:
 	main.sketcher.toggle_view()
 	await _frames(2)
 	_check(main.player.view_lock, "Y returns to the sketch view")
+	main.player.set_size_now(1.0)  # the view zooms to the distance the player stood at: fix the snap step
 	main.sketcher.set_tool_id("rect")
 	main.sketcher.click_at(Vector2(0.5, 0))
 	main.sketcher.click_at(Vector2(1, 1))
@@ -548,7 +549,7 @@ func _sketch_tools(main: Node) -> void:
 	var top: Dictionary = main.doc.standard_plane("top")
 	main._on_sketch_requested(top.plane, top.name, "")
 	await _frames(2)
-	main.player.set_size(1.0)
+	main.player.set_size_now(1.0)
 	var sk: Node = main.sketcher
 	var tree: Array = sk.wheel_tree()
 	_check(tree.size() == 8 and tree[0].name == "Lines" and tree[0].children.size() == 7 and tree[1].children.size() == 7 and tree[2].children.size() == 7,
