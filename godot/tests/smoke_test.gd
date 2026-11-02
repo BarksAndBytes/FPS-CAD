@@ -170,6 +170,26 @@ func _run() -> void:
 	_check(main.state == "play" and main.mode == "training" and main.tutorial != null,
 		"A on the focused title entry starts Training")
 	_check(main.tutorial.step == 0, "training opens on its first objective")
+	await _frames(2)
+	var lines: Array = main.board.text_lines()
+	_check(main.board.active and main.board.visible and String(lines[1]) == main.tutorial.steps[0].title and not main.tutorial._card.visible,
+		"the objective is written on the whiteboard, not over the view (%s)" % lines[1])
+	var to_board: Vector3 = main.board.global_position - main.player.feet
+	_check(to_board.length() < 5.0 and Vector3(-sin(main.player.yaw), 0, -cos(main.player.yaw)).dot(to_board.normalized()) > 0.5,
+		"the board stands ahead of the player")
+	main.hud.toast("A notice for the board")
+	await _frames(2)
+	_check("A notice for the board" in main.board.text_lines() and not main.hud._readout_box.visible,
+		"notices and the readout go on the board")
+	var wall: Dictionary = main._cast(main.player.eye_position(), (main.board.global_position + Vector3(0, 1.0, 0) - main.player.eye_position()).normalized(), 20.0)
+	_check(not wall.is_empty() and wall.get("env", false), "the board is solid: walking and aiming stop at it")
+	main.player.yaw += PI  # look away: the board cannot be read, so notices show on screen again
+	await _frames(3)
+	main.hud.toast("Seen on screen")
+	_check(not main.board.readable() and main.hud._toast.text == "Seen on screen" and main.hud._toast_t > 0.0,
+		"with the board out of view, a notice shows on screen")
+	main.player.yaw -= PI
+	await _frames(2)
 
 	for i in 3:  # look around, a bit at a time like a real stick
 		main.player.yaw += 1.5
@@ -471,6 +491,10 @@ func _run() -> void:
 		"challenge 1 shows its target beside the build area")
 	var table: Rect2 = main.view.room.top
 	_check(table.size.is_equal_approx(Vector2(1.22, 0.61)), "the table is 4 ft by 2 ft (%s)" % table.size)
+	var bp: Vector3 = main.board.global_position
+	_check(main.board.active and bp.x < table.position.x - 0.3 and absf(bp.y - main.view.room.floor_y()) < 1e-6
+		and String(main.board.text_lines()[1]) == main.challenge.info.name,
+		"the whiteboard stands on the floor beside the table with the challenge on it")
 	_check(main.view.room.has_table, "challenges use the wooden table")
 	_check(main.player.feet.y < -0.7 and main.player.feet.z > table.end.y and main.player.size == 1.0,
 		"the player starts on the floor, walking up to the table")

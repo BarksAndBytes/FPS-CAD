@@ -10,6 +10,7 @@
 | [Chakra Petch](https://github.com/google/fonts/tree/main/ofl/chakrapetch) | Display font (titles, tool names) | SIL OFL 1.1 | `godot/fonts/`, licence beside it |
 | [IBM Plex Sans](https://github.com/google/fonts/tree/main/ofl/ibmplexsans) | Body font | SIL OFL 1.1 | `godot/fonts/`, licence beside it |
 | ["Old Wooden Table"](https://skfb.ly/pEFA6) by [carlcapu9](https://sketchfab.com/carlcapu9) | The table parts stand on | [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/) | `godot/models/old_wooden_table.glb`; credited on the title screen |
+| ["Whiteboards +"](https://skfb.ly/pOJGt) by [Michael V](https://sketchfab.com/bossdeff) | The message board in the room | [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/) | `godot/models/whiteboard.glb`; credited on the title screen |
 
 ## LGPL obligations for Open CASCADE
 
@@ -34,3 +35,12 @@ groups need more than the core spec.
 Attribution 4.0 (http://creativecommons.org/licenses/by/4.0/). Changes made for FPS-CAD: textures
 reduced from 4096 px to 2048 px (colour, JPEG) and 1024 px (occlusion-roughness-metal, JPEG;
 normal, PNG) for phones, and the model is scaled in the game to a 4 ft × 2 ft top, 75 cm high.
+
+## Whiteboards +
+
+"Whiteboards +" (https://skfb.ly/pOJGt) by Michael V is licensed under Creative Commons
+Attribution 4.0 (http://creativecommons.org/licenses/by/4.0/). Changes made for FPS-CAD: only the
+first whiteboard and its marker tray are kept (the other boards, markers, eraser and papers are
+removed); textures re-encoded as JPEG at 1024 px (colour) and 512 px (normal,
+occlusion-roughness-metal); the material is drawn opaque. The game writes its messages on the
+board's panel.

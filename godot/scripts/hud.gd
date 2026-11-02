@@ -13,6 +13,9 @@ const MEASURE := Color("ffd166")
 const UiTheme := preload("res://scripts/ui_theme.gd")
 
 var doc: RefCounted
+## whiteboard.gd: notices, the sketch status and the readout go on the board in the room; the
+## screen shows notices and the status only while the board cannot be read.
+var board: Node3D
 var units := "mm"
 var panel_open := false
 var menu_open := false
@@ -23,6 +26,7 @@ var _hint := Label.new()
 var _readout := Label.new()
 var _status := Label.new()
 var _status_box: PanelContainer
+var _readout_box: PanelContainer
 var _aim := Label.new()
 var _cross := Label.new()
 var _toast := Label.new()
@@ -85,6 +89,8 @@ func _ready() -> void:
 		if l == _status:
 			_status_box = b
 			b.visible = false
+		elif l == _readout:
+			_readout_box = b
 
 	# Top right: buttons for mouse and touch
 	var right := HBoxContainer.new()
@@ -171,6 +177,12 @@ func _box(color: Color) -> PanelContainer:
 
 
 func _process(dt: float) -> void:
+	var on_board: bool = board != null and board.active
+	_readout_box.visible = not on_board
+	_status_box.visible = _status.text != "" and not (on_board and board.readable())
+	if on_board and board.readable() and _toast_t > 0.0:
+		_toast_t = 0.0  # the board shows it
+		_toast.modulate.a = 0.0
 	if _toast_t > 0.0:
 		_toast_t -= dt
 		_toast.modulate.a = clampf(_toast_t / 0.3, 0.0, 1.0)
@@ -193,6 +205,10 @@ func length(v: float) -> String:
 
 
 func toast(msg: String) -> void:
+	if board != null and board.active:
+		board.post(msg)
+		if board.readable():
+			return
 	_toast.text = msg
 	_toast_t = 1.8
 	_toast.modulate.a = 1.0
@@ -207,15 +223,19 @@ func set_tool(t: Dictionary, option: String) -> void:
 
 ## A second line under the tool hint, used for the sketch's state. Empty hides it.
 func set_status(text: String, color: Color = MUTED) -> void:
-	_status_box.visible = text != ""
 	_status.text = text
 	_status.add_theme_color_override("font_color", color)
+	if board != null:
+		# Light screen colours become marker colours: blue for "still free", dark ink otherwise.
+		board.set_status(text, Color("1f6fd1") if color.b > color.r + 0.15 else Color("0f1a36"))
 
 
 func set_readout(size: float, grid: float, snap: float, fly: bool, feet: Vector3) -> void:
 	_readout.text = "%s tall · snap %s · %s\nX %s   Y %s   Z %s" % [
 		length(preload("res://scripts/player.gd").TALL * size), length(snap), "FLY" if fly else "WALK",
 		length(feet.x), length(-feet.z), length(feet.y)]
+	if board != null:
+		board.set_readout(_readout.text.replace("\n", "   ·   "))
 	_fly_btn.set_pressed_no_signal(fly)
 
 

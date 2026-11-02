@@ -48,7 +48,7 @@ func start() -> void:
 	_last_yaw = game.player.yaw
 	_map_seen = false
 	_end.visible = false
-	_card.visible = true
+	_card.visible = false  # the objective is written on the whiteboard
 	_advance()
 
 
@@ -260,11 +260,21 @@ func _advance() -> void:
 		_marker.position = s.marker
 	_bar.size.x = _bar_back.size.x * float(step) / steps.size()
 	_done_t = -1.0
+	game.place_board_ahead(step > 0)
+	_to_board(Color("0f1a36"), float(step) / steps.size())
 
 
 func _refresh_text() -> void:
 	if step >= 0 and step < steps.size():
 		_body.text = call(steps[step].text)
+		if _done_t < 0.0:
+			_to_board(Color("0f1a36"), float(step) / steps.size())
+
+
+## The objective, written on the whiteboard.
+func _to_board(color: Color, progress: float) -> void:
+	if game != null and game.board != null:
+		game.board.set_card(_count.text, _heading.text, _body.text, color, progress)
 
 
 func _process(dt: float) -> void:
@@ -275,8 +285,7 @@ func _process(dt: float) -> void:
 	_last_yaw = game.player.yaw
 	if game.cmap.visible:
 		_map_seen = true
-	var blocked: bool = game.hud.menu_open or game.hud.panel_open or game.cmap.visible or game.numpad.visible
-	_card.visible = not blocked
+	_card.visible = false
 	_ring.position.y = 0.15 + 0.08 * sin(_t * 3.0)
 	_ring.rotation.y = _t * 0.8
 	if _done_t >= 0.0:
@@ -291,6 +300,7 @@ func _process(dt: float) -> void:
 		_heading.text = "✓  " + steps[step].title
 		_heading.add_theme_color_override("font_color", UiTheme.ACCENT)
 		_bar.size.x = _bar_back.size.x * float(step + 1) / steps.size()
+		_to_board(Color("23855a"), float(step + 1) / steps.size())
 		Input.start_joy_vibration(0, 0.3, 0.5, 0.18)
 		var tw := create_tween()
 		tw.tween_property(_card, "scale", Vector2(1.04, 1.04), 0.12)
@@ -300,6 +310,7 @@ func _process(dt: float) -> void:
 func _complete() -> void:
 	_marker.visible = false
 	_card.visible = false
+	game.board.set_card("TRAINING", "✓  Course complete", "Everything you have learned works anywhere: in free build, on a new part and in the challenges.", Color("23855a"), 1.0)
 	_end.visible = true
 	var cfg := ConfigFile.new()
 	cfg.load(SETTINGS)

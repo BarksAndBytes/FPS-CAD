@@ -70,6 +70,15 @@ top is the CAD ground; the player starts on the floor walking up to it. Training
 assembly sandbox have no table: the room floor is the CAD ground. Free build opens a desk organiser
 sample (`PartDocument::deskSample`) driven by width, depth, height and wall variables.
 
+**The whiteboard.** Messages are written on a whiteboard standing in the room ("Whiteboards +" by
+Michael V, CC BY 4.0) instead of over the view: the training objective or the challenge card
+(name, brief, hint, timer, last comparison), the sketch status, the latest three notices (they fade
+after 12 s) and the size / snap / position readout. It stands at 1:1 beside the table in free
+build and challenges; elsewhere it is set down on the ground ahead of the player (training moves
+it to each objective). It is solid. While it cannot be read (out of view, behind the player, or
+too small on screen) new notices and the sketch status show on screen as before. The screen keeps
+the tool chip and hint, the crosshair and aim label, measurements, menus and dialogs.
+
 ## Challenge mode
 
 A series of target parts to copy (`core/src/Challenges.cpp`), from a 100 × 75 × 50 block to a

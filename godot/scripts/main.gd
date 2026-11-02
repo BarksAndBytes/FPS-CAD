@@ -19,6 +19,7 @@ const Tutorial := preload("res://scripts/tutorial.gd")
 const Sketcher := preload("res://scripts/sketcher.gd")
 const Challenge := preload("res://scripts/challenge.gd")
 const ToolWheel := preload("res://scripts/tool_wheel.gd")
+const Whiteboard := preload("res://scripts/whiteboard.gd")
 
 var doc: RefCounted
 var is_assembly := false
@@ -30,6 +31,7 @@ var player: Node3D
 var view: Node3D
 var tools: Node
 var hud: CanvasLayer
+var board: Node3D  # whiteboard.gd: the messages, standing in the room
 var wheel: Control
 var touch: Control
 var cmap: CanvasLayer
@@ -69,6 +71,9 @@ func _ready() -> void:
 
 	view = preload("res://scripts/model_view.gd").new()
 	add_child(view)
+	board = Whiteboard.new()
+	add_child(board)
+	hud.board = board
 	player = preload("res://scripts/player.gd").new()
 	add_child(player)
 	player.cast = _cast
@@ -137,6 +142,23 @@ func _ready() -> void:
 
 # ---------- states and modes ----------
 
+## Stands the message board on the ground ahead of the player and a little to the left, turned
+## to face them, avoiding parts in the way. glide: slide it there from where it was.
+func place_board_ahead(glide: bool) -> void:
+	var fwd := Vector3(-sin(player.yaw), 0, -cos(player.yaw))
+	var left := Vector3(fwd.z, 0, -fwd.x)
+	board.active = false  # look past the board where it stands now
+	for spot in [[2.8, 1.6], [2.8, -1.6], [3.6, 0.0], [2.2, 2.4], [2.2, -2.4], [4.5, 1.6]]:
+		var at: Vector3 = player.feet + fwd * spot[0] + left * spot[1]
+		var down: Dictionary = _cast(Vector3(at.x, player.feet.y + 3.0, at.z), Vector3.DOWN, 50.0)
+		var y: float = down.point.y if not down.is_empty() and down.get("env", false) else player.feet.y
+		if not down.is_empty() and not down.get("env", false):
+			continue  # a part is there
+		board.place(Vector3(at.x, y, at.z), player.eye_position(), glide)
+		return
+	board.place(player.feet + fwd * 2.8 + left * 1.6, player.eye_position(), glide)
+
+
 ## The pavilion, seen from a slow orbit behind the splash and title screens.
 func _load_background() -> void:
 	var part = ClassDB.instantiate(&"CadPart")
@@ -159,6 +181,7 @@ func _show_title() -> void:
 	hud.set_menu(false)
 	hud.set_panel(false)
 	hud.visible = false
+	board.hide_board()
 	wheel.close(false)
 	player.input_enabled = false
 	if doc == null or is_assembly or doc.get_part_name() != "Pavilion":
@@ -183,6 +206,8 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 		tutorial = null
 	# The wooden table is for free build and challenges; elsewhere parts stand on the room floor.
 	view.room.set_table(m == "free" or m == "challenge")
+	board.clear_card()
+	board.set_status("")
 	var d: RefCounted
 	match m:
 		"training":
@@ -223,6 +248,13 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 			d.make_desk_sample()
 			_open(d, false)
 			_spawn(Vector3(0, view.room.floor_y(), view.room.top.end.y + 1.3), 0.0, 1.0, -0.5)
+	# The message board: beside the table when there is one, else set down ahead of the player
+	# (the training course moves it to each objective).
+	if view.room.has_table:
+		var fy: float = view.room.floor_y()
+		board.place(Vector3(-1.45, fy, -0.25), Vector3(0, fy, view.room.top.end.y + 1.3))
+	elif m != "training":
+		place_board_ahead(false)
 	tools.reset()
 	if m == "new" or m == "challenge":
 		tools.set_tool_id("sketch")
@@ -491,6 +523,9 @@ func _cast(origin: Vector3, dir: Vector3, max_distance: float) -> Dictionary:
 		var th: Dictionary = challenge.pick(origin, dir, max_distance)
 		if not th.is_empty() and (hit.is_empty() or th.distance < hit.distance):
 			hit = th
+	var bh: Dictionary = board.cast(origin, dir, max_distance)
+	if not bh.is_empty() and (hit.is_empty() or bh.distance < hit.distance):
+		hit = bh
 	var env: Dictionary = view.room.cast(origin, dir, max_distance)
 	if not env.is_empty() and (hit.is_empty() or env.distance < hit.distance):
 		return env
