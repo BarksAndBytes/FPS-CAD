@@ -481,6 +481,49 @@ int main() {
     CHECK(after.entities.size() == 4 && after.entity(ids0) != nullptr);
   });
 
+  run("push/pull adds or removes stock on faces with no driving dimension", [] {
+    PartDocument d;
+    d.variables = {{"w", "1000 mm"}};
+    Json sk = rectSketch(standardPlane("top"), 0, 0, 1.0, 0.5);
+    sk["constraints"][4]["value"] = "w";
+    std::string sid = d.add(feature("sketch", sk)).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.5}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    // The side face at x = 1 is the sketch's, not the extrude's: nothing drives it.
+    auto side = m.pick({5, 0.25, 0.25}, {-1, 0, 0});
+    CHECK(side && !m.faceDrive(*side));
+    if (!side) return;
+    CHECK(m.pushPull(*side, 0.1));
+    CHECK_NEAR(m.massProperties().volume, 0.25 + 0.1 * 0.25, 1e-9);
+    CHECK(m.document().features.size() == 3 && m.document().features.back().type == "face_offset");
+    CHECK(m.document().features.back().name == "Push/Pull 1");
+    // Holding on the same spot grows the same push.
+    CHECK(m.pushPull(*side, 0.1));
+    CHECK(m.document().features.size() == 3);
+    CHECK_NEAR(m.massProperties().volume, 0.25 + 0.2 * 0.25, 1e-9);
+    // The pushed face now drives its distance; pushing it back past the start removes stock.
+    auto moved = m.pick({5, 0.25, 0.25}, {-1, 0, 0});
+    auto drv = moved ? m.faceDrive(*moved) : std::nullopt;
+    CHECK(drv && drv->param == "distance" && std::abs(drv->value - 0.2) < 1e-9);
+    if (moved) CHECK(m.pushPull(*moved, -0.3));
+    CHECK_NEAR(m.massProperties().volume, 0.25 - 0.1 * 0.25, 1e-9);
+    // Widening the sketch moves the face; the push follows it.
+    for (auto& v : m.document().variables) v.expr = "1500 mm";
+    CHECK(m.rebuild().ok);
+    CHECK_NEAR(m.massProperties().volume, 1.5 * 0.25 - 0.1 * 0.25, 1e-9);
+    // A curved face grows round: a cylinder from a circle sketch, its side pushed out 50 mm.
+    PartDocument c;
+    std::string kid = c.add(feature("sketch", circleSketch(standardPlane("top"), 0, 0, 0.25))).id;
+    c.add(feature("extrude", {{"sketch", kid}, {"depth", 0.3}}));
+    PartModel cm(c);
+    CHECK(cm.rebuild().ok);
+    auto round = cm.pick({5, 0, 0.15}, {-1, 0, 0});
+    CHECK(round && !cm.faceDrive(*round));
+    if (round) CHECK(cm.pushPull(*round, 0.05));
+    CHECK_NEAR(cm.massProperties().volume, kPiT * 0.3 * 0.3 * 0.3, 1e-6);
+  });
+
   run("sketch extrude follows its dimensions and variables", [] {
     PartDocument d;
     d.variables = {{"width", "1000 mm"}};

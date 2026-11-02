@@ -174,7 +174,12 @@ Result is *Add material*, *Cut away* or *New body*.
 | B | Esc | Cancel (the part returns to how it was) |
 
 Edit a finished feature from the model panel (*Edit Extrude 1*). Push/Pull also works on
-sketch extrudes: pushing the end face changes the depth.
+sketch extrudes: pushing the end face changes the depth. Faces that no dimension drives (an
+extrude's sides, a revolve's curved outside, faces left by cuts) take stock directly: RT pushes
+the face out and adds material, LT pulls it in and removes some. Flat faces move straight, curved
+faces grow or shrink along their own surface. Each spot becomes a *Push/Pull* feature in the
+history; pushing that face again changes its distance, and pulling it back past where it started
+turns added stock into removed stock.
 
 ## In the core
 

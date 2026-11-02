@@ -448,6 +448,16 @@ func _run() -> void:
 	await _frames(2)
 	_check(absf(main.doc.mass_properties().volume - PI * 0.75) < 1e-4,
 		"a revolve about the sketch's Y axis makes a tube (%.4f m³)" % main.doc.mass_properties().volume)
+	# Push/pull on a face nothing drives (the tube's round outside) adds stock as its own feature.
+	var tube_side: Dictionary = main.doc.pick(Vector3(5, 0.5, 0), Vector3(-1, 0, 0), 20.0)
+	_check(not tube_side.is_empty() and not tube_side.has("drive_label"), "the tube's outside has no driving dimension")
+	var pp: Dictionary = main.doc.push_pull(tube_side, 0.05)
+	var feats_now: Array = main.doc.get_features()
+	_check(pp.ok and feats_now[-1].type == "face_offset" and absf(main.doc.mass_properties().volume - PI * (1.05 * 1.05 - 0.25)) < 1e-3,
+		"push/pull adds stock round it (%s, %.4f m³)" % [pp.get("message", ""), main.doc.mass_properties().volume])
+	var pp2: Dictionary = main.doc.push_pull(tube_side, -0.1)
+	_check(pp2.ok and main.doc.get_features().size() == feats_now.size() and absf(main.doc.mass_properties().volume - PI * (0.95 * 0.95 - 0.25)) < 1e-3,
+		"and pulling the same spot back past the surface removes stock (%.4f m³)" % main.doc.mass_properties().volume)
 
 	await _sketch_tools(main)
 	await _player_body(main)

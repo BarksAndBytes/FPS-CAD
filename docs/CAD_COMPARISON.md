@@ -211,7 +211,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | --- | --- | --- | --- |
 | Primitives: box, cylinder, sphere | Fusion Box/Cylinder/Sphere; Inventor primitives | ✓ | Placed from the Primitives group |
 | Cone, torus | Fusion; Inventor | ◐ | Cone in the core |
-| Push/pull a face | Move Face / Press Pull / Direct edit | ✓ | Edits the driving dimension, so history stays parametric |
+| Push/pull a face | Move Face / Press Pull / Direct edit | ✓ | Edits the driving dimension; faces with none get stock added or removed as a Push/Pull feature (flat or curved), still in the history |
 | Move, delete, replace, offset face (history-free) | Direct edit in all three | ✗ | |
 | Freeform / T-spline / sub-D | — / Form workspace / Freeform | ✗ | |
 | Mesh import, repair, convert to solid | SW mesh tools / Mesh workspace / Mesh enabler | ✗ | |

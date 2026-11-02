@@ -120,10 +120,15 @@ public:
   // Which parameter a push/pull on this face drives, if any.
   std::optional<FaceDrive> faceDrive(const PickHit& hit) const;
 
-  // Moves the face along its normal by delta metres by editing the driving parameter, then
-  // rebuilds. Returns false (and changes nothing) when the face has no driving parameter or the
-  // result would be invalid.
+  // Moves the face along its normal by delta metres, then rebuilds. A face with a driving
+  // parameter has that parameter edited; any other face gets stock added or removed through
+  // offsetFace. Returns false (and changes nothing) when the result would be invalid.
   bool pushPull(const PickHit& hit, double delta, std::string* message = nullptr);
+
+  // Adds (delta > 0) or removes stock on the hit face, as a "face_offset" feature (Push/Pull N)
+  // whose distance then drives that face; pushing the same spot again edits it. Works on flat
+  // faces (a prism) and curved ones (thickened along the surface).
+  bool offsetFace(const PickHit& hit, double delta, std::string* message = nullptr);
 
   MassProperties massProperties() const;
 

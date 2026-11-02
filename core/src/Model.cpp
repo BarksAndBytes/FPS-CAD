@@ -53,6 +53,8 @@
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp_Face.hxx>
+#include <BRepOffset_MakeOffset.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <set>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
@@ -218,9 +220,10 @@ bool nearestOnFace(const TopoDS_Face& f, const gp_Pnt& p, gp_Pnt& at, gp_Dir& n)
   if (d.SupportTypeShape2(1) == BRepExtrema_IsInFace) {
     d.ParOnFaceS2(1, u, v);
   } else {
-    BRepAdaptor_Surface sa(f);
-    u = (sa.FirstUParameter() + sa.LastUParameter()) / 2;
-    v = (sa.FirstVParameter() + sa.LastVParameter()) / 2;
+    // On an edge or a vertex (a cylinder's seam, say): read the surface there directly.
+    GeomAPI_ProjectPointOnSurf proj(at, BRep_Tool::Surface(f));
+    if (proj.NbPoints() < 1) return false;
+    proj.LowerDistanceParameters(u, v);
   }
   BRepGProp_Face gf(f);
   gp_Pnt q;
@@ -494,33 +497,82 @@ struct PartModel::Impl {
 
   // Converted edges follow the model: each link's face is found again in the bodies built so far
   // and projected afresh. A face that cannot be found leaves the geometry as it was.
+  // A face found again after the model changed: the one nearest probe whose outward normal there
+  // is close to want, preferring faces made by feature owner. Returns false when none matches.
+  bool findFace(const gp_Pnt& probe, const gp_Dir& want, const std::string& owner, int& body,
+                TopoDS_Face& found, gp_Pnt& at, gp_Dir& n) const {
+    double best = 1e300;
+    bool bestOwned = false;
+    for (size_t b = 0; b < bodies.size(); ++b) {
+      for (TopExp_Explorer ex(bodies[b], TopAbs_FACE); ex.More(); ex.Next()) {
+        const TopoDS_Face& f = TopoDS::Face(ex.Current());
+        gp_Pnt q;
+        gp_Dir fn;
+        if (!nearestOnFace(f, probe, q, fn) || fn.Dot(want) < 0.9) continue;
+        bool owned = !owner.empty() && ownerOf(static_cast<int>(b), f) == owner;
+        double d = q.Distance(probe);
+        if ((owned && !bestOwned) || (owned == bestOwned && d < best)) {
+          best = d;
+          bestOwned = owned;
+          found = f;
+          at = q;
+          n = fn;
+          body = static_cast<int>(b);
+        }
+      }
+    }
+    return !found.IsNull();
+  }
+
+  // Push/pull of a face with no driving dimension: the face thickened outward by distance adds
+  // stock to its body, or (negative) cut inward removes it. The face is found again on every
+  // rebuild like converted sketch edges, so the feature follows earlier changes.
+  void applyFaceOffset(Feature& f, int self) {
+    double d = get(f.params, "distance");
+    if (std::abs(d) < 1e-9) return;
+    auto v3 = [&](const char* k) {
+      const Json& a = f.params.at(k);
+      return gp_XYZ(a.at(0).get<double>(), a.at(1).get<double>(), a.at(2).get<double>());
+    };
+    gp_Pnt probe(v3("probe"));
+    gp_Dir want(v3("normal"));
+    int b = 0;
+    TopoDS_Face face;
+    gp_Pnt at;
+    gp_Dir n;
+    if (!findFace(probe, want, f.params.value("feature", std::string()), b, face, at, n))
+      throw FeatureError("the face it pushes is no longer there");
+    f.params["probe"] = {at.X(), at.Y(), at.Z()};
+    f.params["normal"] = {n.X(), n.Y(), n.Z()};
+    TopoDS_Shape tool;
+    if (BRepAdaptor_Surface(face).GetType() == GeomAbs_Plane) {
+      tool = BRepPrimAPI_MakePrism(face, gp_Vec(n) * d).Shape();
+    } else {
+      // Curved faces thicken along their own normals, so a cylinder grows round, not sideways.
+      BRepOffset_MakeOffset mo;
+      mo.Initialize(face, d, 1e-7, BRepOffset_Skin, false, false, GeomAbs_Arc, true);
+      mo.MakeOffsetShape();
+      if (!mo.IsDone()) throw FeatureError("that curved face cannot be pushed so far");
+      tool = mo.Shape();
+    }
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(tool, props);
+    if (props.Mass() < 0) tool.Reverse();  // an inside-out solid from a reversed face
+    Feature g = f;
+    g.op = d > 0 ? BodyOp::Add : BodyOp::Cut;
+    g.body = b;
+    applyBoolean(g, tool, self);
+  }
+
   void refreshLinks(Sketch& sk) {
     for (auto& l : sk.links) {
       gp_Pnt probe(l.probe[0], l.probe[1], l.probe[2]);
       gp_Dir want(l.normal[0], l.normal[1], l.normal[2]);
-      double best = 1e300;
-      bool bestOwned = false;
+      int body = 0;
       TopoDS_Face found;
       gp_Pnt at;
       gp_Dir n;
-      for (size_t b = 0; b < bodies.size(); ++b) {
-        for (TopExp_Explorer ex(bodies[b], TopAbs_FACE); ex.More(); ex.Next()) {
-          const TopoDS_Face& f = TopoDS::Face(ex.Current());
-          gp_Pnt q;
-          gp_Dir fn;
-          if (!nearestOnFace(f, probe, q, fn) || fn.Dot(want) < 0.9) continue;
-          bool owned = !l.feature.empty() && ownerOf(static_cast<int>(b), f) == l.feature;
-          double d = q.Distance(probe);
-          if ((owned && !bestOwned) || (owned == bestOwned && d < best)) {
-            best = d;
-            bestOwned = owned;
-            found = f;
-            at = q;
-            n = fn;
-          }
-        }
-      }
-      if (found.IsNull()) continue;
+      if (!findFace(probe, want, l.feature, body, found, at, n)) continue;
       auto curves = projectFaceEdges(found, sk.plane);
       if (curves.empty()) continue;
       applyLink(sk, l, curves, false);
@@ -835,6 +887,7 @@ struct PartModel::Impl {
       try {
         int self = ownerIndex(f.id);
         if (f.type == "sketch") processSketch(f);
+        else if (f.type == "face_offset") applyFaceOffset(f, self);
         else if (f.type == "fillet" || f.type == "chamfer") applyEdgeFeature(f, self);
         else applyBoolean(f, toolShape(f), self);
       } catch (const Standard_Failure& e) {
@@ -1023,6 +1076,22 @@ std::optional<Drive> driveFor(const Feature& f, const gp_Dir& n, const gp_Ax3* p
 std::optional<FaceDrive> PartModel::faceDrive(const PickHit& hit) const {
   const Feature* f = d_->doc.find(hit.featureId);
   if (!f) return std::nullopt;
+  if (f->type == "face_offset") {
+    // The pushed face itself drives the distance (outward positive); its sides drive nothing.
+    try {
+      const Json& nv = f->params.at("normal");
+      gp_Dir want(nv.at(0).get<double>(), nv.at(1).get<double>(), nv.at(2).get<double>());
+      if (gp_Dir(hit.normal[0], hit.normal[1], hit.normal[2]).Dot(want) < 0.9) return std::nullopt;
+      FaceDrive fd;
+      fd.featureId = f->id;
+      fd.param = "distance";
+      fd.label = "pushed face · distance";
+      fd.value = d_->get(f->params, "distance");
+      return fd;
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
   if (f->type == "extrude" && f->params.contains("sketch")) {
     // The end face drives the depth; the start face moves the start offset.
     try {
@@ -1073,7 +1142,7 @@ std::optional<FaceDrive> PartModel::faceDrive(const PickHit& hit) const {
 bool PartModel::pushPull(const PickHit& hit, double delta, std::string* message) {
   auto say = [&](const std::string& m) { if (message) *message = m; };
   auto fd = faceDrive(hit);
-  if (!fd) { say("this face has no driving dimension"); return false; }
+  if (!fd) return offsetFace(hit, delta, message);
   Feature* f = d_->doc.find(fd->featureId);
   const PartDocument backup = d_->doc;
   const bool wasOk = d_->report.ok;
@@ -1114,6 +1183,9 @@ bool PartModel::pushPull(const PickHit& hit, double delta, std::string* message)
       double next = std::max(kMin, cur + (sym ? 2 * delta : delta));
       p["depth"] = next;
       if (t == "-depth" && !sym) p["offset"] = (p.contains("offset") ? d_->get(p, "offset") : 0.0) - (next - cur);
+    }
+    else if (t == "distance") {
+      p["distance"] = d_->get(p, "distance") + delta;  // through zero it turns from adding to removing
     }
     else if (t == "+depth" || t == "-depth") {
       gp_Ax3 ax = d_->sketchPlane(p.at("plane"));
@@ -1184,6 +1256,52 @@ std::vector<PartModel::ProjectedCurve> PartModel::projectFace(int b, int face, c
   const ShapeIndex& faces = d_->faceIndex[static_cast<size_t>(b)];
   if (face < 0 || face >= faces.Extent()) return {};
   return projectFaceEdges(TopoDS::Face(faces(face + 1)), plane);
+}
+
+bool PartModel::offsetFace(const PickHit& hit, double delta, std::string* message) {
+  auto say = [&](const std::string& m) { if (message) *message = m; };
+  if (hit.body < 0 || hit.body >= bodyCount()) { say("aim at a face of a part"); return false; }
+  const PartDocument backup = d_->doc;
+  const bool wasOk = d_->report.ok;
+  gp_Pnt at(hit.point[0], hit.point[1], hit.point[2]);
+  gp_Dir n(hit.normal[0], hit.normal[1], hit.normal[2]);
+  double scale = std::max({1.0, std::abs(at.X()), std::abs(at.Y()), std::abs(at.Z())});
+  // Holding the button keeps pushing the same spot: grow that push rather than stacking another.
+  Feature* f = nullptr;
+  for (auto& g : d_->doc.features) {
+    if (g.type != "face_offset" || g.suppressed || g.params.value("feature", std::string()) != hit.featureId) continue;
+    try {
+      const Json& pr = g.params.at("probe");
+      const Json& nv = g.params.at("normal");
+      gp_Pnt q(pr.at(0).get<double>(), pr.at(1).get<double>(), pr.at(2).get<double>());
+      gp_Dir m(nv.at(0).get<double>(), nv.at(1).get<double>(), nv.at(2).get<double>());
+      if (q.Distance(at) < 1e-6 * scale && m.Dot(n) > 0.999) f = &g;
+    } catch (...) {
+    }
+  }
+  std::string name;
+  if (f) {
+    f->params["distance"] = d_->get(f->params, "distance") + delta;
+    name = f->name;
+  } else {
+    Feature g;
+    g.type = "face_offset";
+    g.name = d_->doc.uniqueName("Push/Pull");
+    g.params = {{"probe", {at.X(), at.Y(), at.Z()}}, {"normal", {n.X(), n.Y(), n.Z()}},
+                {"feature", hit.featureId}, {"distance", delta}};
+    name = d_->doc.add(g).name;
+  }
+  RebuildReport r = rebuild();
+  if (wasOk && !r.ok) {
+    std::string why;
+    for (auto& st : r.features) if (!st.ok) { why = st.message; break; }
+    d_->doc = backup;
+    rebuild();
+    say("that change would break the model" + (why.empty() ? std::string() : ": " + why));
+    return false;
+  }
+  say(name + (delta > 0 ? " · stock added" : " · stock removed"));
+  return true;
 }
 
 bool PartModel::convertFace(Sketch& s, int b, int face, const Vec3& probe, std::string* message) {

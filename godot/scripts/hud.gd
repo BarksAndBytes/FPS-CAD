@@ -377,7 +377,8 @@ func _sketch_summary(f: Dictionary) -> void:
 
 
 ## Keys that are references or choices, edited through the feature panel instead of as numbers.
-const SKIP_KEYS := ["target", "edges", "kind", "sketch", "path", "sketches", "direction", "end", "axis", "angle", "planeName"]
+const SKIP_KEYS := ["target", "edges", "kind", "sketch", "path", "sketches", "direction", "end", "axis", "angle", "planeName",
+	"probe", "normal", "feature"]
 
 
 func _add_fields(id: String, params: Dictionary, prefix: String) -> void:

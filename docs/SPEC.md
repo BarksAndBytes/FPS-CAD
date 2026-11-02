@@ -52,7 +52,12 @@ constrain it, then build a feature from it. Sketches are `sketch` features (plan
 lines / circles / arcs, constraints) solved by the core; `extrude`, `revolve`, `sweep` and `loft`
 reference them by id, so editing a sketch's dimension rebuilds everything after it. Feature
 parameters are set in a property panel with a live preview. Direct tools (push/pull, boxes,
-cylinders, spheres) remain for quick blocking-out. Details: [`docs/SKETCHING.md`](SKETCHING.md).
+cylinders, spheres) remain for quick blocking-out. Push/pull edits the dimension that drives a
+face when there is one; on any other face (an extrude's side, a revolve's curved outside) it adds
+or removes stock as a *Push/Pull* (`face_offset`) feature: the face is thickened outward (a prism
+for flat faces, an offset along the surface for curved ones) or cut inward, and its distance then
+drives the face. The feature finds its face again on every rebuild, so it follows earlier
+changes. Details: [`docs/SKETCHING.md`](SKETCHING.md).
 How this compares with SOLIDWORKS, Fusion and Inventor, and which gaps matter most:
 [`docs/CAD_COMPARISON.md`](CAD_COMPARISON.md).
 

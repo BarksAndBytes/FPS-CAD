@@ -498,7 +498,7 @@ func _update_preview(hit: Dictionary) -> void:
 				if h.has("drive_label"):
 					label = "%s · %s %s" % [h.get("feature_name", ""), h.drive_label, hud.length(h.drive_value)]
 				else:
-					label = "%s · no driving dimension" % h.get("feature_name", "")
+					label = "%s · add or remove stock" % h.get("feature_name", "")
 		"box", "cylinder", "sphere":
 			if not hit.is_empty() and not is_assembly:
 				var d := place_dims(id)
