@@ -6,8 +6,8 @@ extends Node3D
 signal size_changed(size: float)
 signal growth_blocked  # walking: growing further would push the body into a part
 
-const TALL := 1.75        # metres at 1:1
-const EYE := 1.62
+const TALL := 1.83        # metres at 1:1: about 6 ft
+const EYE := 1.70         # eye height at 1:1
 const MIN_SIZE := 0.0001 / TALL  # 0.1 mm tall
 const MAX_SIZE := 1000.0 / TALL  # 1 km tall
 const WALK_SPEED := 4.5
@@ -51,6 +51,11 @@ var _grow_held := 0.0
 var _shrink_held := 0.0
 var _scale_hold := 0.0  # touch buttons: +1 grow, -1 shrink
 var _blocked_at := -10000
+## Size changes glide: log(size) follows log(target_size) like a critically damped spring, so a
+## change starts gently, never overshoots and settles in about half a second.
+const SIZE_SPRING := 8.0  # 1/s
+const TAP_SCALE := 1.4142  # one tap of grow or shrink: a gentle step (√2), holding keeps going
+var _size_v := 0.0        # rate of change of log(size), per second
 
 ## Sketch view: the camera looks straight down a plane's normal with the plane's X axis to the
 ## right and its Y axis up. Moving pans across the plane and size is the zoom (distance).
@@ -58,7 +63,7 @@ var view_lock := false
 var _lock_target := Vector3.ZERO  # point on the plane at the centre of the view
 var _lock_basis := Basis.IDENTITY  # columns: plane X, plane Y, plane normal
 const LOCK_DISTANCE := 2.6        # camera distance from the plane, in player heights
-const BLEND_TIME := 0.35
+const BLEND_TIME := 0.55
 var _blend_from := Transform3D.IDENTITY
 var _blend_t := 1.0
 
@@ -90,6 +95,13 @@ func set_size(s: float) -> void:
 	target_size = clampf(s, MIN_SIZE, MAX_SIZE)
 
 
+## Sets the size at once, with no glide (spawning, loading a level).
+func set_size_now(s: float) -> void:
+	set_size(s)
+	size = target_size
+	_size_v = 0.0
+
+
 func scale_by(k: float) -> void:
 	set_size(target_size * k)
 
@@ -98,8 +110,14 @@ func hold_scale(direction: float) -> void:
 	_scale_hold = direction
 
 
-## Locks the view onto a plane (Godot-space axes), centred on target.
-func lock_view(target: Vector3, xdir: Vector3, ydir: Vector3, normal: Vector3) -> void:
+## Locks the view onto a plane (Godot-space axes), centred on target. keep_distance: zoom so the
+## camera ends up about as far from target as the eye is now, so entering the view does not jump
+## in or out.
+func lock_view(target: Vector3, xdir: Vector3, ydir: Vector3, normal: Vector3, keep_distance := false) -> void:
+	if keep_distance:
+		# At once: the camera blend carries the move, a gliding size would swing the zoom.
+		var d := eye_position().distance_to(target)
+		set_size_now(clampf(d / (LOCK_DISTANCE * EYE), target_size * 0.25, target_size * 4.0))
 	_start_blend()
 	view_lock = true
 	_lock_basis = Basis(xdir.normalized(), ydir.normalized(), normal.normalized())
@@ -132,7 +150,7 @@ func restore_pose(p: Dictionary) -> void:
 	yaw = p.yaw
 	pitch = p.pitch
 	fly = p.fly
-	set_size(p.size)
+	set_size_now(p.size)  # the camera blend carries the change back
 
 
 func _start_blend() -> void:
@@ -232,19 +250,21 @@ func _read_size_actions(dt: float) -> void:
 		precision = not precision
 	if Input.is_action_just_pressed(&"reset_size"):
 		set_size(1.0)
-	# D-pad / keys: a tap doubles or halves, holding scales smoothly.
-	_grow_held = _held(&"grow", _grow_held, dt, 2.0)
-	_shrink_held = _held(&"shrink", _shrink_held, dt, 0.5)
+	# D-pad / keys: a tap is a gentle step; holding keeps scaling, faster the longer it is held.
+	_grow_held = _held(&"grow", _grow_held, dt, 1.0)
+	_shrink_held = _held(&"shrink", _shrink_held, dt, -1.0)
 
 
-func _held(action: StringName, held: float, dt: float, tap_factor: float) -> float:
+func _held(action: StringName, held: float, dt: float, direction: float) -> float:
 	if Input.is_action_just_pressed(action):
-		scale_by(tap_factor)
+		scale_by(pow(TAP_SCALE, direction))
 		return 0.0
 	if Input.is_action_pressed(action):
 		held += dt
-		if held > 0.35:
-			scale_by(pow(tap_factor, dt * 1.6))
+		if held > 0.25:
+			# From about ×1.6 per second up to about ×6 per second after a second and a half.
+			var rate := lerpf(0.5, 1.8, clampf((held - 0.25) / 1.5, 0.0, 1.0))
+			scale_by(exp(rate * dt * direction))
 		return held
 	return 0.0
 
@@ -260,9 +280,16 @@ func _update_size(dt: float) -> void:
 				_blocked_at = Time.get_ticks_msec()
 				growth_blocked.emit()
 	var before := size
-	var a := log(size)
-	var b := log(target_size)
-	size = exp(a + (b - a) * (1.0 - exp(-dt * 9.0)))
+	# Exact critically damped step for log(size) towards log(target_size).
+	var x := log(size) - log(target_size)
+	var w := SIZE_SPRING
+	var e := exp(-w * dt)
+	var nx := (x + (_size_v + w * x) * dt) * e
+	_size_v = (_size_v - w * (_size_v + w * x) * dt) * e
+	if nx * x < 0.0 or absf(nx) < 1e-6:  # arrived (never past the target: a ceiling may be there)
+		nx = 0.0
+		_size_v = 0.0
+	size = exp(log(target_size) + nx)
 	camera.near = maxf(1e-6, 0.02 * size)
 	camera.far = clampf(6000.0 * size, 80.0, 30000.0)
 	if absf(size - before) > before * 1e-4:
@@ -301,6 +328,13 @@ func _move(dt: float) -> void:
 	_vy -= GRAVITY * size * dt
 	var was_y := feet.y
 	feet.y += _vy * dt
+	# Going up, the head stops at a ceiling instead of passing into it.
+	if _vy > 0.0 and cast.is_valid():
+		var from := Vector3(feet.x, was_y + TALL * size * 0.5, feet.z)
+		var head: Dictionary = cast.call(from, Vector3.UP, TALL * size * 0.5 + _vy * dt + 1e-6)
+		if not head.is_empty() and head.normal.y < 0.0:
+			feet.y = minf(feet.y, head.point.y - TALL * size * 1.01)
+			_vy = 0.0
 	# Look for the floor from where the feet were before this frame's fall, so a fast fall
 	# cannot carry them past a surface between two frames.
 	var floor_y := _floor_at(Vector3(feet.x, maxf(was_y, feet.y) + STEP * size, feet.z))
@@ -347,10 +381,13 @@ func _floor_at(probe: Vector3) -> float:
 	return y
 
 
+## Whether walking dist along dir would push the body into a part. The body is sampled from just
+## above step height up to the top of the head, so a low overhang stops the player as well as a
+## wall does.
 func _blocked(dir: Vector3, dist: float) -> bool:
 	if not cast.is_valid():
 		return false
-	for h in [0.55, 1.45]:
+	for h in [STEP + 0.05, TALL * 0.5, TALL * 0.75, TALL * 0.98]:
 		var o := feet + Vector3(0, h * size, 0)
 		var hit: Dictionary = cast.call(o, dir, dist + RADIUS * size)
 		# A face seen from inside a solid does not block, so a player inside a part can walk out.

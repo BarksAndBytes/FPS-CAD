@@ -19,9 +19,10 @@ by a feature hide, as in most CAD tools; edit them from the model panel (Tab / Y
 ## Sketch mode
 
 Entering a sketch swings the camera to look straight down the plane's normal, with the sketch's
-X axis pointing right and its Y axis up, like a desktop CAD tool's sketch view. Editing an
-existing sketch also centres and zooms on its geometry. Finishing or discarding the sketch takes
-you back to where you were standing.
+X axis pointing right and its Y axis up, like a desktop CAD tool's sketch view. The view keeps
+about the distance you were from the spot you aimed at, so it turns square to the plane without
+zooming in or out (editing an existing sketch instead centres and zooms on its geometry).
+Finishing or discarding the sketch glides you back to where you were standing.
 
 The crosshair (screen centre) is the cursor. While drawing, it snaps to existing points and the
 sketch origin first, then to the middle of a line, then onto any line, circle or arc, and

@@ -61,7 +61,7 @@ any way you like, in any orientation, and it passes when the geometry matches. P
 | RT / LT | Left / right click | Tool primary / secondary action |
 | Hold RB | Hold Q | Tool wheel |
 | LB | E | Cycle the tool's option |
-| D-pad ↑ / ↓ | Scroll, = / − | Grow / shrink (tap ×2, hold for smooth); R resets |
+| D-pad ↑ / ↓ | Scroll, = / − | Grow / shrink (a tap is a gentle step, holding keeps going and speeds up; sizes glide); R resets to 1:1, about 6 ft tall |
 | D-pad ← / → | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | A / B | Space / C | Jump or fly up / fly down |
 | A / B | Enter / Esc | Select / back in every menu |

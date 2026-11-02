@@ -188,7 +188,7 @@ func _run() -> void:
 	await _frames(2)
 	main.player.set_size(1.0)
 	await _seconds(0.8)
-	var grown: float = main.player.size * 1.75
+	var grown: float = main.player.size * main.player.TALL
 	_check(grown < 0.3 and grown > 0.2, "growing inside the tunnel stops under its 30 cm ceiling (%.0f mm tall)" % (grown * 1000.0))
 	main.player.feet = Vector3(0, 0.05, 9)
 	await _frames(2)
@@ -356,7 +356,7 @@ func _run() -> void:
 		and (-cam.z).is_equal_approx(Vector3(0, -1, 0)),
 		"the Top-plane sketch view looks straight down with sketch X right and Y up (%s)" % cam)
 	var view_y: float = main.player.camera.global_position.y
-	main.player.set_size(0.5)
+	main.player.set_size(main.player.target_size * 0.5)
 	await _seconds(0.6)
 	_check(main.player.camera.global_position.y < view_y * 0.75 and main.player.view_lock, "shrinking zooms the sketch view in")
 	main.player.set_size(1.0)
@@ -449,6 +449,7 @@ func _run() -> void:
 		"a revolve about the sketch's Y axis makes a tube (%.4f m³)" % main.doc.mass_properties().volume)
 
 	await _sketch_tools(main)
+	await _player_body(main)
 
 	# ---- challenge mode: copy the target, any orientation, any method ----
 	var list: Array = ClassDB.instantiate(&"CadPart").challenge_list()
@@ -838,6 +839,68 @@ func _sketch_tools(main: Node) -> void:
 	for p in after.points:
 		wide = maxf(wide, float(p.x))
 	_check(absf(wide - 0.3) < 1e-6, "converted edges follow the model when the box widens (%.3f)" % wide)
+
+
+## The 6 ft player: full-height body, head stops at ceilings, sizes glide, and the sketch view
+## opens at about the distance the player was from what they aimed at.
+func _player_body(main: Node) -> void:
+	main._start_mode("new")
+	await _frames(2)
+	var pl: Node3D = main.player
+	_check(absf(pl.TALL - 1.83) < 0.01 and absf(pl.EYE - 1.70) < 0.01, "the player is about 6 ft tall at 1:1")
+	# An overhang from 1.6 m to 2 m, in a blank part: too low to walk under at full height.
+	main.doc.add_primitive("box", Vector3(0, 1.6, -3), {w = 2.0, d = 2.0, h = 0.4}, "add")
+	main._on_model_changed()
+	pl.set_size_now(1.0)
+	pl.fly = false
+	pl.feet = Vector3(0, 0, 0)
+	await _frames(2)
+	_check(pl._blocked(Vector3(0, 0, -1), 2.2), "an overhang at head height stops a 6 ft player walking under it")
+	pl.set_size_now(0.8)
+	_check(not pl._blocked(Vector3(0, 0, -1), 2.2), "a player shorter than the gap walks under it")
+	pl.set_size_now(1.0)
+	# Jumping under a ceiling 2.1 m up: the head stops at it.
+	main.doc.add_primitive("box", Vector3(6, 2.1, 0), {w = 2.0, d = 2.0, h = 0.3}, "add")
+	main._on_model_changed()
+	pl.feet = Vector3(6, 0, 0)
+	await _seconds(0.3)
+	pl._on_ground = true
+	pl._jump_queued = true
+	var top_y := 0.0
+	for i in 30:
+		await _frames(1)
+		top_y = maxf(top_y, pl.feet.y + pl.TALL * pl.size)
+	_check(top_y <= 2.1 + 1e-3 and top_y > 2.0, "jumping under a 2.1 m ceiling stops the head at it (%.3f m)" % top_y)
+	# Size glides: it starts gently and arrives without overshooting.
+	pl.feet = Vector3(20, 0, 20)
+	await _seconds(0.3)
+	pl.set_size_now(1.0)
+	pl.set_size(2.0)
+	await _frames(1)
+	var first: float = pl.size
+	var peak := 0.0
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 1200:
+		await _frames(1)
+		peak = maxf(peak, pl.size)
+	_check(first < 1.1 and peak <= 2.0 + 1e-6 and pl.size > 1.95, "growing glides there: %.3f after a frame, %.3f at the end" % [first, pl.size])
+	pl.set_size_now(1.0)
+	# Entering a sketch keeps the distance to the aimed spot: no zoom jump.
+	pl.feet = Vector3(0, 0, 3)
+	pl.yaw = 0.0
+	pl.pitch = -atan2(pl.EYE, 3.0)  # aiming at the origin on the floor
+	await _frames(2)
+	var d: float = pl.eye_position().distance_to(Vector3.ZERO)
+	var eye_before: Vector3 = pl.camera.global_position
+	var top: Dictionary = main.doc.standard_plane("top")
+	main._on_sketch_requested(top.plane, top.name, "")
+	await _seconds(0.8)
+	var cam_d: float = pl.camera.global_position.distance_to(Vector3.ZERO)
+	_check(pl.view_lock and absf(cam_d - d) < 0.05 * d, "the sketch view opens about as far away as the player was (%.2f m, was %.2f m)" % [cam_d, d])
+	main.sketcher.discard()
+	await _seconds(0.8)
+	_check(pl.camera.global_position.distance_to(eye_before) < 0.05 and absf(pl.size - 1.0) < 1e-6,
+		"leaving the sketch glides back to where the player stood")
 
 
 func _frames(n: int) -> void:

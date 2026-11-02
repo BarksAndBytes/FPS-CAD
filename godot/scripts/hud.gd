@@ -214,7 +214,7 @@ func set_status(text: String, color: Color = MUTED) -> void:
 
 func set_readout(size: float, grid: float, snap: float, fly: bool, feet: Vector3) -> void:
 	_readout.text = "%s tall · snap %s · %s\nX %s   Y %s   Z %s" % [
-		length(1.75 * size), length(snap), "FLY" if fly else "WALK",
+		length(preload("res://scripts/player.gd").TALL * size), length(snap), "FLY" if fly else "WALK",
 		length(feet.x), length(-feet.z), length(feet.y)]
 	_fly_btn.set_pressed_no_signal(fly)
 

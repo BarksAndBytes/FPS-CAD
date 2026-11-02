@@ -229,7 +229,7 @@ func _act(primary: bool, repeat: bool) -> void:
 				for v in dims.values():
 					biggest = maxf(biggest, float(v))
 				if biggest > 0.0:
-					player.set_size(biggest / (1.75 * 1.6))  # the part fills a comfortable view
+					player.set_size(biggest / (player.TALL * 1.6))  # the part fills a comfortable view
 					hud.toast("Sized to %s" % hit.feature_name)
 		"sketch":
 			if primary:

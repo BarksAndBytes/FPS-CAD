@@ -260,8 +260,7 @@ func _spawn(feet: Vector3, yaw: float, size: float, pitch := -0.12) -> void:
 	player.feet = feet
 	player.yaw = yaw
 	player.pitch = pitch
-	player.size = size
-	player.target_size = size
+	player.set_size_now(size)
 
 
 func _on_growth_blocked() -> void:

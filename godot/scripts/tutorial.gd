@@ -108,11 +108,11 @@ func _check_jump() -> bool:
 
 func _text_shrink() -> String:
 	return ("The wall ahead has a 30 cm tunnel. Shrink until you are shorter than that: %s "
-		+ "(a tap halves your size, holding keeps shrinking). Your height is at the top left.") % _p(&"shrink")
+		+ "(a tap shrinks you a step, holding keeps shrinking). Your height is at the top left.") % _p(&"shrink")
 
 
 func _check_shrink() -> bool:
-	return game.player.size * 1.75 < 0.3
+	return game.player.size * game.player.TALL < 0.3
 
 
 func _text_crawl() -> String:

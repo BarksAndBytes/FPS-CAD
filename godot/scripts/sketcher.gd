@@ -3200,8 +3200,8 @@ func _enter_sketch_view(frame: bool) -> void:
 		target = _w((lo + hi) / 2.0)
 		var extent := maxf((hi - lo).length() / 2.0, 1e-4)
 		# The view's half-height is about 3 player sizes at the sketch-view distance.
-		p.set_size(extent * 1.3 / 3.0)
-	p.lock_view(target, _x, _y, _n)
+		p.set_size_now(extent * 1.3 / 3.0)
+	p.lock_view(target, _x, _y, _n, not frame)
 
 
 ## Where the crosshair meets the plane, or the point on the plane nearest the eye if the player
@@ -3226,5 +3226,5 @@ func toggle_view() -> void:
 		p.unlock_view()
 		game.hud.toast("Free look: walk or fly around · %s returns to the sketch view" % Actions.prompt(&"normal_to"))
 	else:
-		p.lock_view(_plane_point_ahead(), _x, _y, _n)
+		p.lock_view(_plane_point_ahead(), _x, _y, _n, true)
 		game.hud.toast("Sketch view")

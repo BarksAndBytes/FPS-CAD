@@ -41,7 +41,7 @@ network calls for modeling, saving or export.
 | A / B | Jump or fly up / crouch, fly down, back |
 | A / B in menus | Select / back |
 | X / Y | Finish sketch / inspect target parameters; in sketch mode Y switches between the sketch view and free look |
-| D-pad up / down | Grow / shrink (x2 per tap, hold for smooth) |
+| D-pad up / down | Grow / shrink (×1.41 per tap, hold to keep going, faster the longer it is held; size glides on a critically damped curve). At 1:1 the player is 1.83 m (6 ft) tall, eyes at 1.70 m; the body blocks from step height to the top of the head |
 | D-pad left / right | Undo / redo |
 | View / Menu | Controls map / pause menu |
 
