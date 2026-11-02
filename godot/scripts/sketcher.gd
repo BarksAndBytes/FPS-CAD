@@ -156,7 +156,11 @@ func begin(plane: Dictionary, plane_name: String, edit: String = "") -> bool:
 		if sketch.is_empty():
 			return false
 	else:
-		sketch = {plane = plane, planeName = plane_name, points = [], entities = [], constraints = []}
+		var pl := plane.duplicate()
+		sketch = {plane = pl, planeName = plane_name, points = [], entities = [], constraints = []}
+		if pl.has("ref"):  # on a reference plane: the sketch follows it
+			sketch["planeRef"] = String(pl["ref"])
+			pl.erase("ref")
 	for k in ["points", "entities", "constraints"]:
 		if not sketch.has(k):
 			sketch[k] = []

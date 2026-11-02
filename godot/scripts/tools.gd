@@ -7,6 +7,7 @@ signal changed  # the document changed; redraw it
 signal tool_switched(index: int)
 signal sketch_requested(plane: Dictionary, plane_name: String, edit_id: String)
 signal feature_requested(type: String, sketch_id: String, op: String)
+signal reference_requested(type: String, params: Dictionary)  # main.gd opens the panel when it has sizes
 
 ## How the tool wheel groups the tools: single tools and groups on the inner ring, a group's
 ## tools branching out from it (tool_wheel.gd). Entries are tool ids or [group name, description,
@@ -17,7 +18,8 @@ const WHEEL := [
 	["Solids", "Turn a sketch into a solid: extrude, revolve, sweep, loft", ["extrude", "revolve", "sweep", "loft"]],
 	["Modify", "Change what is there: push/pull faces, move, delete", ["push", "move", "delete"]],
 	["Primitives", "Place ready-made shapes", ["box", "cylinder", "sphere"]],
-	"measure",
+	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
+	["Measure", "Distances, the bounding box, and mass properties", ["measure", "bbox", "mass"]],
 ]
 const TOOLS := [
 	{id = "select", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
@@ -34,8 +36,19 @@ const TOOLS := [
 	{id = "cylinder", name = "Cylinder", pri = "place cylinder", alt = "copy size from target", opt = ["add", "cut", "new body"]},
 	{id = "sphere", name = "Sphere", pri = "place sphere", alt = "copy size from target", opt = ["add", "cut", "new body"]},
 	{id = "move", name = "Move", pri = "grab / drop", alt = "duplicate & grab", opt = []},
+	{id = "ref_plane", name = "Plane", pri = "pick what it is built from", alt = "start again",
+		opt = ["offset", "at an angle", "through three points", "midway"]},
+	{id = "ref_axis", name = "Axis", pri = "pick what it is built from", alt = "start again",
+		opt = ["edge or cylinder", "through two points", "where two planes meet"]},
+	{id = "ref_point", name = "Point", pri = "place a point", alt = "start again",
+		opt = ["on a corner", "face centre", "at the crosshair"]},
+	{id = "ref_csys", name = "Coordinate system", pri = "place on a face (corner snaps)", alt = "start again", opt = []},
+	{id = "bbox", name = "Bounding box", pri = "show the size on the board", alt = "hide", opt = []},
+	{id = "mass", name = "Mass properties", pri = "show volume, mass and centre of mass", alt = "hide", opt = []},
 ]
-const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft"]
+const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
+	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass"]
+const REF_TOOLS := ["ref_plane", "ref_axis", "ref_point", "ref_csys"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
 const OPS := {"add": "add", "cut": "cut", "new body": "new-body"}
 const STANDARD_PLANES := {"Top plane": "top", "Front plane": "front", "Right plane": "right"}
@@ -57,6 +70,11 @@ var _hold_primary := true
 var _grab := {}            # {id, plane_y, last} while moving
 var _measure_a: Variant = null
 var _measure_b: Variant = null
+var _ref_picks: Array = []   # what a reference is built from, picked so far
+var _show_bbox := false
+var _show_mass := false
+var _bbox_cache := {}
+var _com_cache: Variant = null
 
 
 func tool() -> Dictionary:
@@ -105,6 +123,9 @@ func reset() -> void:
 	_hold_time = -1.0
 	_measure_a = null
 	_measure_b = null
+	_ref_picks = []
+	_show_bbox = false
+	_show_mass = false
 	_place_dims = {}
 	options = {}
 	selected = ""
@@ -120,6 +141,8 @@ func set_tool(i: int) -> void:
 	index = i
 	_push_hit = {}
 	_hold_time = -1.0
+	_ref_picks = []
+	view.highlight_reference("")
 	view.show_ghost("", Vector3.ZERO, {})
 	view.show_plane({}, 0.0)
 	view.highlight_sketch("")
@@ -134,6 +157,7 @@ func cycle_option() -> void:
 		return
 	var n: int = (options.get(tool().id, 0) + 1) % opts.size()
 	options[tool().id] = n
+	_ref_picks = []
 	hud.toast("%s: %s" % [tool().name, opts[n]])
 
 
@@ -313,6 +337,31 @@ func _act(primary: bool, repeat: bool) -> void:
 					return
 				changed.emit()
 				_grab = {id = copy, plane_y = hit.point.y, last = hit.point}
+		"ref_plane", "ref_axis", "ref_point", "ref_csys":
+			_act_reference(primary, hit)
+		"bbox":
+			_show_bbox = primary
+			if primary:
+				var b: Dictionary = doc.bounding_box()
+				_bbox_cache = b
+				if not b.get("ok", false):
+					hud.toast("Nothing to measure yet")
+					_show_bbox = false
+				else:
+					var sz: Vector3 = b.size
+					hud.toast("Bounding box  %s × %s × %s  (X × Y × Z)" % [hud.length(sz.x), hud.length(sz.y), hud.length(sz.z)])
+		"mass":
+			_show_mass = primary
+			if primary:
+				var m: Dictionary = doc.mass_properties()
+				_com_cache = m.centre_of_mass
+				if float(m.volume) <= 0.0:
+					hud.toast("Nothing to weigh yet")
+					_show_mass = false
+				else:
+					var c: Vector3 = m.centre_of_mass
+					hud.toast("Volume %s · area %s · mass %.3f kg · centre of mass X %s Y %s Z %s" % [_volume_text(m.volume),
+						_area_text(m.area), float(m.mass), hud.length(c.x), hud.length(-c.z), hud.length(c.y)])
 		"measure":
 			if not primary:
 				_measure_a = null
@@ -349,11 +398,216 @@ func _sketch_plane(hit: Dictionary, on_feature: bool) -> Dictionary:
 	if STANDARD_PLANES.has(opt):
 		var sp: Dictionary = doc.standard_plane(STANDARD_PLANES[opt])
 		return {plane = sp.plane, name = sp.name}
+	var ref := _aimed_reference(hit, ["plane", "csys"])
+	if not ref.is_empty():
+		var rp: Dictionary = doc.reference_plane(ref.id)
+		if not rp.is_empty():
+			var pl: Dictionary = rp.plane
+			pl["ref"] = String(ref.id)  # the sketch stays on the plane when it moves
+			return {plane = pl, name = rp.name}
 	if on_feature:
 		var fp: Dictionary = doc.plane_from_hit(hit)
 		return {} if fp.is_empty() else {plane = fp.plane, name = fp.name}
 	var top: Dictionary = doc.standard_plane("top")
 	return {plane = top.plane, name = top.name}
+
+
+## The part changed (main.gd): keep the bounding box and centre of mass shown up to date.
+func model_changed() -> void:
+	if is_assembly or doc == null:
+		return
+	if _show_bbox:
+		_bbox_cache = doc.bounding_box()
+	if _show_mass:
+		_com_cache = doc.mass_properties().centre_of_mass
+
+
+## The reference (of the given kinds) under the crosshair, if nearer than the model.
+func _aimed_reference(hit: Dictionary, kinds: Array) -> Dictionary:
+	if is_assembly or doc == null:
+		return {}
+	var r: Dictionary = view.pick_reference(player.eye_position(), player.aim_direction(), player.camera.far)
+	if r.is_empty() or not (r.kind in kinds):
+		return {}
+	if not hit.is_empty() and not hit.get("ground", false) and float(hit.get("distance", INF)) < float(r.distance) - 1e-6:
+		return {}
+	return r
+
+
+## A plane for building references from what is aimed at: a reference plane, a flat face, or
+## (the ground) the Top plane. {} when the face is curved.
+func _plane_ref(hit: Dictionary) -> Variant:
+	var ref := _aimed_reference(hit, ["plane", "csys"])
+	if not ref.is_empty():
+		return {feature = ref.id}
+	if hit.is_empty() or hit.get("ground", false) or hit.get("feature_id", "") == "":
+		return "top"
+	if doc.plane_from_hit(hit).is_empty():
+		return null
+	return {face = doc.face_ref(hit)}
+
+
+## An axis from what is aimed at: a reference axis, a round face's axis, or the nearest straight
+## edge of the aimed face.
+func _axis_ref(hit: Dictionary) -> Variant:
+	var ref := _aimed_reference(hit, ["axis"])
+	if not ref.is_empty():
+		return {feature = ref.id}
+	if hit.is_empty() or hit.get("ground", false) or hit.get("feature_id", "") == "":
+		return null
+	if doc.is_cylinder(hit):
+		return {cylinder = doc.face_ref(hit)}
+	var e: PackedVector3Array = doc.straight_edge_near(hit, 0.3 * player.size)
+	if e.size() < 2:
+		return null
+	var on := Geometry3D.get_closest_point_to_segment(hit.point, e[0], e[1])
+	return {edge = {probe = doc.cad_point(on)}}
+
+
+## A point from what is aimed at: a reference point, or the aimed face's corner nearest the
+## crosshair.
+func _point_ref(hit: Dictionary) -> Variant:
+	var ref := _aimed_reference(hit, ["point", "csys"])
+	if not ref.is_empty():
+		return {feature = ref.id}
+	if hit.is_empty() or hit.get("ground", false) or hit.get("feature_id", "") == "":
+		return null
+	var p: Variant = _snap_point(hit)
+	if p == null or (p as Vector3).distance_to(hit.point) < 1e-12:
+		return null  # no corner near
+	return {vertex = {probe = doc.cad_point(p)}}
+
+
+## Builds the reference for the reference tools; multi-pick kinds collect picks first.
+func _act_reference(primary: bool, hit: Dictionary) -> void:
+	if not primary:
+		_ref_picks = []
+		hud.toast("%s: start again" % tool().name)
+		return
+	var id: String = tool().id
+	var opt := option()
+	var need := 1
+	var pick: Variant = null
+	var what := ""
+	match id:
+		"ref_plane":
+			match opt:
+				"offset":
+					pick = _plane_ref(hit)
+					what = "a flat face or a plane"
+				"at an angle":
+					if _ref_picks.is_empty():
+						pick = _plane_ref(hit)
+						what = "a flat face or a plane"
+					else:
+						pick = _axis_ref(hit)
+						what = "an edge, a round face or an axis lying along that plane"
+					need = 2
+				"through three points":
+					pick = _point_ref(hit)
+					what = "a corner or a point"
+					need = 3
+				"midway":
+					pick = _plane_ref(hit)
+					what = "a flat face or a plane"
+					need = 2
+		"ref_axis":
+			match opt:
+				"edge or cylinder":
+					pick = _axis_ref(hit)
+					what = "a straight edge or a round face"
+				"through two points":
+					pick = _point_ref(hit)
+					what = "a corner or a point"
+					need = 2
+				"where two planes meet":
+					pick = _plane_ref(hit)
+					what = "a flat face or a plane"
+					need = 2
+		"ref_point":
+			match opt:
+				"on a corner":
+					pick = _point_ref(hit)
+					what = "a corner of a part"
+				"face centre":
+					if not hit.is_empty() and not hit.get("ground", false) and hit.get("feature_id", "") != "":
+						pick = {face = doc.face_ref(hit)}
+					what = "a face"
+				"at the crosshair":
+					if not hit.is_empty():
+						pick = {at = doc.cad_point(snapped_xz(hit.point) if hit.get("ground", false) else hit.point)}
+					what = "the floor or a part"
+		"ref_csys":
+			if not hit.is_empty() and not hit.get("ground", false) and hit.get("feature_id", "") != "":
+				var origin: Variant = _point_ref(hit)
+				if origin == null:
+					origin = {at = doc.cad_point(hit.point)}
+				var z: Array = doc.face_ref(hit).normal
+				var x := [1.0, 0.0, 0.0]
+				var e: PackedVector3Array = doc.straight_edge_near(hit, 0.6 * player.size)
+				if e.size() == 2:
+					var a: Array = doc.cad_point(e[0])
+					var b: Array = doc.cad_point(e[1])
+					x = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+				pick = {origin = origin, z = z, x = x}
+			what = "a face of a part"
+	if pick == null:
+		hud.toast("Aim at " + what)
+		return
+	_ref_picks.append(pick)
+	if _ref_picks.size() < need:
+		hud.toast("%s: now the next one (%d of %d)" % [tool().name, _ref_picks.size() + 1, need])
+		return
+	var picks := _ref_picks
+	_ref_picks = []
+	var type: String = {ref_plane = "plane", ref_axis = "axis", ref_point = "point", ref_csys = "csys"}[id]
+	var params := {}
+	match [id, opt]:
+		["ref_plane", "offset"]:
+			params = {kind = "offset", base = picks[0], distance = player.grid_step() / 2.0}
+		["ref_plane", "at an angle"]:
+			params = {kind = "angle", base = picks[0], axis = picks[1], angle = PI / 4.0}
+		["ref_plane", "through three points"]:
+			params = {kind = "points", points = picks}
+		["ref_plane", "midway"]:
+			params = {kind = "midplane", base = picks[0], other = picks[1]}
+		["ref_axis", "edge or cylinder"]:
+			params = {kind = "ref", ref = picks[0]}
+		["ref_axis", "through two points"]:
+			params = {kind = "points", points = picks}
+		["ref_axis", "where two planes meet"]:
+			params = {kind = "planes", base = picks[0], other = picks[1]}
+		["ref_point", "on a corner"]:
+			params = {kind = "ref", ref = picks[0]}
+		["ref_point", "face centre"]:
+			params = {kind = "centre", face = picks[0].face}
+		["ref_point", "at the crosshair"]:
+			var at: Array = picks[0].at
+			params = {kind = "xyz", x = at[0], y = at[1], z = at[2]}
+		_:
+			params = picks[0]
+	add_reference(type, params)
+
+
+## Adds a reference feature; main.gd opens the feature panel for kinds with sizes (live, like
+## Extrude) and calls insert_reference for the rest.
+func add_reference(type: String, params: Dictionary) -> bool:
+	if reference_requested.get_connections().size() > 0:
+		reference_requested.emit(type, params)
+		return true
+	return insert_reference(type, params)
+
+
+func insert_reference(type: String, params: Dictionary) -> bool:
+	doc.checkpoint()
+	var r: Dictionary = doc.insert_feature(type, "", params)
+	if not r.get("ok", false):
+		doc.undo()
+		hud.toast(r.get("message", "That reference could not be made"))
+		return false
+	hud.toast("%s added" % r.get("name", type.capitalize()))
+	changed.emit()
+	return true
 
 
 ## The sketch whose lines or regions are under the crosshair.
@@ -511,6 +765,16 @@ func _update_preview(hit: Dictionary) -> void:
 				label = "Moving · %s drops · %s cancels" % [Actions.prompt(&"primary"), Actions.prompt(&"secondary")]
 			elif on_feature:
 				label = "Grab " + hit.get("component_name", hit.get("feature_name", ""))
+		"ref_plane", "ref_axis", "ref_point", "ref_csys":
+			var kinds: Array = ["plane", "csys"] if id == "ref_plane" else (["axis"] if id == "ref_axis" else ["point", "csys"])
+			var rr := _aimed_reference(hit, kinds)
+			view.highlight_reference(rr.get("id", ""))
+			var step_txt := " (%d)" % (_ref_picks.size() + 1) if not _ref_picks.is_empty() else ""
+			label = "%s · %s%s" % [tool().name, option() if option() != "" else "on this face", step_txt]
+			if not rr.is_empty():
+				label += " · " + String(rr.name)
+			elif on_feature and id != "ref_point":
+				face_plane = true
 		"measure":
 			var sp: Variant = _snap_point(hit)
 			if _measure_a != null and _measure_b == null and sp != null:
@@ -519,6 +783,19 @@ func _update_preview(hit: Dictionary) -> void:
 			view.show_measure(_measure_a, _measure_b, sp, s_size())
 	if id != "measure":
 		view.show_measure(_measure_a, _measure_b, null, s_size())
+	if not (id in REF_TOOLS):
+		view.highlight_reference("")
+	if id == "sketch" and not is_assembly and option() == "aimed face":
+		var sr := _aimed_reference(hit, ["plane", "csys"])
+		view.highlight_reference(sr.get("id", ""))
+		if not sr.is_empty():
+			label = "New sketch on %s" % sr.name
+			face_plane = false
+	view.show_bbox(_bbox_cache if _show_bbox and id == "bbox" and not is_assembly else {})
+	if _show_mass and id == "mass" and not is_assembly and _com_cache != null:
+		view.show_com(_com_cache, 0.15 * player.size)
+	else:
+		view.show_com(null, 0.0)
 	# Highlights: the face being pushed, or the feature/component under the crosshair.
 	if is_assembly:
 		view.highlight_component(hit.get("component", -1) if on_feature and id in ["select", "move"] else -1)
@@ -534,6 +811,22 @@ func _update_preview(hit: Dictionary) -> void:
 	else:
 		view.clear_highlight()
 	hud.set_aim(label, on_feature)
+
+
+func _volume_text(v: float) -> String:
+	var u: String = hud.units
+	if u == "m":
+		return "%.4f m³" % v
+	var k: float = {"mm": 1e9, "cm": 1e6, "in": 61023.7}.get(u, 1e9)
+	return "%.4g %s³" % [v * k, u]
+
+
+func _area_text(a: float) -> String:
+	var u: String = hud.units
+	if u == "m":
+		return "%.4f m²" % a
+	var k: float = {"mm": 1e6, "cm": 1e4, "in": 1550.0}.get(u, 1e6)
+	return "%.4g %s²" % [a * k, u]
 
 
 func _sketch_name(id: String) -> String:

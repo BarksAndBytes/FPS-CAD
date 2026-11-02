@@ -336,7 +336,9 @@ func refresh_panel() -> void:
 		var params: Dictionary = current.params
 		if current.type == "sketch":
 			_sketch_summary(current)
-		elif current.type in ["extrude", "revolve", "sweep", "loft"] and (params.has("sketch") or params.has("sketches")):
+		elif (current.type in ["extrude", "revolve", "sweep", "loft"] and (params.has("sketch") or params.has("sketches"))) \
+				or (current.type == "plane" and params.get("kind", "") in ["offset", "angle"]) \
+				or (current.type == "point" and params.get("kind", "") == "xyz"):
 			var edit := Button.new()
 			edit.text = "Edit %s" % current.name
 			var fid: String = current.id
@@ -398,7 +400,7 @@ func _sketch_summary(f: Dictionary) -> void:
 
 ## Keys that are references or choices, edited through the feature panel instead of as numbers.
 const SKIP_KEYS := ["target", "edges", "kind", "sketch", "path", "sketches", "direction", "end", "axis", "angle", "planeName",
-	"probe", "normal", "feature"]
+	"probe", "normal", "feature", "base", "other", "points", "ref", "face", "origin"]
 
 
 func _add_fields(id: String, params: Dictionary, prefix: String) -> void:

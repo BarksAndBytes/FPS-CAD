@@ -670,6 +670,7 @@ Sketch Sketch::fromJson(const Json& j) {
   Sketch s;
   s.plane = SketchPlane::fromJson(j.at("plane"));
   s.planeName = j.value("planeName", std::string("Plane"));
+  s.planeRef = j.value("planeRef", std::string());
   for (auto& p : j.value("points", Json::array()))
     s.points.push_back({p.at("id").get<std::string>(), p.value("x", 0.0), p.value("y", 0.0), p.value("fixed", false)});
   for (auto& e : j.value("entities", Json::array())) {
@@ -772,6 +773,7 @@ Json Sketch::toJson() const {
   Json out = {{"plane", plane.toJson()}, {"planeName", planeName}, {"points", pts}, {"entities", ents},
               {"constraints", cons}};
   if (!patterns.empty()) out["patterns"] = pats;
+  if (!planeRef.empty()) out["planeRef"] = planeRef;
   if (!this->links.empty()) out["links"] = links;
   return out;
 }

@@ -73,6 +73,27 @@ struct FaceDrive {
   double value = 0;   // current value in metres
 };
 
+// Reference geometry as the game draws it. Planes and coordinate systems: a frame (origin, x, y,
+// normal) and a half-size for drawing; axes: origin and direction (xdir) with a half-length;
+// points: origin. kind is plane, axis, point or csys.
+struct ReferenceView {
+  std::string featureId;
+  std::string name;
+  std::string kind;
+  bool ok = true;
+  std::string message;
+  Vec3 origin{};
+  Vec3 xdir{1, 0, 0};
+  Vec3 ydir{0, 1, 0};
+  Vec3 normal{0, 0, 1};
+  double size = 0.5;
+};
+
+struct BoundingBox {
+  Vec3 min{};
+  Vec3 max{};
+};
+
 // A sketch as the game draws it: world-space line segments (pairs of points).
 struct SketchView {
   std::string featureId;
@@ -159,6 +180,40 @@ public:
 
   // Every sketch feature after the last rebuild.
   std::vector<SketchView> sketchViews() const;
+
+  // ----- Reference geometry -----
+  //
+  // Features of type "plane", "axis", "point" and "csys" make no solid; they are worked out on
+  // every rebuild from what they refer to, so they follow the model. References in their params:
+  //   plane ref: "top" | "front" | "right" | {"feature": id} (a plane or csys) |
+  //              {"face": {probe[3], normal[3], feature}} (a flat face, found again like
+  //              push/pull faces)
+  //   axis ref:  "x" | "y" | "z" | {"feature": id} | {"edge": {probe[3]}} (the straight edge
+  //              nearest probe) | {"cylinder": {probe[3], normal[3], feature}}
+  //   point ref: "o" | {"feature": id} | {"vertex": {probe[3]}} (the vertex nearest probe)
+  // Feature params:
+  //   plane  kind offset {base, distance} · angle {base, axis, angle} · points {points: [3]} ·
+  //          midplane {base, other}
+  //   axis   kind ref {ref} · points {points: [2]} · planes {base, other}
+  //   point  kind xyz {x, y, z} · ref {ref} · centre {face}
+  //   csys   {origin: point ref, z[3], x[3]}
+  // A sketch with params.planeRef = a plane (or csys) feature id sits on that plane and moves
+  // with it; a revolve's axis may be an axis feature id.
+
+  std::vector<ReferenceView> referenceViews() const;
+
+  // The plane of a plane feature, or the XY plane of a csys, for sketching on.
+  std::optional<SketchPlane> referencePlane(const std::string& featureId) const;
+
+  // The straight edge of the hit face nearest the hit point: its two ends. Nothing when the face
+  // has no straight edge within tolerance (metres) of the point.
+  std::optional<std::array<Vec3, 2>> straightEdgeNear(const PickHit& hit, double tolerance) const;
+
+  // Whether the hit face is a cylinder (its axis can be an axis reference).
+  bool isCylinder(const PickHit& hit) const;
+
+  // The parts' extent, axis-aligned; nothing for an empty part.
+  std::optional<BoundingBox> boundingBox() const;
 
   // A plane on the picked face when it is flat; origin is the part origin projected onto it.
   std::optional<SketchPlane> planeFromHit(const PickHit& hit, std::string* name = nullptr) const;

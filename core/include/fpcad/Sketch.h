@@ -7,7 +7,8 @@
 //
 // JSON form (a "sketch" feature's params):
 //   plane        {origin[3], normal[3], xdir[3]}
-//   planeName    "Top" | "Front" | "Right" | "Face of …"
+//   planeName    "Top" | "Front" | "Right" | "Face of …" | a reference plane's name
+//   planeRef     optional: the id of a plane or csys feature the sketch sits on (rebuilds move it)
 //   points       [{id, x, y, fixed?}]   (a point no entity uses is a stand-alone sketch point)
 //   entities     [{id, kind: line|circle|arc|ellipse|spline, pts, r?, construction?}]
 //                  line: pts [a, b]   circle: pts [centre], r   arc: pts [centre, start, end] (CCW)
@@ -118,6 +119,7 @@ struct SketchConstraint {
 struct Sketch {
   SketchPlane plane;
   std::string planeName = "Top";
+  std::string planeRef;  // a plane (or csys) feature the sketch sits on; it follows that plane
   std::vector<SketchPoint> points;
   std::vector<SketchEntity> entities;
   std::vector<SketchConstraint> constraints;

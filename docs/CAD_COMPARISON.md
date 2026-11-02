@@ -28,13 +28,13 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Sketching | ~60 entity, edit and constraint tools | 15 drawing tools (incl. polygon, slot, ellipse, spline, text), trim/extend/split/fillet/chamfer/offset/linked convert, live move, copy/rotate/scale/mirror, live patterns, smart dimensions, 12 relations, snap inference | High |
 | Part features | ~40 sketched and applied features | Extrude, revolve, sweep, loft, push/pull, primitives; fillet/chamfer in the core | Low–medium |
 | Patterns and mirror | Linear, circular, curve, sketch, table, fill; mirror | None | None |
-| Reference geometry | Planes, axes, points, coordinate systems | Standard planes and planar faces only | Low |
+| Reference geometry | Planes, axes, points, coordinate systems | Offset / angled / 3-point / mid planes, edge / cylinder / 2-point / 2-plane axes, points, coordinate systems; all follow the model | High |
 | Parameters | Equations, global variables, configurations, design tables | Variables and expressions | Medium |
 | Surfacing, freeform, mesh | Full surface toolsets, T-splines, mesh repair | None | None |
 | Sheet metal, weldments, plastics, mold | Dedicated environments | None | None |
 | Assemblies | Mates/joints solved, motion, interference, BOM, standard parts | Components, instances and placement; mates stored, not solved | Low |
 | Drawings and MBD | 2D drawings, GD&T, BOM tables, 3D annotations | None (`.fpdrw` planned after 1.0) | None |
-| Inspection and analysis | Measure, mass properties, section, interference, draft, curvature | Point-to-point measure; mass properties in the core | Low |
+| Inspection and analysis | Measure, mass properties, section, interference, draft, curvature | Point-to-point measure, bounding box, mass properties with centre of mass | Low–medium |
 | Simulation and generative | FEA, motion, CFD, topology, generative | None | None |
 | Manufacturing | CAM, additive prep, nesting, costing | STL/3MF export only | Low |
 | Data management | PDM / Vault / cloud versions, branching | Local native files with history; undo/redo; autosave | Low (by design) |
@@ -141,13 +141,15 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
-| Offset plane | Plane / Offset Plane / Work Plane | ✗ | |
-| Plane at angle, through points, midplane, tangent | All three | ✗ | |
-| Axis (through edge, two points, intersection) | Axis / Axis / Work Axis | ✗ | Revolve uses sketch axes or sketch lines instead |
-| Point (with XYZ values in SW 2026) | All three | ✗ | |
-| Coordinate system | All three; Fusion exports UCS to STEP (Oct 2026) | ✗ | |
-| Bounding box | SW Bounding Box (enhanced in 2026) | ✗ | |
-| Centre of mass marker | SW | ◐ | Computed in the core |
+| Offset plane | Plane / Offset Plane / Work Plane | ✓ | From a flat face, a standard plane or another reference plane; signed distance, editable |
+| Plane at angle, through three points, midplane | All three | ✓ | Midway between parallel faces, or halving the angle between others |
+| Plane tangent to a curved face, plane normal to a curve | All three | ✗ | |
+| Axis (straight edge, cylinder, two points, two planes) | Axis / Axis / Work Axis | ✓ | Revolve can turn about a reference axis |
+| Point (XYZ values, on a corner, face centre) | All three | ✓ | |
+| Coordinate system | All three; Fusion exports UCS to STEP (Oct 2026) | ◐ | Placed on a face (corner and edge snap); not yet used by export |
+| Sketch on a reference plane, following it | All three | ✓ | Moving the plane moves the sketch and everything built from it |
+| Bounding box | SW Bounding Box (enhanced in 2026) | ✓ | Drawn as a wire box; X × Y × Z on the whiteboard |
+| Centre of mass marker | SW | ✓ | With the Mass properties tool |
 
 ---
 
@@ -326,7 +328,7 @@ flat view (a sketch or a face), long before full drawings.
 | --- | --- | --- | --- |
 | Measure distance | All three | ✓ | Point to point with ΔX ΔY ΔZ; snaps to corners |
 | Measure angle, radius, edge length, face area | All three | ✗ | |
-| Mass properties (volume, area, mass, centre of mass) | All three | ◐ | Computed by the core with material density; no panel |
+| Mass properties (volume, area, mass, centre of mass) | All three | ✓ | Mass properties tool; material and density from the part |
 | Section view | All three | ✗ | Valuable in first person: walk a cut-away |
 | Draft analysis | All three (Fusion ±90° range, Oct 2026) | ✗ | |
 | Curvature, zebra stripes | All three | ✗ | |
@@ -481,7 +483,8 @@ possible, then what suits a first-person game.
    - Fonts and rotated text
    - Stretch, curvature (G2) spline ends, control-point splines
    - Construction planes for sketching off the model (§2)
-3. **Reference geometry**: offset/angled planes, axes, points.
+3. **Reference geometry** (done in November 2026; left: planes tangent to curved faces, using
+   coordinate systems for export and measuring).
 4. **History control**: rollback, reorder, suppress in the UI.
 5. **Inspection**: section views (walk inside a cut model), measure angle/radius/area, mass
    properties panel, interference check.

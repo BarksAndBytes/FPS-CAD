@@ -70,6 +70,17 @@ public:
   godot::Array sketch_curves(const godot::Dictionary& sketch) const;  // [{id, construction, points}] in plane (u, v)
   // A face's edges flattened onto a sketch plane: [{kind, pts, r, closed}] (see PartModel::projectFace).
   godot::Array project_face(int body, int face, const godot::Dictionary& plane) const;
+
+  // Reference geometry (see PartModel). Views in Godot space: [{id, name, kind, ok, message,
+  // origin, xdir, ydir, normal, size}].
+  godot::Array reference_views() const;
+  godot::Dictionary reference_plane(const godot::String& id) const;  // {plane, name} or {}
+  godot::PackedVector3Array straight_edge_near(const godot::Dictionary& hit, double tolerance) const;
+  bool is_cylinder(const godot::Dictionary& hit) const;
+  godot::Dictionary bounding_box() const;  // {ok, min, max (Godot), size (CAD x, y, z extents)}
+  // A hit as a face reference for reference features: {probe, normal, feature} in CAD space.
+  godot::Dictionary face_ref(const godot::Dictionary& hit) const;
+  godot::Array cad_point(const godot::Vector3& p) const;  // Godot position as CAD [x, y, z]
   // Converts a face's edges into the sketch, linked so they follow the model: {ok, message, sketch}.
   // probe: a point on the face (Godot space), e.g. where the player aimed.
   godot::Dictionary convert_face(const godot::Dictionary& sketch, int body, int face, const godot::Vector3& probe);

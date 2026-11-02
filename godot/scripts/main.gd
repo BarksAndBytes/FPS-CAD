@@ -88,6 +88,7 @@ func _ready() -> void:
 	tools.tool_switched.connect(func(_i): _show_tool())
 	tools.sketch_requested.connect(_on_sketch_requested)
 	tools.feature_requested.connect(_on_feature_requested)
+	tools.reference_requested.connect(_on_reference_requested)
 	sketcher = Sketcher.new()
 	sketcher.game = self
 	add_child(sketcher)
@@ -377,6 +378,7 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 
 func _on_model_changed() -> void:
 	view.refresh()
+	tools.model_changed()
 	if hud.panel_open:
 		hud.refresh_panel()
 	if challenge != null:
@@ -455,6 +457,16 @@ func _on_sketch_ended(feature_id: String, committed: bool) -> void:
 	else:
 		hud.toast("Sketch closed without changes")
 		_show_tool()
+
+
+## A new plane, axis, point or coordinate system: the feature panel when it has sizes to set,
+## else straight into the history.
+func _on_reference_requested(type: String, params: Dictionary) -> void:
+	if dialog.wants_panel(type, params):
+		if dialog.open_reference(type, params):
+			_show_tool()
+	else:
+		tools.insert_reference(type, params)
 
 
 func _on_feature_requested(type: String, sketch_id: String, op: String) -> void:

@@ -55,6 +55,7 @@
 #include <BRepGProp_Face.hxx>
 #include <BRepOffset_MakeOffset.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <gp_Cylinder.hxx>
 #include <set>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
@@ -388,6 +389,13 @@ struct SketchState {
 struct PartModel::Impl {
   PartDocument doc;
   std::map<std::string, SketchState> sketches;  // by feature id, filled during rebuild
+  // Reference geometry by feature id, filled during rebuild.
+  struct RefGeom {
+    std::string kind;   // plane, axis, point, csys
+    gp_Ax3 frame;       // planes, csys; axes: location + direction; points: location
+    double size = 0.5;  // half-size for drawing
+  };
+  std::map<std::string, RefGeom> refs;
   RebuildReport report;
   std::vector<TopoDS_Shape> bodies;
   std::vector<FaceTags> tags;          // per body: face -> owner index
@@ -481,6 +489,19 @@ struct PartModel::Impl {
   void processSketch(Feature& f) {
     SketchState st;
     st.sketch = Sketch::fromJson(f.params);
+    if (f.params.contains("planeRef") && f.params.at("planeRef").is_string()) {
+      // On a reference plane: the sketch follows it.
+      std::string pid = f.params.at("planeRef").get<std::string>();
+      auto it = refs.find(pid);
+      if (it == refs.end() || (it->second.kind != "plane" && it->second.kind != "csys")) {
+        const Feature* pf = doc.find(pid);
+        throw FeatureError(pf ? pf->name + " must come before this sketch" : "the plane it is on no longer exists");
+      }
+      const gp_Ax3& a = it->second.frame;
+      st.sketch.plane.origin = {a.Location().X(), a.Location().Y(), a.Location().Z()};
+      st.sketch.plane.normal = {a.Direction().X(), a.Direction().Y(), a.Direction().Z()};
+      st.sketch.plane.xdir = {a.XDirection().X(), a.XDirection().Y(), a.XDirection().Z()};
+    }
     refreshLinks(st.sketch);
     st.solve = solveSketch(st.sketch, valueFn());
     if (st.solve.ok) {
@@ -522,6 +543,268 @@ struct PartModel::Impl {
       }
     }
     return !found.IsNull();
+  }
+
+  // ---------- reference geometry ----------
+
+  static gp_XYZ xyz(const Json& a) {
+    return gp_XYZ(a.at(0).get<double>(), a.at(1).get<double>(), a.at(2).get<double>());
+  }
+
+  // Half the diagonal of everything built so far (for drawing references), at least 0.25 m.
+  double extent() const {
+    Bnd_Box b;
+    for (auto& s : bodies) BRepBndLib::Add(s, b);
+    if (b.IsVoid()) return 0.25;
+    return std::max(0.25, std::sqrt(b.SquareExtent()) / 2);
+  }
+
+  static gp_Ax3 frameOf(const SketchPlane& p) {
+    return gp_Ax3(gp_Pnt(p.origin[0], p.origin[1], p.origin[2]), gp_Dir(p.normal[0], p.normal[1], p.normal[2]),
+                  gp_Dir(p.xdir[0], p.xdir[1], p.xdir[2]));
+  }
+
+  const RefGeom& refFeature(const Json& r, const char* want1, const char* want2 = nullptr) const {
+    std::string id = r.at("feature").get<std::string>();
+    auto it = refs.find(id);
+    if (it == refs.end() || (it->second.kind != want1 && (!want2 || it->second.kind != want2))) {
+      const Feature* f = doc.find(id);
+      throw FeatureError(f ? f->name + " must come before this feature" : "a reference it uses no longer exists");
+    }
+    return it->second;
+  }
+
+  // A flat face found again from {probe, normal, feature}; the probe is moved onto it.
+  gp_Ax3 facePlane(Json& face, double* size) const {
+    int b = 0;
+    TopoDS_Face f;
+    gp_Pnt at;
+    gp_Dir n;
+    if (!findFace(gp_Pnt(xyz(face.at("probe"))), gp_Dir(xyz(face.at("normal"))), face.value("feature", std::string()), b, f, at, n))
+      throw FeatureError("the face it is based on is no longer there");
+    BRepAdaptor_Surface sa(f);
+    if (sa.GetType() != GeomAbs_Plane) throw FeatureError("the face it is based on is not flat");
+    face["probe"] = {at.X(), at.Y(), at.Z()};
+    face["normal"] = {n.X(), n.Y(), n.Z()};
+    if (size) {
+      Bnd_Box bb;
+      BRepBndLib::Add(f, bb);
+      *size = std::max(0.02, std::sqrt(bb.SquareExtent()) * 0.6);
+    }
+    gp_Dir x = sa.Plane().XAxis().Direction();
+    if (std::abs(x.Dot(n)) > 0.99) x = std::abs(n.Z()) < 0.9 ? gp::DZ().Crossed(n) : gp::DX();
+    gp_Vec xv = gp_Vec(x) - gp_Vec(n) * gp_Vec(x).Dot(gp_Vec(n));
+    return gp_Ax3(at, n, gp_Dir(xv));
+  }
+
+  gp_Ax3 planeRef(Json& r, double* size) const {
+    if (size) *size = extent();
+    if (r.is_string()) return frameOf(standardPlane(r.get<std::string>()));
+    if (r.contains("feature")) {
+      const RefGeom& g = refFeature(r, "plane", "csys");
+      if (size) *size = g.size;
+      return g.frame;
+    }
+    if (r.contains("face")) return facePlane(r["face"], size);
+    throw FeatureError("unknown plane reference");
+  }
+
+  // The straight edge nearest p in the bodies built so far: its line and its two ends.
+  bool nearestStraightEdge(const gp_Pnt& p, gp_Pnt& a, gp_Pnt& b, gp_Pnt& on) const {
+    double best = 1e300;
+    for (auto& body : bodies)
+      for (TopExp_Explorer ex(body, TopAbs_EDGE); ex.More(); ex.Next()) {
+        const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
+        if (BRep_Tool::Degenerated(e)) continue;
+        BRepAdaptor_Curve c(e);
+        if (c.GetType() != GeomAbs_Line) continue;
+        BRepExtrema_DistShapeShape d(BRepBuilderAPI_MakeVertex(p).Vertex(), e);
+        if (!d.IsDone() || d.NbSolution() < 1 || d.Value() >= best) continue;
+        best = d.Value();
+        on = d.PointOnShape2(1);
+        a = c.Value(c.FirstParameter());
+        b = c.Value(c.LastParameter());
+      }
+    return best < 1e300;
+  }
+
+  gp_Ax1 axisRef(Json& r, double* size) const {
+    if (size) *size = extent();
+    if (r.is_string()) {
+      std::string k = r.get<std::string>();
+      gp_Dir d = k == "x" ? gp::DX() : k == "y" ? gp::DY() : gp::DZ();
+      return gp_Ax1(gp::Origin(), d);
+    }
+    if (r.contains("feature")) {
+      const RefGeom& g = refFeature(r, "axis");
+      if (size) *size = g.size;
+      return gp_Ax1(g.frame.Location(), g.frame.Direction());
+    }
+    if (r.contains("edge")) {
+      Json& e = r["edge"];
+      gp_Pnt a, b, on;
+      if (!nearestStraightEdge(gp_Pnt(xyz(e.at("probe"))), a, b, on)) throw FeatureError("the edge it is based on is no longer there");
+      if (a.Distance(b) < 1e-12) throw FeatureError("that edge has no length");
+      e["probe"] = {on.X(), on.Y(), on.Z()};
+      if (size) *size = a.Distance(b) * 0.6;
+      return gp_Ax1(gp_Pnt((a.XYZ() + b.XYZ()) / 2), gp_Dir(gp_Vec(a, b)));
+    }
+    if (r.contains("cylinder")) {
+      Json& c = r["cylinder"];
+      int b = 0;
+      TopoDS_Face f;
+      gp_Pnt at;
+      gp_Dir n;
+      if (!findFace(gp_Pnt(xyz(c.at("probe"))), gp_Dir(xyz(c.at("normal"))), c.value("feature", std::string()), b, f, at, n))
+        throw FeatureError("the round face it is based on is no longer there");
+      BRepAdaptor_Surface sa(f);
+      if (sa.GetType() != GeomAbs_Cylinder) throw FeatureError("the face it is based on is not a cylinder");
+      c["probe"] = {at.X(), at.Y(), at.Z()};
+      c["normal"] = {n.X(), n.Y(), n.Z()};
+      gp_Ax1 ax = sa.Cylinder().Axis();
+      Bnd_Box bb;
+      BRepBndLib::Add(f, bb);
+      if (size) *size = std::max(0.02, std::sqrt(bb.SquareExtent()) * 0.6);
+      // Centre the axis on the face.
+      double xmin, ymin, zmin, xmax, ymax, zmax;
+      bb.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+      gp_Pnt mid((xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2);
+      double t = gp_Vec(ax.Location(), mid).Dot(gp_Vec(ax.Direction()));
+      return gp_Ax1(ax.Location().Translated(gp_Vec(ax.Direction()) * t), ax.Direction());
+    }
+    throw FeatureError("unknown axis reference");
+  }
+
+  gp_Pnt pointRef(Json& r) const {
+    if (r.is_string()) return gp::Origin();
+    if (r.contains("feature")) return refFeature(r, "point", "csys").frame.Location();
+    if (r.contains("vertex")) {
+      Json& v = r["vertex"];
+      gp_Pnt p(xyz(v.at("probe")));
+      double best = 1e300;
+      gp_Pnt found = p;
+      for (auto& body : bodies)
+        for (TopExp_Explorer ex(body, TopAbs_VERTEX); ex.More(); ex.Next()) {
+          gp_Pnt q = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
+          if (q.Distance(p) < best) { best = q.Distance(p); found = q; }
+        }
+      if (best == 1e300) throw FeatureError("there is no corner to put it on");
+      v["probe"] = {found.X(), found.Y(), found.Z()};
+      return found;
+    }
+    if (r.contains("at")) return gp_Pnt(xyz(r.at("at")));
+    throw FeatureError("unknown point reference");
+  }
+
+  // Works out a plane, axis, point or coordinate system from its references (writing back where
+  // the faces, edges and corners it follows were found this time).
+  void applyReference(Feature& f) {
+    Json& p = f.params;
+    RefGeom g;
+    g.kind = f.type;
+    std::string kind = p.value("kind", std::string());
+    if (f.type == "plane") {
+      if (kind == "offset" || kind.empty()) {
+        gp_Ax3 base = planeRef(p["base"], &g.size);
+        double d = get(p, "distance");
+        g.frame = base;
+        g.frame.Translate(gp_Vec(base.Direction()) * d);
+      } else if (kind == "angle") {
+        gp_Ax3 base = planeRef(p["base"], &g.size);
+        gp_Ax1 ax = axisRef(p["axis"], nullptr);
+        double a = get(p, "angle", Quantity::Angle);
+        if (std::abs(ax.Direction().Dot(base.Direction())) > 1e-6)
+          throw FeatureError("the axis must lie along the plane (square to its normal)");
+        gp_Dir n = base.Direction().Rotated(ax, a);
+        g.frame = gp_Ax3(ax.Location(), n, ax.Direction());
+      } else if (kind == "points") {
+        Json& pts = p["points"];
+        if (!pts.is_array() || pts.size() != 3) throw FeatureError("a plane through points needs three");
+        gp_Pnt a = pointRef(pts[0]), b = pointRef(pts[1]), c = pointRef(pts[2]);
+        gp_Vec n = gp_Vec(a, b).Crossed(gp_Vec(a, c));
+        if (n.Magnitude() < 1e-12 * std::max(1.0, a.Distance(b) * a.Distance(c))) throw FeatureError("the three points are in a line");
+        g.frame = gp_Ax3(a, gp_Dir(n), gp_Dir(gp_Vec(a, b)));
+        g.size = std::max({a.Distance(b), a.Distance(c), b.Distance(c), 0.02}) * 0.7;
+      } else if (kind == "midplane") {
+        double s1 = 0, s2 = 0;
+        gp_Ax3 a = planeRef(p["base"], &s1), b = planeRef(p["other"], &s2);
+        gp_Dir na = a.Direction(), nb = b.Direction();
+        g.size = std::max(s1, s2);
+        if (na.IsParallel(nb, 1e-6)) {
+          gp_Vec gap(a.Location(), b.Location());
+          double dist = gap.Dot(gp_Vec(na));
+          g.frame = a;
+          g.frame.Translate(gp_Vec(na) * (dist / 2));
+        } else {
+          // Not parallel: the plane halving the angle between them, through where they meet.
+          gp_Dir d = na.Crossed(nb);
+          gp_XYZ m = (na.Dot(nb) < 0 ? na.XYZ() - nb.XYZ() : na.XYZ() + nb.XYZ());
+          gp_Dir n(m);
+          double c1 = gp_Vec(a.Location().XYZ()).Dot(gp_Vec(na)), c2 = gp_Vec(b.Location().XYZ()).Dot(gp_Vec(nb));
+          gp_XYZ dx = d.XYZ();
+          gp_XYZ pt = (c1 * nb.XYZ().Crossed(dx) + c2 * dx.Crossed(na.XYZ())) / dx.SquareModulus();
+          g.frame = gp_Ax3(gp_Pnt(pt), n, d);
+        }
+      } else {
+        throw FeatureError("unknown kind of plane '" + kind + "'");
+      }
+    } else if (f.type == "axis") {
+      gp_Ax1 ax;
+      if (kind == "ref" || kind.empty()) {
+        ax = axisRef(p["ref"], &g.size);
+      } else if (kind == "points") {
+        Json& pts = p["points"];
+        if (!pts.is_array() || pts.size() != 2) throw FeatureError("an axis through points needs two");
+        gp_Pnt a = pointRef(pts[0]), b = pointRef(pts[1]);
+        if (a.Distance(b) < 1e-12) throw FeatureError("the two points are the same");
+        ax = gp_Ax1(gp_Pnt((a.XYZ() + b.XYZ()) / 2), gp_Dir(gp_Vec(a, b)));
+        g.size = a.Distance(b) * 0.6;
+      } else if (kind == "planes") {
+        gp_Ax3 a = planeRef(p["base"], &g.size), b = planeRef(p["other"], nullptr);
+        gp_Dir na = a.Direction(), nb = b.Direction();
+        if (na.IsParallel(nb, 1e-6)) throw FeatureError("parallel planes do not meet");
+        gp_XYZ d = na.Crossed(nb).XYZ();
+        double c1 = a.Location().XYZ().Dot(na.XYZ()), c2 = b.Location().XYZ().Dot(nb.XYZ());
+        gp_XYZ pt = (c1 * nb.XYZ().Crossed(d) + c2 * d.Crossed(na.XYZ())) / d.SquareModulus();
+        ax = gp_Ax1(gp_Pnt(pt), gp_Dir(d));
+      } else {
+        throw FeatureError("unknown kind of axis '" + kind + "'");
+      }
+      gp_Dir x = std::abs(ax.Direction().Z()) < 0.9 ? gp::DZ() : gp::DX();
+      g.frame = gp_Ax3(ax.Location(), ax.Direction(), gp_Dir(x.XYZ() - ax.Direction().XYZ() * x.Dot(ax.Direction())));
+    } else if (f.type == "point") {
+      gp_Pnt pt;
+      if (kind == "xyz" || kind.empty()) {
+        pt = gp_Pnt(get(p, "x"), get(p, "y"), get(p, "z"));
+      } else if (kind == "ref") {
+        pt = pointRef(p["ref"]);
+      } else if (kind == "centre") {
+        Json& face = p["face"];
+        int b = 0;
+        TopoDS_Face fc;
+        gp_Pnt at;
+        gp_Dir n;
+        if (!findFace(gp_Pnt(xyz(face.at("probe"))), gp_Dir(xyz(face.at("normal"))), face.value("feature", std::string()), b, fc, at, n))
+          throw FeatureError("the face it is based on is no longer there");
+        face["probe"] = {at.X(), at.Y(), at.Z()};
+        GProp_GProps sp;
+        BRepGProp::SurfaceProperties(fc, sp);
+        pt = sp.CentreOfMass();
+      } else {
+        throw FeatureError("unknown kind of point '" + kind + "'");
+      }
+      g.frame = gp_Ax3(pt, gp::DZ(), gp::DX());
+      g.size = extent() * 0.04;
+    } else {  // csys
+      gp_Pnt o = p.contains("origin") ? pointRef(p["origin"]) : gp::Origin();
+      gp_Dir z = p.contains("z") ? gp_Dir(xyz(p.at("z"))) : gp::DZ();
+      gp_XYZ x = p.contains("x") ? xyz(p.at("x")) : gp::DX().XYZ();
+      x -= z.XYZ() * x.Dot(z.XYZ());
+      if (x.Modulus() < 1e-9) x = (std::abs(z.Z()) < 0.9 ? gp::DZ().XYZ().Crossed(z.XYZ()) : gp::DX().XYZ());
+      g.frame = gp_Ax3(o, z, gp_Dir(x));
+      g.size = extent() * 0.25;
+    }
+    refs[f.id] = g;
   }
 
   // Push/pull of a face with no driving dimension: the face thickened outward by distance adds
@@ -651,7 +934,12 @@ struct PartModel::Impl {
     const SketchPlane& pl = st.sketch.plane;
     std::string axis = p.value("axis", std::string("y"));
     Vec3d o, d;
-    if (axis == "x" || axis == "y") {
+    auto ref = refs.find(axis);
+    if (ref != refs.end() && ref->second.kind == "axis") {
+      const gp_Ax3& a = ref->second.frame;
+      o = {a.Location().X(), a.Location().Y(), a.Location().Z()};
+      d = {a.Direction().X(), a.Direction().Y(), a.Direction().Z()};
+    } else if (axis == "x" || axis == "y") {
       o = pl.origin;
       d = axis == "x" ? pl.xdir : pl.ydir();
     } else {
@@ -876,6 +1164,7 @@ struct PartModel::Impl {
     owners.clear();
     pickers.clear();
     sketches.clear();
+    refs.clear();
     evaluateVariables(r);
     for (auto& f : doc.features) {
       FeatureStatus st{f.id, true, {}};
@@ -888,6 +1177,7 @@ struct PartModel::Impl {
         int self = ownerIndex(f.id);
         if (f.type == "sketch") processSketch(f);
         else if (f.type == "face_offset") applyFaceOffset(f, self);
+        else if (f.type == "plane" || f.type == "axis" || f.type == "point" || f.type == "csys") applyReference(f);
         else if (f.type == "fillet" || f.type == "chamfer") applyEdgeFeature(f, self);
         else applyBoolean(f, toolShape(f), self);
       } catch (const Standard_Failure& e) {
@@ -1215,6 +1505,82 @@ bool PartModel::pushPull(const PickHit& hit, double delta, std::string* message)
   }
   say(f->name + " " + fd->label);
   return true;
+}
+
+std::vector<ReferenceView> PartModel::referenceViews() const {
+  std::vector<ReferenceView> out;
+  auto v3 = [](const gp_XYZ& v) { return Vec3{v.X(), v.Y(), v.Z()}; };
+  for (auto& f : d_->doc.features) {
+    if (f.suppressed || (f.type != "plane" && f.type != "axis" && f.type != "point" && f.type != "csys")) continue;
+    ReferenceView v;
+    v.featureId = f.id;
+    v.name = f.name;
+    v.kind = f.type;
+    auto it = d_->refs.find(f.id);
+    if (it == d_->refs.end()) {
+      v.ok = false;
+      for (auto& st : d_->report.features)
+        if (st.featureId == f.id) v.message = st.message;
+      out.push_back(v);
+      continue;
+    }
+    const gp_Ax3& a = it->second.frame;
+    v.origin = v3(a.Location().XYZ());
+    v.normal = v3(a.Direction().XYZ());
+    v.xdir = v3(f.type == "axis" ? a.Direction().XYZ() : a.XDirection().XYZ());
+    v.ydir = v3(a.YDirection().XYZ());
+    v.size = it->second.size;
+    out.push_back(v);
+  }
+  return out;
+}
+
+std::optional<SketchPlane> PartModel::referencePlane(const std::string& id) const {
+  auto it = d_->refs.find(id);
+  if (it == d_->refs.end() || (it->second.kind != "plane" && it->second.kind != "csys")) return std::nullopt;
+  const gp_Ax3& a = it->second.frame;
+  SketchPlane p;
+  p.origin = {a.Location().X(), a.Location().Y(), a.Location().Z()};
+  p.normal = {a.Direction().X(), a.Direction().Y(), a.Direction().Z()};
+  p.xdir = {a.XDirection().X(), a.XDirection().Y(), a.XDirection().Z()};
+  return p;
+}
+
+std::optional<std::array<Vec3, 2>> PartModel::straightEdgeNear(const PickHit& hit, double tolerance) const {
+  if (hit.body < 0 || hit.body >= bodyCount()) return std::nullopt;
+  const ShapeIndex& faces = d_->faceIndex[static_cast<size_t>(hit.body)];
+  if (hit.face < 0 || hit.face >= faces.Extent()) return std::nullopt;
+  gp_Pnt p(hit.point[0], hit.point[1], hit.point[2]);
+  double best = tolerance;
+  std::optional<std::array<Vec3, 2>> out;
+  for (TopExp_Explorer ex(faces(hit.face + 1), TopAbs_EDGE); ex.More(); ex.Next()) {
+    const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
+    if (BRep_Tool::Degenerated(e)) continue;
+    BRepAdaptor_Curve c(e);
+    if (c.GetType() != GeomAbs_Line) continue;
+    BRepExtrema_DistShapeShape d(BRepBuilderAPI_MakeVertex(p).Vertex(), e);
+    if (!d.IsDone() || d.NbSolution() < 1 || d.Value() > best) continue;
+    best = d.Value();
+    gp_Pnt a = c.Value(c.FirstParameter()), b = c.Value(c.LastParameter());
+    out = std::array<Vec3, 2>{Vec3{a.X(), a.Y(), a.Z()}, Vec3{b.X(), b.Y(), b.Z()}};
+  }
+  return out;
+}
+
+bool PartModel::isCylinder(const PickHit& hit) const {
+  if (hit.body < 0 || hit.body >= bodyCount()) return false;
+  const ShapeIndex& faces = d_->faceIndex[static_cast<size_t>(hit.body)];
+  if (hit.face < 0 || hit.face >= faces.Extent()) return false;
+  return BRepAdaptor_Surface(TopoDS::Face(faces(hit.face + 1))).GetType() == GeomAbs_Cylinder;
+}
+
+std::optional<BoundingBox> PartModel::boundingBox() const {
+  Bnd_Box b;
+  for (auto& s : d_->bodies) BRepBndLib::AddOptimal(s, b, false, false);
+  if (b.IsVoid()) return std::nullopt;
+  BoundingBox out;
+  b.Get(out.min[0], out.min[1], out.min[2], out.max[0], out.max[1], out.max[2]);
+  return out;
 }
 
 MassProperties PartModel::massProperties() const {

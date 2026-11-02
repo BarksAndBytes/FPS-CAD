@@ -524,6 +524,75 @@ int main() {
     CHECK_NEAR(cm.massProperties().volume, kPiT * 0.3 * 0.3 * 0.3, 1e-6);
   });
 
+  run("reference planes, axes, points and coordinate systems follow the model", [] {
+    PartDocument d;
+    d.variables = {{"h", "500 mm"}};
+    std::string sid = d.add(feature("sketch", rectSketch(standardPlane("top"), 0, 0, 1.0, 0.5))).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", "h"}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    auto top = m.pick({0.5, 0.25, 5}, {0, 0, -1});
+    CHECK(top.has_value());
+    if (!top) return;
+    Json face = {{"probe", top->point}, {"normal", top->normal}, {"feature", top->featureId}};
+    auto add = [&](const char* type, Json params) { return m.document().add(feature(type, params)).id; };
+    std::string off = add("plane", {{"kind", "offset"}, {"base", {{"face", face}}}, {"distance", 0.2}});
+    std::string ang = add("plane", {{"kind", "angle"}, {"base", "top"}, {"axis", "x"}, {"angle", kPiT / 2}});
+    std::string mid = add("plane", {{"kind", "midplane"}, {"base", {{"face", face}}}, {"other", "top"}});
+    Json corners = Json::array({{{"vertex", {{"probe", {0, 0, 0.5}}}}}, {{"vertex", {{"probe", {1, 0, 0.5}}}}},
+                                {{"vertex", {{"probe", {1, 0.5, 0.5}}}}}});
+    std::string thru = add("plane", {{"kind", "points"}, {"points", corners}});
+    std::string edge = add("axis", {{"kind", "ref"}, {"ref", {{"edge", {{"probe", {1.0, 0.0, 0.25}}}}}}});
+    std::string meet = add("axis", {{"kind", "planes"}, {"base", "front"}, {"other", "right"}});
+    std::string ctr = add("point", {{"kind", "centre"}, {"face", face}});
+    std::string xyzp = add("point", {{"kind", "xyz"}, {"x", 0.1}, {"y", 0.2}, {"z", 0.3}});
+    std::string cs = add("csys", {{"origin", {{"feature", ctr}}}, {"z", {0, 0, 1}}, {"x", {1, 0, 0}}});
+    auto r = m.rebuild();
+    for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s: %s\n", st.featureId.c_str(), st.message.c_str());
+    CHECK(r.ok);
+    std::map<std::string, ReferenceView> v;
+    for (auto& rv : m.referenceViews()) v[rv.featureId] = rv;
+    CHECK(v.size() == 9);
+    CHECK_NEAR(v[off].origin[2], 0.7, 1e-9);
+    CHECK_NEAR(v[off].normal[2], 1.0, 1e-9);
+    CHECK_NEAR(std::abs(v[ang].normal[1]), 1.0, 1e-9);
+    CHECK_NEAR(v[mid].origin[2], 0.25, 1e-9);
+    CHECK_NEAR(std::abs(v[thru].normal[2]), 1.0, 1e-9);
+    CHECK_NEAR(std::abs(v[edge].xdir[2]), 1.0, 1e-9);
+    CHECK_NEAR(v[edge].origin[0], 1.0, 1e-9);
+    CHECK_NEAR(v[edge].origin[1], 0.0, 1e-9);
+    CHECK_NEAR(std::abs(v[meet].xdir[2]), 1.0, 1e-9);
+    CHECK_NEAR(v[ctr].origin[0], 0.5, 1e-9);
+    CHECK_NEAR(v[ctr].origin[2], 0.5, 1e-9);
+    CHECK_NEAR(v[xyzp].origin[1], 0.2, 1e-9);
+    CHECK_NEAR(v[cs].origin[1], 0.25, 1e-9);
+    // A sketch on the offset plane, extruded: it sits 200 mm above the block and follows it.
+    Json k = circleSketch(*m.referencePlane(off), 0.5, 0.25, 0.1);
+    k["planeRef"] = off;
+    std::string ks = add("sketch", k);
+    add("extrude", {{"sketch", ks}, {"depth", 0.1}});
+    CHECK(m.rebuild().ok);
+    CHECK(m.bodyCount() == 1 || m.bodyCount() == 2);
+    CHECK_NEAR(m.massProperties().volume, 0.25 + kPiT * 0.01 * 0.1, 1e-6);
+    auto bb = m.boundingBox();
+    CHECK(bb && std::abs(bb->max[2] - 0.8) < 1e-6);
+    for (auto& var : m.document().variables) var.expr = "600 mm";
+    CHECK(m.rebuild().ok);
+    bb = m.boundingBox();
+    CHECK(bb && std::abs(bb->max[2] - 0.9) < 1e-6);  // block 600 + gap 200 + disc 100
+    for (auto& rv : m.referenceViews()) v[rv.featureId] = rv;
+    CHECK_NEAR(v[mid].origin[2], 0.3, 1e-9);
+
+    // A revolve about an axis feature: the world Z axis.
+    PartDocument t;
+    std::string zax = t.add(feature("axis", {{"kind", "ref"}, {"ref", "z"}})).id;
+    std::string ring = t.add(feature("sketch", rectSketch(standardPlane("front"), 0.5, 0, 0.5, 1.0))).id;
+    t.add(feature("revolve", {{"sketch", ring}, {"axis", zax}}));
+    PartModel tm(t);
+    CHECK(tm.rebuild().ok);
+    CHECK_NEAR(tm.massProperties().volume, kPiT * (1.0 - 0.25) * 1.0, 1e-6);
+  });
+
   run("sketch extrude follows its dimensions and variables", [] {
     PartDocument d;
     d.variables = {{"width", "1000 mm"}};

@@ -61,6 +61,32 @@ changes. Details: [`docs/SKETCHING.md`](SKETCHING.md).
 How this compares with SOLIDWORKS, Fusion and Inventor, and which gaps matter most:
 [`docs/CAD_COMPARISON.md`](CAD_COMPARISON.md).
 
+## Reference geometry
+
+The **Reference** group on the tool wheel builds planes, axes, points and coordinate systems.
+They are features in the history like any other, worked out again on every rebuild from what they
+were built on, so they follow the model (faces, edges and corners are found again the way
+push/pull faces and converted sketch edges are). LB picks the kind; RT picks what it is built
+from, one thing at a time; LT starts again.
+
+| Tool | Kinds (LB) | Picks |
+| --- | --- | --- |
+| Plane | offset · at an angle · through three points · midway | a flat face, a reference plane or the ground (Top); an edge, round face or axis for the angle; corners for points |
+| Axis | edge or cylinder · through two points · where two planes meet | a straight edge (the face's edge nearest the crosshair) or a round face; corners; faces or planes |
+| Point | on a corner · face centre · at the crosshair | a corner; a face; anywhere (then X, Y, Z) |
+| Coordinate system | — | a face: origin on the nearest corner, Z along the face's normal, X along its nearest edge |
+
+Offset and angled planes and typed points open the feature panel with a live preview (distance,
+angle, X / Y / Z); they can be edited later from the model panel. Planes are drawn as tinted
+squares, axes dashed, points as small crosses and coordinate systems as red / green / blue arrows,
+each with its name. The **Sketch** tool sketches on a reference plane aimed at (or a coordinate
+system's XY plane); the sketch stays on the plane, so moving the plane moves it and everything
+built from it. **Revolve** offers reference axes as well as the sketch's own.
+
+The **Measure** group adds **Bounding box** (the parts' extent as a wire box, X × Y × Z on the
+whiteboard) and **Mass properties** (volume, area, mass from the part's material, and a marker at
+the centre of mass).
+
 ## The room
 
 Everything happens in a bright white room with a skylight that grows with the player and fades

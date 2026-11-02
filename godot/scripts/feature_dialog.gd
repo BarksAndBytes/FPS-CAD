@@ -11,7 +11,9 @@ signal closed(ok: bool, feature_id: String)
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const Units := preload("res://scripts/units.gd")
-const TITLES := {extrude = "EXTRUDE", revolve = "REVOLVE", sweep = "SWEEP", loft = "LOFT"}
+const TITLES := {extrude = "EXTRUDE", revolve = "REVOLVE", sweep = "SWEEP", loft = "LOFT", plane = "PLANE",
+	axis = "AXIS", point = "POINT"}
+const REFERENCE_TYPES := ["plane", "axis", "point", "csys"]
 const OPS := [["add", "Add material"], ["cut", "Cut away"], ["new-body", "New body"]]
 
 var game: Node  # main.gd
@@ -19,6 +21,7 @@ var type := ""
 var feature_id := ""
 var editing := false
 var sketch_id := ""
+var base_params := {}  # a reference feature's params the panel does not edit (what it refers to)
 var values := {}
 var fields: Array = []  # {key, label, kind: "length" | "angle" | "choice", choices}
 var focus := 0
@@ -95,12 +98,52 @@ func open_new(t: String, sketch: String, op: String) -> bool:
 	return true
 
 
+## Whether a new reference of this type and kind has sizes to set in the panel.
+static func wants_panel(t: String, params: Dictionary) -> bool:
+	var kind := String(params.get("kind", ""))
+	return (t == "plane" and kind in ["offset", "angle"]) or (t == "point" and kind == "xyz")
+
+
+## Adds a reference feature (plane, axis, point) with params and opens the panel on its sizes.
+## False when the kind has nothing to set: the feature is then added as it is.
+func open_reference(t: String, params: Dictionary) -> bool:
+	type = t
+	editing = false
+	sketch_id = ""
+	base_params = params.duplicate(true)
+	if not _setup_fields():
+		return false
+	for k in values:
+		if params.has(k):
+			values[k] = params[k]
+	game.doc.checkpoint()
+	var r: Dictionary = game.doc.insert_feature(type, "", _params())
+	if String(r.get("id", "")) == "":
+		game.doc.abandon()
+		game.hud.toast(r.get("message", "Could not add it"))
+		return false
+	feature_id = r.id
+	_open(r)
+	return true
+
+
 ## Opens the panel on an existing feature (from the model panel).
 func open_edit(f: Dictionary) -> bool:
 	type = f.type
 	editing = true
 	feature_id = f.id
 	var p: Dictionary = f.params
+	if type in REFERENCE_TYPES:
+		base_params = p.duplicate(true)
+		if not _setup_fields():
+			game.hud.toast("%s has no sizes to change: delete it and make it again" % f.name)
+			return false
+		for k in values:
+			if p.has(k):
+				values[k] = p[k]
+		game.doc.checkpoint()
+		_open(game.doc.update_feature(feature_id, "", _params()))
+		return true
 	sketch_id = p.get("sketch", "")
 	if type == "loft" and p.get("sketches", []).size() > 0:
 		sketch_id = p.sketches[0]
@@ -146,6 +189,9 @@ func _setup_fields() -> bool:
 		"revolve":
 			var axes := [["x", "Sketch X axis"], ["y", "Sketch Y axis"]]
 			var preferred := "y"
+			for rv in game.doc.reference_views():
+				if rv.kind == "axis" and rv.ok:
+					axes.append([rv.id, rv.name])
 			var sk: Dictionary = game.doc.get_sketch(sketch_id)
 			for e in sk.get("entities", []):
 				if e.kind == "line":
@@ -167,8 +213,27 @@ func _setup_fields() -> bool:
 			var key := "path" if type == "sweep" else "to"
 			fields = [{key = key, label = "Path" if type == "sweep" else "Loft to", kind = "choice", choices = others}]
 			values[key] = others[-1][0]
+		"plane":
+			match String(base_params.get("kind", "offset")):
+				"offset":
+					fields = [{key = "distance", label = "Distance", kind = "length", signed = true}]
+					values = {distance = base_params.get("distance", game.player.grid_step())}
+				"angle":
+					fields = [{key = "angle", label = "Angle", kind = "angle", signed = true}]
+					values = {angle = base_params.get("angle", PI / 4.0)}
+				_:
+					return false
+		"point":
+			if String(base_params.get("kind", "xyz")) != "xyz":
+				return false
+			fields = [{key = "x", label = "X", kind = "length", signed = true}, {key = "y", label = "Y", kind = "length", signed = true},
+				{key = "z", label = "Z", kind = "length", signed = true}]
+			values = {x = base_params.get("x", 0.0), y = base_params.get("y", 0.0), z = base_params.get("z", 0.0)}
 		_:
 			return false
+	if type in REFERENCE_TYPES:
+		values.op = ""
+		return true
 	fields.append({key = "op", label = "Result", kind = "choice", choices = OPS})
 	values.op = "add"
 	return true
@@ -214,6 +279,12 @@ func _params() -> Dictionary:
 			return {sketch = sketch_id, path = values.path}
 		"loft":
 			return {sketches = [sketch_id, values.to]}
+		"plane", "axis", "point", "csys":
+			var p := base_params.duplicate(true)
+			for k in values:
+				if k != "op":
+					p[k] = values[k]
+			return p
 	return {}
 
 
@@ -322,12 +393,13 @@ func adjust(d: int) -> void:
 				game.hud.toast("%s is an expression; type a new value to change it" % f.label)
 				return
 			var step: float = game.player.snap_step()
-			values[f.key] = maxf(snappedf(float(v) + d * step, step), step)
+			values[f.key] = snappedf(float(v) + d * step, step) if f.get("signed", false) else maxf(snappedf(float(v) + d * step, step), step)
 		"angle":
 			if v is String:
 				game.hud.toast("%s is an expression; type a new value to change it" % f.label)
 				return
-			values[f.key] = clampf(snappedf(float(v) + d * deg_to_rad(15.0), deg_to_rad(15.0)), deg_to_rad(15.0), TAU)
+			var a := snappedf(float(v) + d * deg_to_rad(15.0), deg_to_rad(15.0))
+			values[f.key] = clampf(a, -TAU, TAU) if f.get("signed", false) else clampf(a, deg_to_rad(15.0), TAU)
 		"choice":
 			var n: int = f.choices.size()
 			var at := 0

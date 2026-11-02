@@ -579,6 +579,80 @@ Array CadPart::project_face(int body, int face, const Dictionary& plane) const {
   return out;
 }
 
+Array CadPart::reference_views() const {
+  Array out;
+  for (auto& v : model_->referenceViews()) {
+    Dictionary d;
+    d["id"] = str(v.featureId);
+    d["name"] = str(v.name);
+    d["kind"] = str(v.kind);
+    d["ok"] = v.ok;
+    d["message"] = str(v.message);
+    d["origin"] = toGodot(v.origin);
+    d["xdir"] = toGodot(v.xdir);
+    d["ydir"] = toGodot(v.ydir);
+    d["normal"] = toGodot(v.normal);
+    d["size"] = v.size;
+    out.push_back(d);
+  }
+  return out;
+}
+
+Dictionary CadPart::reference_plane(const String& id) const {
+  Dictionary d;
+  auto p = model_->referencePlane(str(id));
+  if (!p) return d;
+  d["plane"] = jsonToVariant(p->toJson());
+  const fpcad::Feature* f = model_->document().find(str(id));
+  d["name"] = f ? str(f->name) : id;
+  return d;
+}
+
+PackedVector3Array CadPart::straight_edge_near(const Dictionary& hit, double tolerance) const {
+  PackedVector3Array out;
+  if (auto e = model_->straightEdgeNear(dictToHit(hit), tolerance)) {
+    out.push_back(toGodot((*e)[0]));
+    out.push_back(toGodot((*e)[1]));
+  }
+  return out;
+}
+
+bool CadPart::is_cylinder(const Dictionary& hit) const { return model_->isCylinder(dictToHit(hit)); }
+
+Dictionary CadPart::bounding_box() const {
+  Dictionary d;
+  auto b = model_->boundingBox();
+  d["ok"] = b.has_value();
+  if (!b) return d;
+  Vector3 a = toGodot(b->min), c = toGodot(b->max);
+  d["min"] = Vector3(std::min(a.x, c.x), std::min(a.y, c.y), std::min(a.z, c.z));
+  d["max"] = Vector3(std::max(a.x, c.x), std::max(a.y, c.y), std::max(a.z, c.z));
+  d["size"] = Vector3(float(b->max[0] - b->min[0]), float(b->max[1] - b->min[1]), float(b->max[2] - b->min[2]));
+  return d;
+}
+
+Dictionary CadPart::face_ref(const Dictionary& hit) const {
+  fpcad::PickHit h = dictToHit(hit);
+  Dictionary d;
+  d["probe"] = cad_point(toGodot(h.point));
+  Array n;
+  n.push_back(h.normal[0]);
+  n.push_back(h.normal[1]);
+  n.push_back(h.normal[2]);
+  d["normal"] = n;
+  d["feature"] = str(h.featureId);
+  return d;
+}
+
+Array CadPart::cad_point(const Vector3& p) const {
+  fpcad::Vec3 c = toCad(p);
+  Array a;
+  a.push_back(c[0]);
+  a.push_back(c[1]);
+  a.push_back(c[2]);
+  return a;
+}
+
 Dictionary CadPart::convert_face(const Dictionary& sketch, int body, int face, const Vector3& probe) {
   Dictionary d;
   d["sketch"] = sketch;
@@ -822,6 +896,13 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("sketch_curves", "sketch"), &CadPart::sketch_curves);
   ClassDB::bind_method(D_METHOD("project_face", "body", "face", "plane"), &CadPart::project_face);
   ClassDB::bind_method(D_METHOD("convert_face", "sketch", "body", "face", "probe"), &CadPart::convert_face);
+  ClassDB::bind_method(D_METHOD("reference_views"), &CadPart::reference_views);
+  ClassDB::bind_method(D_METHOD("reference_plane", "id"), &CadPart::reference_plane);
+  ClassDB::bind_method(D_METHOD("straight_edge_near", "hit", "tolerance"), &CadPart::straight_edge_near);
+  ClassDB::bind_method(D_METHOD("is_cylinder", "hit"), &CadPart::is_cylinder);
+  ClassDB::bind_method(D_METHOD("bounding_box"), &CadPart::bounding_box);
+  ClassDB::bind_method(D_METHOD("face_ref", "hit"), &CadPart::face_ref);
+  ClassDB::bind_method(D_METHOD("cad_point", "p"), &CadPart::cad_point);
   ClassDB::bind_method(D_METHOD("add_sketch", "sketch"), &CadPart::add_sketch);
   ClassDB::bind_method(D_METHOD("set_sketch", "id", "sketch"), &CadPart::set_sketch);
   ClassDB::bind_method(D_METHOD("get_sketch", "id"), &CadPart::get_sketch);

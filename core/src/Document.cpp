@@ -61,6 +61,8 @@ Feature& PartDocument::add(Feature f) {
   if (f.name.empty()) {
     std::string base = f.type.empty() ? "Feature" : f.type;
     base[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(base[0])));
+    if (f.type == "csys") base = "Coordinate system";
+    if (f.type == "face_offset") base = "Push/Pull";
     f.name = uniqueName(base);
   }
   features.push_back(std::move(f));

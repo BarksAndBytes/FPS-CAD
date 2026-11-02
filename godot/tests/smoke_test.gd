@@ -481,6 +481,7 @@ func _run() -> void:
 
 	await _sketch_tools(main)
 	await _player_body(main)
+	await _references(main)
 
 	# ---- challenge mode: copy the target, any orientation, any method ----
 	var list: Array = ClassDB.instantiate(&"CadPart").challenge_list()
@@ -936,6 +937,99 @@ func _player_body(main: Node) -> void:
 	await _seconds(0.8)
 	_check(pl.camera.global_position.distance_to(eye_before) < 0.05 and absf(pl.size - 1.0) < 1e-6,
 		"leaving the sketch glides back to where the player stood")
+
+
+## Aims the player straight down at a spot (Godot space) from height above it.
+func _look_down_at(main: Node, spot: Vector3, height: float) -> void:
+	var pl: Node3D = main.player
+	pl.fly = true
+	pl.feet = spot + Vector3(0, height - pl.EYE * pl.size, 0)
+	pl.yaw = 0.0
+	pl.pitch = -PI / 2.0 + 0.001
+	await _frames(3)
+
+
+## Reference geometry from the tools: an offset plane with a sketch on it that follows the plane,
+## an axis on an edge, a typed point, the bounding box and mass properties.
+func _references(main: Node) -> void:
+	main._start_mode("new")
+	await _frames(2)
+	main.player.set_size_now(1.0)
+	main.doc.add_primitive("box", Vector3(0, 0, 0), {w = 1.0, d = 1.0, h = 0.5}, "add")
+	main._on_model_changed()
+	var tools: Node = main.tools
+	var tree: Array = tools.wheel_tree()
+	var groups: Array = tree.map(func(n): return n.name)
+	_check("Reference" in groups and "Measure" in groups, "the tool wheel has Reference and Measure groups (%s)" % ", ".join(groups))
+	# An offset plane 250 mm above the box's top face, through the feature panel.
+	tools.set_tool_id("ref_plane")
+	tools.aim = main.doc.pick(Vector3(0.2, 5, 0.2), Vector3(0, -1, 0), 20.0)
+	tools._act(true, false)
+	await _frames(2)
+	_check(main.dialog.visible and main.dialog.type == "plane", "Plane (offset) on a face opens the panel with a live preview")
+	main.dialog.set_value("distance", 0.25)
+	main.dialog.accept()
+	await _frames(2)
+	var planes: Array = main.view.references.filter(func(v): return v.kind == "plane")
+	_check(planes.size() == 1 and absf((planes[0].origin as Vector3).y - 0.75) < 1e-6, "the plane floats 250 mm above the box")
+	var plane_id: String = planes[0].id if planes.size() == 1 else ""
+	# Sketch on it, aiming down through it.
+	await _look_down_at(main, Vector3(0.1, 0.75, 0.1), 3.0)
+	tools.set_tool_id("sketch")
+	tools.aim = main._aim_hit()
+	tools._act(true, false)
+	await _frames(2)
+	_check(main.sketcher.active and String(main.sketcher.sketch.get("planeRef", "")) == plane_id, "the Sketch tool sketches on the reference plane")
+	main.player.set_size_now(1.0)
+	main.sketcher.set_tool_id("rect")
+	main.sketcher.click_at(Vector2(0, 0))
+	main.sketcher.click_at(Vector2(0.25, 0.25))
+	main.sketcher.finish()
+	await _frames(2)
+	var sk_id: String = main.doc.latest_unused_sketch()
+	var on_plane: Dictionary = main.doc.get_sketch(sk_id)
+	_check(sk_id != "" and on_plane.get("planeRef", "") == plane_id and absf(float(on_plane.plane.origin[2]) - 0.75) < 1e-6,
+		"the finished sketch remembers its plane")
+	var plane_f: Dictionary = {}
+	for f in main.doc.get_features():
+		if f.id == plane_id:
+			plane_f = f
+	_check(main.dialog.open_edit(plane_f), "the plane can be edited from the model panel")
+	main.dialog.set_value("distance", 0.5)
+	main.dialog.accept()
+	await _frames(2)
+	_check(absf(float(main.doc.get_sketch(sk_id).plane.origin[2]) - 1.0) < 1e-6, "moving the plane moves the sketch on it")
+	# An axis on the box's edge, then offered to Revolve.
+	main.player.fly = false
+	tools.set_tool_id("ref_axis")
+	tools.aim = main.doc.pick(Vector3(0.49, 0.25, 5), Vector3(0, 0, -1), 20.0)
+	tools._act(true, false)
+	await _frames(2)
+	var axes: Array = main.view.references.filter(func(v): return v.kind == "axis")
+	_check(axes.size() == 1 and absf(absf((axes[0].xdir as Vector3).y) - 1.0) < 1e-6 and absf((axes[0].origin as Vector3).x - 0.5) < 1e-6,
+		"Axis on the box's upright edge")
+	# A point typed in X, Y, Z.
+	tools.set_tool_id("ref_point")
+	tools.options["ref_point"] = 2  # at the crosshair
+	tools.aim = main.doc.pick(Vector3(0.2, 5, 0.2), Vector3(0, -1, 0), 20.0)
+	tools._act(true, false)
+	await _frames(2)
+	_check(main.dialog.visible and main.dialog.type == "point", "Point at the crosshair opens X, Y and Z")
+	main.dialog.set_value("z", 1.5)
+	main.dialog.accept()
+	await _frames(2)
+	var pts: Array = main.view.references.filter(func(v): return v.kind == "point")
+	_check(pts.size() == 1 and absf((pts[0].origin as Vector3).y - 1.5) < 1e-6, "the point sits where it was typed")
+	# Bounding box and mass properties.
+	tools.set_tool_id("bbox")
+	tools._act(true, false)
+	tools.update(tools.aim, 0.016)
+	_check(main.view._bbox.visible and main.board.text_lines().any(func(t): return "1.00 m × 1.00 m × 500 mm" in String(t)),
+		"Bounding box draws the box and writes its size (%s)" % str(main.board.text_lines().slice(4, 6)))
+	tools.set_tool_id("mass")
+	tools._act(true, false)
+	tools.update(tools.aim, 0.016)
+	_check(main.view._com.visible, "Mass properties marks the centre of mass")
 
 
 func _frames(n: int) -> void:
