@@ -1,0 +1,145 @@
+name: Windows build
+
+# Builds a playable Windows (x86_64) build and publishes it as the "windows-dev" pre-release:
+# a zip you unpack and run, with the CAD extension, Open CASCADE and the MSVC runtime beside
+# FPS-CAD.exe. The build number is the workflow's run number, shown on the title screen.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+env:
+  OCCT_TAG: V8_0_1
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache Open CASCADE
+        id: occt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/occt
+          key: occt-${{ env.OCCT_TAG }}-windows-v1
+
+      - name: Build Open CASCADE
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: tools/ci_run.sh tools/build_occt.sh "$(cygpath -m '${{ runner.temp }}')/occt" windows
+
+      - name: Build the extension
+        run: |
+          OCCT="$(cygpath -m '${{ runner.temp }}')/occt"
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$OCCT" \
+            -DFPCAD_BUILD_TESTS=OFF -DFPCAD_BUILD_CLI=OFF \
+            -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
+          tools/ci_run.sh cmake --build build -j
+
+      - name: Stage Open CASCADE beside the extension
+        run: |
+          python tools/stage_occt.py --occt "$(cygpath -m '${{ runner.temp }}')/occt" --platform windows
+          ls -la godot/bin
+
+      - name: Build number
+        run: |
+          BUILD=${{ github.run_number }}
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+          printf '%s\n' \
+            'extends RefCounted' \
+            '## Written by CI for each published build.' \
+            "const BUILD := $BUILD" \
+            "const COMMIT := \"${GITHUB_SHA::7}\"" \
+            "const BRANCH := \"${GITHUB_REF_NAME}\"" \
+            "const VERSION := \"0.2.$BUILD\"" > godot/scripts/build_info.gd
+          cat godot/scripts/build_info.gd
+
+      - name: Install Godot and its Windows export templates
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -sSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_win64.exe.zip"
+          curl -sSL -o templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          DEST="$(cygpath -u "$APPDATA")/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$DEST" godot-bin
+          python - "$DEST" <<'PY'
+          import os, sys, zipfile
+          zipfile.ZipFile("godot.zip").extractall("godot-bin")
+          with zipfile.ZipFile("templates.tpz") as z:
+              for n in z.namelist():
+                  base = os.path.basename(n)
+                  if base.startswith("windows_") or base == "version.txt":
+                      with open(os.path.join(sys.argv[1], base), "wb") as fh:
+                          fh.write(z.read(n))
+          PY
+          ls godot-bin "$DEST"
+
+      - name: Export FPS-CAD.exe
+        run: |
+          GODOT="$PWD/$(ls godot-bin/*_console.exe | head -1)"
+          OUT=export/windows
+          mkdir -p "$OUT"
+          timeout 300 "$GODOT" --headless --path godot --import || true
+          tools/ci_run.sh timeout 600 "$GODOT" --headless --path godot --export-debug "Windows Desktop" "$(cygpath -m "$PWD/$OUT/FPS-CAD.exe")"
+          test -s "$OUT/FPS-CAD.exe"
+          # The extension and Open CASCADE are built against the dynamic MSVC runtime; ship it
+          # beside the game so it runs on PCs without the Visual C++ Redistributable.
+          CRT="$(cygpath -u "$VCToolsRedistDir")/x64/Microsoft.VC143.CRT"
+          cp "$CRT"/vcruntime140.dll "$CRT"/vcruntime140_1.dll "$CRT"/msvcp140.dll "$OUT"/
+          ls -la "$OUT"
+          ls "$OUT" | grep -q "libfpcad" || { echo "::error::the build is missing the CAD extension"; exit 1; }
+          ls "$OUT" | grep -q "^TKernel.dll$" || { echo "::error::the build is missing Open CASCADE"; exit 1; }
+          rm -f "$OUT"/*.pdb
+
+      - name: Smoke-run the exported game
+        run: |
+          # Launch headless for a few seconds: fails if the extension or a DLL can't load.
+          # Debug exports include FPS-CAD.console.exe, which keeps the console output.
+          cd export/windows
+          EXE=FPS-CAD.console.exe; [ -f "$EXE" ] || EXE=FPS-CAD.exe
+          timeout 30 "./$EXE" --headless --quit-after 300 > run.log 2>&1 || true
+          cp run.log ../smoke-run.log
+          cat run.log
+          if grep -E "Can't open dynamic library|GDExtension .*failed|Parse Error|SCRIPT ERROR" run.log; then
+            echo "::error::the exported game failed to start cleanly"; exit 1
+          fi
+          rm -f run.log
+
+      - name: Zip
+        run: |
+          NAME="FPS-CAD-windows-${GITHUB_SHA::7}"
+          echo "ZIP=$NAME.zip" >> "$GITHUB_ENV"
+          mv export/windows "export/$NAME"
+          (cd export && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null)
+          ls -la export
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fps-cad-windows-game
+          path: export/${{ env.ZIP }}
+
+      - name: Publish the windows-dev pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete windows-dev --cleanup-tag --yes || true
+          gh release create windows-dev "export/$ZIP" \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Windows build ${BUILD} (${GITHUB_SHA::7})" \
+            --notes "Build ${BUILD} (version 0.2.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a PC.
+
+          Run: download the zip, right-click it and choose Extract All, then open the folder and run FPS-CAD.exe. Keep every file together; the DLLs beside the exe are the CAD kernel. Windows 10 or 11, 64-bit, with a GPU that supports Vulkan or Direct3D 12. If it closes straight away, run FPS-CAD.console.exe instead to see the error.
+
+          The build isn't code-signed, so Windows SmartScreen may say it protected your PC: choose More info, then Run anyway. To update, download the newest zip and extract it over the old folder (or into a new one); your saved parts live in your user folder, not beside the exe."

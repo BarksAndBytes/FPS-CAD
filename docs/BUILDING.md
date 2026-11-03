@@ -7,8 +7,10 @@ FPS-CAD has three layers, built in this order:
 3. **The Godot extension** (`extension/`), which links the core and godot-cpp, then the Godot
    project (`godot/`) that loads it.
 
-CI builds all three for Linux, Windows and Android on every push; download the `godot/bin`
-artifacts from a run if you only want to play.
+CI builds all three for Linux, Windows and Android on every push. To play without building,
+download a packaged build from the repository's Releases page: `windows-dev` (a zip to unpack and
+run on a PC) or `android-dev` (an APK). See *Windows builds* and *Android builds and updates*
+below.
 
 ## Requirements
 
@@ -83,6 +85,16 @@ export templates and set a debug keystore in Editor Settings first).
 godot --headless --path godot --import
 godot --headless --path godot --script res://tests/smoke_test.gd
 ```
+
+## Windows builds
+
+The **Windows build** workflow (`.github/workflows/windows-build.yml`) exports the game on every
+push and publishes it as the `windows-dev` pre-release: `FPS-CAD-windows-<commit>.zip`. Unpack it
+and run `FPS-CAD.exe`; the DLLs beside it are the CAD extension, Open CASCADE and the MSVC runtime,
+so nothing else needs installing. `FPS-CAD.console.exe` runs the same game with a console window
+showing errors. The build isn't code-signed, so SmartScreen asks once (More info → Run anyway).
+There's no in-app updater on Windows: download the newest zip. Saved parts live in the user folder
+(`%APPDATA%\Godot\app_userdata\FPS-CAD`), not beside the exe, so they survive updates.
 
 ## Android builds and updates
 

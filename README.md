@@ -30,6 +30,11 @@ The full product spec is the shared doc **First-Person CAD — Product Spec**;
 [docs/CAD_COMPARISON.md](docs/CAD_COMPARISON.md) reviews FPS-CAD against SOLIDWORKS, Fusion and
 Inventor, area by area, with a suggested order for closing the gaps.
 
+## Try it
+
+Download the latest build from the Releases page: **windows-dev** for a PC (unzip, run
+`FPS-CAD.exe`) or **android-dev** for a phone (install the APK).
+
 ## Quick start (Linux or Windows)
 
 ```bash
