@@ -54,6 +54,12 @@ var _cmap_from_menu := false
 
 
 func _ready() -> void:
+	if "--self-check" in OS.get_cmdline_user_args():
+		# Packaged-build check (CI): the CAD extension and Open CASCADE loaded and can build a part.
+		var ok := ClassDB.class_exists("CadPart") and ClassDB.instantiate("CadPart") != null
+		print("SELF-CHECK ", "OK" if ok else "FAIL: the CAD extension did not load")
+		get_tree().quit(0 if ok else 1)
+		return
 	UiTheme.apply()
 	UiTheme.apply_scale(get_tree(), UiTheme.saved_scale_choice())
 	for dir in [PROJECTS, EXPORTS, RECOVERY.get_base_dir()]:

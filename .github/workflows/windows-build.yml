@@ -105,16 +105,15 @@ jobs:
 
       - name: Smoke-run the exported game
         run: |
-          # Launch headless for a few seconds: fails if the extension or a DLL can't load.
+          # Starts the packaged game headless with --self-check: it loads the CAD extension and
+          # Open CASCADE from beside the exe, creates a part, prints SELF-CHECK OK and quits.
           # Debug exports include FPS-CAD.console.exe, which keeps the console output.
           cd export/windows
           EXE=FPS-CAD.console.exe; [ -f "$EXE" ] || EXE=FPS-CAD.exe
-          timeout 30 "./$EXE" --headless --quit-after 300 > run.log 2>&1 || true
-          cp run.log ../smoke-run.log
+          timeout 60 "./$EXE" --headless -- --self-check > run.log 2>&1 || true
           cat run.log
-          if grep -E "Can't open dynamic library|GDExtension .*failed|Parse Error|SCRIPT ERROR" run.log; then
-            echo "::error::the exported game failed to start cleanly"; exit 1
-          fi
+          cp run.log ../smoke-run.log
+          grep -q "SELF-CHECK OK" run.log || { echo "::error::the exported game failed its self-check (see the log above)"; exit 1; }
           rm -f run.log
 
       - name: Zip
