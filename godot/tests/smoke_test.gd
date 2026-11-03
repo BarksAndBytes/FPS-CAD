@@ -112,7 +112,39 @@ func _run() -> void:
 	_check(not up.evaluate({build = 11, apk = "x", signing = "release"}, 11).newer, "the same build is not an update")
 	_check(not up.evaluate({build = 13, apk = "x", signing = "debug"}, 11).newer, "a debug-signed build is not offered (it could not install over this one)")
 	_check(not up.evaluate("nonsense", 11).newer and not up.evaluate({build = 13}, 11).newer, "unreadable update information is ignored")
-	_check(not up.supported(), "local and desktop builds never check for updates")
+	_check(not up.supported(), "local and editor builds never check for updates")
+	# Each platform reads only its own channel and refuses another platform's information.
+	_check(up.latest_url("windows").ends_with("/windows-dev/latest.json") and up.latest_url("android").ends_with("/android-dev/latest.json"), "each platform has its own update channel")
+	var win_info := {build = 12, url = "https://example.invalid/w.zip", platform = "windows"}
+	_check(up.evaluate(win_info, 11, "windows").newer, "a Windows build is offered to Windows")
+	_check(not up.evaluate(win_info, 11, "android").newer, "a Windows build is never offered to Android")
+	_check(not up.evaluate({build = 12, url = "x", platform = "android", signing = "release"}, 11, "windows").newer, "an Android build is never offered to Windows")
+	_check(not up.evaluate({build = 12, apk = "x", signing = "release"}, 11, "windows").newer, "older Android update files (no platform) are never offered to Windows")
+	# Windows install: unpack over the game folder, setting the running files aside.
+	var game_dir := OS.get_user_data_dir().path_join("smoke-update-game")
+	DirAccess.make_dir_recursive_absolute(game_dir)
+	for f in ["FPS-CAD.exe", "TKernel.dll"]:
+		var old := FileAccess.open(game_dir.path_join(f), FileAccess.WRITE)
+		old.store_string("old " + f)
+		old.close()
+	var zip_file := OS.get_user_data_dir().path_join("smoke-update.zip")
+	var zp := ZIPPacker.new()
+	zp.open(zip_file)
+	for f in ["FPS-CAD.exe", "TKernel.dll", "libfpcad.dll"]:
+		zp.start_file("FPS-CAD-windows-abc1234/" + f)
+		zp.write_file(("new " + f).to_utf8_buffer())
+		zp.close_file()
+	zp.close()
+	_check(up.unpack_over(zip_file, game_dir, "old-11") == "", "a Windows update unpacks over the game folder")
+	_check(FileAccess.get_file_as_string(game_dir.path_join("FPS-CAD.exe")) == "new FPS-CAD.exe"
+		and FileAccess.get_file_as_string(game_dir.path_join("libfpcad.dll")) == "new libfpcad.dll", "the new build's files replace the old ones, top folder dropped")
+	_check(FileAccess.get_file_as_string(game_dir.path_join("TKernel.dll.old-11")) == "old TKernel.dll", "the replaced files are set aside, not overwritten")
+	up.remove_replaced(game_dir)
+	_check(not FileAccess.file_exists(game_dir.path_join("FPS-CAD.exe.old-11")) and FileAccess.file_exists(game_dir.path_join("FPS-CAD.exe")), "set-aside files are cleaned up on the next launch")
+	for f in DirAccess.get_files_at(game_dir):
+		DirAccess.remove_absolute(game_dir.path_join(f))
+	DirAccess.remove_absolute(game_dir)
+	DirAccess.remove_absolute(zip_file)
 	var apk_path := "user://smoke-update.apk"
 	var fa := FileAccess.open(apk_path, FileAccess.WRITE)
 	var blob := PackedByteArray()

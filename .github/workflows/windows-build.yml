@@ -2,7 +2,8 @@ name: Windows build
 
 # Builds a playable Windows (x86_64) build and publishes it as the "windows-dev" pre-release:
 # a zip you unpack and run, with the CAD extension, Open CASCADE and the MSVC runtime beside
-# FPS-CAD.exe. The build number is the workflow's run number, shown on the title screen.
+# FPS-CAD.exe, plus latest.json, which Windows builds read to update themselves. The build
+# number is the workflow's run number, shown on the title screen.
 
 on:
   push:
@@ -124,6 +125,22 @@ jobs:
           (cd export && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null)
           ls -la export
 
+      - name: Update information
+        run: |
+          # latest.json is read by Windows builds only (Android reads android-dev's): the game
+          # offers this build when it is newer than its own, then downloads the zip, checks its
+          # size and SHA-256, and unpacks it over its folder (godot/scripts/updater.gd).
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/windows-dev/${ZIP}"
+          python - "export/$ZIP" "$URL" > export/latest.json <<'PY'
+          import hashlib, json, os, sys
+          data = open(sys.argv[1], "rb").read()
+          print(json.dumps({"platform": "windows", "build": int(os.environ["BUILD"]),
+                            "version": "0.2." + os.environ["BUILD"], "commit": os.environ["GITHUB_SHA"][:7],
+                            "branch": os.environ["GITHUB_REF_NAME"], "url": sys.argv[2],
+                            "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}, indent=2))
+          PY
+          cat export/latest.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: fps-cad-windows-game
@@ -134,11 +151,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete windows-dev --cleanup-tag --yes || true
-          gh release create windows-dev "export/$ZIP" \
+          gh release create windows-dev "export/$ZIP" export/latest.json \
             --prerelease --target "$GITHUB_SHA" \
             --title "Windows build ${BUILD} (${GITHUB_SHA::7})" \
             --notes "Build ${BUILD} (version 0.2.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a PC.
 
           Run: download the zip, right-click it and choose Extract All, then open the folder and run FPS-CAD.exe. Keep every file together; the DLLs beside the exe are the CAD kernel. Windows 10 or 11, 64-bit, with a GPU that supports Vulkan or Direct3D 12. If it closes straight away, run FPS-CAD.console.exe instead to see the error.
 
-          The build isn't code-signed, so Windows SmartScreen may say it protected your PC: choose More info, then Run anyway. To update, download the newest zip and extract it over the old folder (or into a new one); your saved parts live in your user folder, not beside the exe."
+          The build isn't code-signed, so Windows SmartScreen may say it protected your PC: choose More info, then Run anyway. The game checks for newer Windows builds when it starts and can install them itself (pause menu → Check for updates); if its folder isn't writable, download the newest zip instead. Your saved parts live in your user folder, not beside the exe."

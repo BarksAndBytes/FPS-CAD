@@ -6,7 +6,8 @@ name: Android APK
 # Every build is signed with the same key (repository secrets ANDROID_KEYSTORE_BASE64 and
 # ANDROID_KEYSTORE_PASSWORD, alias "fpscad"), and its version code is the workflow's run number,
 # so a new build installs over the old one as an update. The release also carries latest.json,
-# which the app reads to offer updates (godot/scripts/updater.gd).
+# which Android builds of the app read to offer updates (godot/scripts/updater.gd). Windows builds
+# read their own file from windows-dev instead.
 
 on:
   push:
@@ -156,9 +157,9 @@ jobs:
           import json, os, sys
           import hashlib
           apk = open("export/android/FPS-CAD.apk", "rb").read()
-          print(json.dumps({"build": int(os.environ["BUILD"]), "version": "0.2." + os.environ["BUILD"],
+          print(json.dumps({"platform": "android", "build": int(os.environ["BUILD"]), "version": "0.2." + os.environ["BUILD"],
                             "commit": os.environ["GITHUB_SHA"][:7], "branch": os.environ["GITHUB_REF_NAME"],
-                            "signing": os.environ["SIGN_KIND"], "apk": sys.argv[1],
+                            "signing": os.environ["SIGN_KIND"], "url": sys.argv[1], "apk": sys.argv[1],
                             "size": len(apk), "sha256": hashlib.sha256(apk).hexdigest()}, indent=2))
           PY
           cat export/android/latest.json

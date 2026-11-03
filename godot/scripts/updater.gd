@@ -1,16 +1,23 @@
 extends Node
-## Keeps published Android builds up to date from inside the app.
+## Keeps published builds up to date from inside the app, each from its own platform's channel.
 ##
-## Checking is the app's only network use: one download of a small public file (latest.json from
-## the repository's android-dev release). Nothing about the player or their files is sent, and the
-## launch check can be turned off from the pause menu.
+## Every platform has its own pre-release on GitHub (android-dev, windows-dev) carrying a small
+## latest.json, and a build only ever reads its own platform's file: an Android build never sees a
+## Windows build and the reverse. latest.json also names its platform, and a build refuses
+## information for any other. Checking is the app's only network use; nothing about the player or
+## their files is sent, and the launch check can be turned off from the pause menu.
 ##
-## Installing downloads the newer APK into the app's own storage, checks its size and SHA-256
-## against latest.json, and hands it to Android's package installer (OS.shell_open shares the file
-## through Godot's FileProvider). Every published build is signed with the same key and has a
-## higher version code, so Android offers it as an update and keeps the player's files. The app
-## declares REQUEST_INSTALL_PACKAGES; the first time, Android asks the player to allow installs
-## from FPS-CAD.
+## Android: installing downloads the newer APK into the app's own storage, checks its size and
+## SHA-256 against latest.json, and hands it to Android's package installer (OS.shell_open shares
+## the file through Godot's FileProvider). Every published build is signed with the same key and
+## has a higher version code, so Android offers it as an update and keeps the player's files. The
+## app declares REQUEST_INSTALL_PACKAGES; the first time, Android asks to allow installs from it.
+##
+## Windows: installing downloads the newer zip, checks it the same way, and unpacks it over the
+## game's own folder. Windows lets a running program and its DLLs be renamed but not overwritten,
+## so each file being replaced is first renamed aside (*.old-<build>, removed on the next launch)
+## and the new one written in its place; the game then restarts into the new build. Saved parts
+## live in the user folder, so they are untouched.
 
 signal update_available(info: Dictionary)
 signal checked(message: String)       # result of a check, for a toast
@@ -18,7 +25,7 @@ signal before_install                 # save work: the installer replaces the ru
 
 const BuildInfo := preload("res://scripts/build_info.gd")
 const UiTheme := preload("res://scripts/ui_theme.gd")
-const LATEST_URL := "https://github.com/BarksAndBytes/FPS-CAD/releases/download/android-dev/latest.json"
+const RELEASES := "https://github.com/BarksAndBytes/FPS-CAD/releases/download/"
 const SETTINGS := "user://settings.cfg"
 const DOWNLOADS := "user://updates"
 
@@ -51,13 +58,30 @@ func _ready() -> void:
 	_apk_http.request_completed.connect(_on_downloaded)
 	_build_ui()
 	_clean_old_downloads()
+	if platform() == "windows" and supported():
+		remove_replaced(OS.get_executable_path().get_base_dir())
 
 
 # ---------- settings ----------
 
-## Builds that can update this way: published Android builds (local builds are build 0).
+## This build's update channel: "android", "windows", or "" where there are no published builds.
+static func platform() -> String:
+	if OS.has_feature("android"):
+		return "android"
+	if OS.has_feature("windows"):
+		return "windows"
+	return ""
+
+
+## Where this platform's latest.json lives: its own pre-release, never another platform's.
+static func latest_url(plat: String) -> String:
+	return "%s%s-dev/latest.json" % [RELEASES, plat]
+
+
+## Builds that can update this way: published builds exported for Android or Windows (local and
+## editor builds are build 0).
 static func supported() -> bool:
-	return OS.has_feature("android") and BuildInfo.BUILD > 0
+	return platform() != "" and BuildInfo.BUILD > 0 and OS.has_feature("template")
 
 
 static func enabled() -> bool:
@@ -95,10 +119,10 @@ func check(manual: bool) -> void:
 	_manual = manual
 	if not supported():
 		if manual:
-			checked.emit("Updates come with the Android builds from GitHub; this is a %s" % version_text())
+			checked.emit("Updates come with the Windows and Android builds from GitHub; this is a %s" % version_text())
 		return
 	_check_http.cancel_request()
-	var err := _check_http.request(LATEST_URL, ["Accept: application/json", "Cache-Control: no-cache"])
+	var err := _check_http.request(latest_url(platform()), ["Accept: application/json", "Cache-Control: no-cache"])
 	if err != OK and manual:
 		checked.emit("Could not check for updates (error %d)" % err)
 
@@ -109,7 +133,7 @@ func _on_checked(result: int, code: int, _headers: PackedStringArray, body: Pack
 			checked.emit("Could not reach GitHub to check for updates")
 		return
 	var info: Variant = JSON.parse_string(body.get_string_from_utf8())
-	var r := evaluate(info, BuildInfo.BUILD)
+	var r := evaluate(info, BuildInfo.BUILD, platform())
 	if r.newer:
 		latest = info
 		update_available.emit(info)
@@ -118,33 +142,46 @@ func _on_checked(result: int, code: int, _headers: PackedStringArray, body: Pack
 
 
 ## Pure decision, separate from the network so it can be tested: is info (latest.json) an update
-## for build? Returns {newer: bool, message: String}.
-static func evaluate(info: Variant, build: int) -> Dictionary:
-	if not (info is Dictionary) or not info.has("build") or not info.has("apk"):
+## for build on platform plat? Returns {newer: bool, message: String}.
+static func evaluate(info: Variant, build: int, plat: String = "android") -> Dictionary:
+	if not (info is Dictionary) or not info.has("build") or package_url(info) == "":
 		return {newer = false, message = "The update information was not readable"}
+	# Files from before platforms were named are Android's.
+	if String(info.get("platform", "android")) != plat:
+		return {newer = false, message = "No update for this platform"}
 	var remote := int(info.build)
 	if remote <= build:
 		return {newer = false, message = "You have the latest build (%d)" % build}
-	if String(info.get("signing", "release")) != "release":
+	if plat == "android" and String(info.get("signing", "release")) != "release":
 		return {newer = false, message = "Build %d is out but is not signed for updates; install it from GitHub by hand" % remote}
 	return {newer = true, message = "Update available: build %d" % remote}
 
 
+## The package to download: "url" in current files, "apk" in Android's older ones.
+static func package_url(info: Dictionary) -> String:
+	return String(info.get("url", info.get("apk", "")))
+
+
 # ---------- installing ----------
 
-## Downloads the newer build, verifies it and opens Android's installer.
+## Downloads the newer build, verifies it and installs it (Android's installer, or unpacking over
+## the game folder on Windows).
 func install() -> void:
 	if latest.is_empty() or _state == "downloading":
 		return
+	if platform() == "windows":
+		var dir := OS.get_executable_path().get_base_dir()
+		if not writable(dir):
+			_fail("The game's folder (%s) can't be written to, so the update can't replace it. Download the new build and unzip it somewhere you can write to, such as your Documents folder." % dir)
+			return
 	DirAccess.make_dir_recursive_absolute(DOWNLOADS)
-	_apk_path = "%s/FPS-CAD-%d.apk" % [DOWNLOADS, int(latest.build)]
+	_apk_path = "%s/FPS-CAD-%d.%s" % [DOWNLOADS, int(latest.build), "zip" if platform() == "windows" else "apk"]
 	if FileAccess.file_exists(_apk_path) and verify(_apk_path, latest) == "":
-		_show("ready")
-		_launch_installer()
+		_finish_install()
 		return
 	_apk_http.cancel_request()
 	_apk_http.download_file = ProjectSettings.globalize_path(_apk_path)
-	var err := _apk_http.request(String(latest.apk))
+	var err := _apk_http.request(package_url(latest))
 	if err != OK:
 		_fail("The download could not start (error %d)." % err)
 		return
@@ -184,8 +221,21 @@ func _on_downloaded(result: int, code: int, _headers: PackedStringArray, _body_b
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(_apk_path))
 		_fail(problem)
 		return
+	_finish_install()
+
+
+func _finish_install() -> void:
+	if platform() != "windows":
+		_show("ready")
+		_launch_installer()
+		return
+	var problem := unpack_over(ProjectSettings.globalize_path(_apk_path),
+		OS.get_executable_path().get_base_dir(), "old-%d" % BuildInfo.BUILD)
+	if problem != "":
+		_fail(problem)
+		return
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(_apk_path))
 	_show("ready")
-	_launch_installer()
 
 
 ## "" when the file at path matches latest.json's size and SHA-256, else what is wrong.
@@ -203,6 +253,87 @@ static func verify(path: String, info: Dictionary) -> String:
 	return ""
 
 
+## True when files can be created in dir.
+static func writable(dir: String) -> bool:
+	var probe := dir.path_join(".fpscad-write-test")
+	var f := FileAccess.open(probe, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.close()
+	DirAccess.remove_absolute(probe)
+	return true
+
+
+## Unpacks the build zip at zip_path over dest (Windows). The zip holds one top folder, which is
+## dropped. Each existing file is renamed to <name>.<tag> first, since Windows won't overwrite a
+## running exe or a loaded DLL but will rename it. Returns "" or what went wrong; on failure the
+## files already swapped are put back.
+static func unpack_over(zip_path: String, dest: String, tag: String) -> String:
+	var zip := ZIPReader.new()
+	if zip.open(zip_path) != OK:
+		return "The download could not be opened as a zip."
+	var entries := []  # [path inside the zip, path relative to dest]
+	for name in zip.get_files():
+		if name.ends_with("/"):
+			continue
+		var rel := name.substr(name.find("/") + 1) if name.contains("/") else name
+		if rel == "" or rel.contains(".."):
+			continue
+		entries.append([name, rel])
+	if not entries.any(func(e): return String(e[1]).get_extension().to_lower() == "exe"):
+		zip.close()
+		return "The download doesn't contain the game."
+	var swapped := []  # [target, aside]
+	var created := []
+	for e in entries:
+		var target := dest.path_join(e[1])
+		DirAccess.make_dir_recursive_absolute(target.get_base_dir())
+		if FileAccess.file_exists(target):
+			var aside := "%s.%s" % [target, tag]
+			if FileAccess.file_exists(aside):
+				DirAccess.remove_absolute(aside)
+			if DirAccess.rename_absolute(target, aside) != OK:
+				_restore(swapped, created)
+				zip.close()
+				return "Couldn't replace %s: it may be open in another program." % e[1]
+			swapped.append([target, aside])
+		var f := FileAccess.open(target, FileAccess.WRITE)
+		if f == null:
+			_restore(swapped, created)
+			zip.close()
+			return "Couldn't write %s." % e[1]
+		f.store_buffer(zip.read_file(e[0]))
+		f.close()
+		created.append(target)
+	zip.close()
+	return ""
+
+
+static func _restore(swapped: Array, created: Array) -> void:
+	for t in created:
+		DirAccess.remove_absolute(t)
+	for pair in swapped:
+		DirAccess.rename_absolute(pair[1], pair[0])
+
+
+## Removes the files a Windows update set aside (*.old-<build>) once they're no longer in use.
+static func remove_replaced(dir: String) -> void:
+	var d := DirAccess.open(dir)
+	if d == null:
+		return
+	for f in d.get_files():
+		if f.get_extension().begins_with("old-"):
+			d.remove(f)
+
+
+## Starts the newly installed game and closes this one (Windows).
+func _restart() -> void:
+	before_install.emit()
+	var args := OS.get_cmdline_user_args()
+	OS.create_process(OS.get_executable_path(), ["--"] + Array(args) if not args.is_empty() else [])
+	get_tree().quit()
+
+
 func _launch_installer() -> void:
 	before_install.emit()
 	var err := OS.shell_open(ProjectSettings.globalize_path(_apk_path))
@@ -215,7 +346,7 @@ func _clean_old_downloads() -> void:
 	if dir == null:
 		return
 	for f in dir.get_files():
-		if f.ends_with(".apk"):
+		if f.ends_with(".apk") or f.ends_with(".zip"):
 			dir.remove(f)
 
 
@@ -268,11 +399,17 @@ func _show(state: String) -> void:
 			_secondary.text = "Cancel"
 			_secondary.grab_focus.call_deferred()
 		"ready":
-			_body.text = ("Android's installer is opening: choose Update. Your files stay as they are.\n\n"
-				+ "The first time, Android asks you to allow installs from FPS-CAD: turn it on, then come back.")
+			if platform() == "windows":
+				_body.text = ("Build %d is installed. Restart to start using it; your work is saved first.\n\n"
+					+ "If you choose Later, it starts the next time you open FPS-CAD.") % int(latest.get("build", 0))
+				_primary.text = "Restart now"
+				_secondary.text = "Later"
+			else:
+				_body.text = ("Android's installer is opening: choose Update. Your files stay as they are.\n\n"
+					+ "The first time, Android asks you to allow installs from FPS-CAD: turn it on, then come back.")
+				_primary.text = "Open installer again"
+				_secondary.text = "Close"
 			_primary.visible = true
-			_primary.text = "Open installer again"
-			_secondary.text = "Close"
 			_primary.grab_focus.call_deferred()
 		"failed":
 			_primary.visible = true
@@ -289,7 +426,10 @@ func _fail(message: String) -> void:
 func _on_primary() -> void:
 	match _state:
 		"ready":
-			_launch_installer()
+			if platform() == "windows":
+				_restart()
+			else:
+				_launch_installer()
 		"failed":
 			install()
 
@@ -302,8 +442,8 @@ func _on_secondary() -> void:
 			_state = ""
 			_layer.visible = false
 		"failed":
-			if latest.has("apk"):
-				OS.shell_open(String(latest.apk))
+			if package_url(latest) != "":
+				OS.shell_open(package_url(latest))
 			_state = ""
 			_layer.visible = false
 
