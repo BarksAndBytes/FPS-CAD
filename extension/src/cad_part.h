@@ -26,6 +26,10 @@ public:
   void make_training();
   void make_desk_sample();
   void new_blank(const godot::String& name, const godot::String& units);
+  godot::String get_material() const;
+  double get_density() const;
+  godot::Array get_boards() const;
+  void set_boards(const godot::Array& boards);
   godot::String load_file(const godot::String& path);  // "" on success, else the reason
   godot::String save_file(const godot::String& path);
   godot::String get_part_name() const;

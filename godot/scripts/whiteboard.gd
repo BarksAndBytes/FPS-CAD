@@ -8,6 +8,10 @@ extends Node3D
 ## The writing is a 2D layout drawn into a SubViewport and shown on a quad over the board's panel.
 ## When the board cannot be read (out of view, or too far away), hud.gd shows notices and the
 ## sketch status on screen as before.
+##
+## The same board also serves the boards the player adds (boards.gd): kind "properties" shows the
+## part's volume, area, mass and size; kind "notes" shows the player's own notes. Every board
+## stands on the floor at its feet, turned by yaw and scaled evenly by board_scale.
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const MODEL := "res://models/whiteboard.glb"
@@ -27,6 +31,13 @@ const NOTICES := 3
 const NOTICE_LIFE := 12.0  # seconds a notice stays on the board
 
 var active := false
+var kind := "messages"     # "messages", "properties" or "notes"
+var board_id := ""
+var yaw := 0.0
+var board_scale := 1.0
+var notes: Array = []      # kind "notes": the player's notes, one per line
+var _notes_box := VBoxContainer.new()
+var _note_labels: Array[Label] = []
 var _model: Node3D
 var _view := SubViewport.new()
 var _quad := MeshInstance3D.new()
@@ -117,10 +128,22 @@ func readable() -> bool:
 ## Stands the board on the floor at feet, its writing facing toward look_at (both Godot space).
 ## glide: move there over half a second instead of at once.
 func place(feet: Vector3, look_at: Vector3, glide := false) -> void:
+	set_pose(feet, facing(feet, look_at), board_scale, glide)
+
+
+## The yaw that turns a board standing at feet to face toward look_at.
+static func facing(feet: Vector3, look_at: Vector3) -> float:
 	var d := look_at - feet
 	d.y = 0.0
-	var yaw := atan2(d.x, d.z) if d.length() > 1e-6 else 0.0
-	var to := Transform3D(Basis(Vector3.UP, yaw), feet)
+	return atan2(d.x, d.z) if d.length() > 1e-6 else 0.0
+
+
+## Stands the board on the floor at feet (Godot space), turned by yaw_angle and scaled evenly by
+## s about its feet, so it stays standing on the floor at any size.
+func set_pose(feet: Vector3, yaw_angle: float, s: float, glide := false) -> void:
+	yaw = yaw_angle
+	board_scale = s
+	var to := Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3.ONE * s), feet)
 	if glide and visible:
 		_glide_from = transform
 		_glide_to = to
@@ -163,7 +186,59 @@ func cast(origin: Vector3, dir: Vector3, max_distance: float) -> Dictionary:
 	else:
 		n = Vector3(0, 0, -signf(dv.z))
 	return {hit = true, env = true, point = origin + dir * t_in, normal = (global_transform.basis * n).normalized(),
-		distance = t_in, feature_id = ""}
+		distance = t_in, feature_id = "", board = self}
+
+
+func feet() -> Vector3:
+	return _glide_to.origin if _glide_t < 1.0 else transform.origin
+
+
+## The board as saved in the part file (views/boards.json).
+func to_dict() -> Dictionary:
+	var p := feet()
+	var d := {id = board_id, kind = kind, position = [p.x, p.y, p.z], yaw = yaw, scale = board_scale}
+	if kind == "notes":
+		d.notes = notes.duplicate()
+	return d
+
+
+# ---------- notes ----------
+
+func set_notes(lines: Array) -> void:
+	notes = lines.duplicate()
+	while _note_labels.size() < notes.size():
+		var l := _ink(54, INK)
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size.x = TEX.x - 96
+		_notes_box.add_child(l)
+		_note_labels.append(l)
+	for i in _note_labels.size():
+		_note_labels[i].visible = i < notes.size()
+		if i < notes.size():
+			_note_labels[i].text = "•  " + String(notes[i])
+	_dirty = true
+
+
+## Which note is written at a point on the board (Godot space), or -1.
+func note_at(point: Vector3) -> int:
+	var px := writing_pixel(point)
+	if px.x < 0.0:
+		return -1
+	for i in notes.size():
+		var r := _note_labels[i].get_global_rect().grow(6.0)
+		if px.y >= r.position.y and px.y <= r.end.y:
+			return i
+	return -1
+
+
+## Where a point (Godot space) falls on the writing, in texture pixels; (-1, -1) off the panel.
+func writing_pixel(point: Vector3) -> Vector2:
+	var local: Vector3 = global_transform.affine_inverse() * point - PANEL_CENTRE
+	var u := local.dot(PANEL_RIGHT) / PANEL_SIZE.x + 0.5
+	var v := 0.5 - local.dot(PANEL_UP.normalized()) / PANEL_SIZE.y
+	if u < 0.0 or u > 1.0 or v < 0.0 or v > 1.0:
+		return Vector2(-1, -1)
+	return Vector2(u * TEX.x, v * TEX.y)
 
 
 # ---------- every frame ----------
@@ -233,7 +308,7 @@ func _build_writing() -> void:
 	margin.add_child(col)
 	_kicker = _ink(30, RED, true)
 	_heading = _ink(60, INK, true)
-	_body = _ink(38, INK)
+	_body = _ink(38 if kind == "messages" else 50, INK)  # the player's boards have room to spare
 	_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_body.custom_minimum_size.x = TEX.x - 96
 	for l in [_kicker, _heading, _body]:
@@ -252,6 +327,8 @@ func _build_writing() -> void:
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_status.custom_minimum_size.x = TEX.x - 96
 	col.add_child(_status)
+	_notes_box.add_theme_constant_override("separation", 10)
+	col.add_child(_notes_box)
 	var gap := Control.new()
 	gap.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(gap)

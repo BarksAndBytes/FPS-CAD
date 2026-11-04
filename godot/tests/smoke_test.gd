@@ -1072,6 +1072,87 @@ func _references(main: Node) -> void:
 	tools._act(true, false)
 	tools.update(tools.aim, 0.016)
 	_check(main.view._com.visible, "Mass properties marks the centre of mass")
+	await _boards(main)
+
+
+## Whiteboards the player adds: a properties board, a notes board, carrying, saving.
+func _boards(main: Node) -> void:
+	var boards: Node3D = main.boards
+	var fy: float = main.view.room.floor_y()
+	main.player.feet = Vector3(3, fy, 3)
+	main.player.yaw = 0.0
+	main.player.pitch = -0.3
+	var before: int = boards.extra.size()
+	main.tools.set_tool_id("board_props")
+	main.tools._act(true, false)
+	await _frames(2)
+	_check(boards.extra.size() == before + 1 and boards.extra[-1].kind == "properties", "Properties board sets up a board")
+	var pb: Node3D = boards.extra[-1]
+	var pl: Array = pb.text_lines()
+	_check(String(pl[0]) == "PART PROPERTIES" and "Volume" in String(pl[2]) and "Bounding box   1,000 × 1,000 × 500 mm" in String(pl[2])
+		and "Mass" in String(pl[2]) and "kg/m³" in String(pl[2]), "it shows the part's volume, mass and bounding box (%s)" % String(pl[2]).replace("\n", " | "))
+	_check(absf(pb.global_position.y - fy) < 1e-6 and pb.global_position.z < 3.0, "it stands on the floor ahead of the player")
+	# A notes board: the first note comes from the text pad.
+	main.tools.set_tool_id("board_notes")
+	main.player.pitch = 0.2  # looking up: a new board stands a little way ahead
+	main.tools._act(true, false)
+	await _frames(2)
+	var nb: Node3D = boards.extra[-1]
+	_check(nb.kind == "notes" and main.numpad.visible, "Notes board sets up a board and asks for the first note")
+	main.numpad._edit.text = "Check the wall thickness"
+	main.numpad._key("OK")
+	boards.set_note(nb, -1, "Fillet the top later")
+	await _frames(3)
+	_check(nb.notes == ["Check the wall thickness", "Fillet the top later"] and "•  Fillet the top later" in nb._note_labels[1].text,
+		"notes are written on the board, one per line")
+	# Aiming at the second note finds it (for editing).
+	var r: Rect2 = nb._note_labels[1].get_global_rect()
+	var px := r.get_center()
+	var local: Vector3 = nb.PANEL_CENTRE + nb.PANEL_RIGHT * (px.x / nb.TEX.x - 0.5) * nb.PANEL_SIZE.x \
+		+ nb.PANEL_UP.normalized() * (0.5 - px.y / nb.TEX.y) * nb.PANEL_SIZE.y
+	_check(nb.note_at(nb.global_transform * local) == 1, "the note under the crosshair is found")
+	boards._ask_note(nb, 0)
+	main.numpad._edit.text = ""
+	main.numpad._key("OK")  # cleared: the note goes
+	_check(nb.notes == ["Fillet the top later"] and not main.numpad.visible, "clearing a note deletes it")
+	# Carrying: it follows the player on the floor, turns and resizes, and is saved where it lands.
+	var s0: float = nb.board_scale
+	var f0: Vector3 = nb.feet()
+	boards.pick_up(nb)
+	_check(main.player.size_locked, "while a board is carried the size keys belong to it")
+	boards.turn(1.0)
+	boards.rescale(1.0)
+	main.player.feet += Vector3(2, 0, 0)
+	boards.update_carry()
+	_check(absf(nb.board_scale - s0 * 1.25) < 1e-6 and absf(nb.feet().x - f0.x - 2.0) < 1e-3 and absf(nb.feet().y - fy) < 1e-6
+		and absf(nb.global_position.y - fy) < 1e-6, "a carried board follows the player, resized, still standing on the floor")
+	boards.drop()
+	var saved_notes: Array = main.doc.get_boards().filter(func(d): return d.kind == "notes")
+	_check(not main.player.size_locked and not saved_notes.is_empty() and saved_notes[-1].notes == ["Fillet the top later"]
+		and absf(float(saved_notes[-1].scale) - s0 * 1.25) < 1e-6, "setting it down saves it in the part")
+	var m0: Vector3 = main.board.feet()
+	boards.pick_up(main.board)
+	main.player.feet += Vector3(-3, 0, 1)
+	boards.update_carry()
+	boards.cancel()
+	_check(main.board.feet().distance_to(m0) < 1e-6, "putting a board back returns it to where it stood")
+	# The layout survives a save and a reopen, and undo leaves boards where they are.
+	var path := OS.get_user_data_dir().path_join("smoke-boards.fpprt")
+	_check(main.doc.save_file(path) == "", "the part saves with its boards")
+	var back = ClassDB.instantiate(&"CadPart")
+	_check(back.load_file(path) == "" and back.get_boards().size() == main.doc.get_boards().size()
+		and back.get_boards().any(func(d): return d.kind == "properties"), "the boards come back with the part (%d)" % back.get_boards().size())
+	main.doc.checkpoint()
+	var kept: Array = main.doc.get_boards()
+	main.doc.set_boards(kept.slice(0, 1))
+	main.doc.undo()
+	_check(main.doc.get_boards().size() == 1, "undo leaves the boards as they are")
+	main.doc.set_boards(kept)
+	boards.remove(main.board)
+	_check(main.board.active, "the message board cannot be removed")
+	boards.remove(pb)
+	_check(not boards.extra.has(pb) and not main.doc.get_boards().any(func(d): return d.get("id", "") == pb.board_id), "a board can be removed")
+	DirAccess.remove_absolute(path)
 
 
 func _frames(n: int) -> void:

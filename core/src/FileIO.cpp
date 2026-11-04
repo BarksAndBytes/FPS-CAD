@@ -169,6 +169,7 @@ void savePart(const std::string& path, const PartDocument& doc, const PartModel*
     z.add("history/features.json", doc.featuresJson().dump(2));
     z.add("history/variables.json", doc.variablesJson().dump(2));
     z.add("views/viewpoints.json", viewpointsJson(doc).dump(2));
+    z.add("views/boards.json", (doc.boards.is_array() ? doc.boards : Json::array()).dump(2));
   });
 }
 
@@ -188,6 +189,14 @@ PartDocument loadPart(const std::string& path) {
     throw;
   } catch (const std::exception& e) {
     throw FileError(path + ": feature history is damaged (" + e.what() + ")");
+  }
+  if (z.has("views/boards.json")) {
+    try {
+      Json b = z.json("views/boards.json");
+      if (b.is_array()) d.boards = b;
+    } catch (const std::exception&) {
+      // A damaged layout only loses the boards, never the part.
+    }
   }
   if (z.has("views/viewpoints.json")) {
     for (auto& v : z.json("views/viewpoints.json")) {

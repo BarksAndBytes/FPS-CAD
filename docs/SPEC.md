@@ -105,6 +105,23 @@ it to each objective). It is solid. While it cannot be read (out of view, behind
 too small on screen) new notices and the sketch status show on screen as before. The screen keeps
 the tool chip and hint, the crosshair and aim label, measurements, menus and dialogs.
 
+**Boards the player adds** (`godot/scripts/boards.gd`, the wheel's **Boards** group, parts only):
+- **Properties board**: the part's name, volume, surface area, mass (with the part's material and
+  density), bounding box, centre of mass, and body and feature counts, in the document's units,
+  updated whenever the part changes. RT sets one up where the crosshair meets the floor (or a
+  little way ahead), facing the player and sized to the player's current size.
+- **Notes board**: the player's notes, one bullet per line. RT on empty floor sets up a board and
+  asks for the first note; RT on a notes board adds a note; LT on a note edits it (clear it to
+  delete it).
+- **Arrange boards**: RT picks up any board, the message board included. A carried board stays at
+  the same distance ahead and turned the same way relative to the player, standing on the floor;
+  D-pad ← / → (mouse wheel) turns it 15°, ↑ / ↓ (= / −) resizes it ×1.25 about its feet (0.1× to
+  12×), RT sets it down, LT puts it back. LT on a board removes it (not the message board).
+  Changing tool sets a carried board down.
+Boards always stand on the room floor, whatever they are scaled to. The layout (kind, position,
+yaw, scale, notes) is saved in the part file as `views/boards.json`, outside the feature history:
+undo and redo leave boards where they are, and the geometry cache stays valid.
+
 ## Challenge mode
 
 A series of target parts to copy (`core/src/Challenges.cpp`), from a 100 × 75 × 50 block to a

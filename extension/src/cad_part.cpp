@@ -82,6 +82,13 @@ String CadPart::save_file(const String& path) {
 String CadPart::get_part_name() const { return str(model_->document().name); }
 String CadPart::get_units() const { return str(model_->document().units); }
 String CadPart::get_file_id() const { return str(model_->document().fileId); }
+String CadPart::get_material() const { return str(model_->document().material); }
+double CadPart::get_density() const { return model_->document().density; }
+Array CadPart::get_boards() const {
+  Variant v = jsonToVariant(model_->document().boards);
+  return v.get_type() == Variant::ARRAY ? Array(v) : Array();
+}
+void CadPart::set_boards(const Array& boards) { model_->document().boards = variantToJson(boards); }
 
 Dictionary CadPart::rebuild() {
   fpcad::RebuildReport r = model_->rebuild();
@@ -213,7 +220,9 @@ void CadPart::drop_checkpoint() {
 bool CadPart::undo() {
   if (undo_.empty()) return false;
   redo_.push_back(model_->document());
+  fpcad::Json boards = model_->document().boards;  // the boards stay where they stand
   model_->document() = undo_.back();
+  model_->document().boards = boards;
   undo_.pop_back();
   model_->rebuild();
   return true;
@@ -222,7 +231,9 @@ bool CadPart::undo() {
 bool CadPart::redo() {
   if (redo_.empty()) return false;
   undo_.push_back(model_->document());
+  fpcad::Json boards = model_->document().boards;
   model_->document() = redo_.back();
+  model_->document().boards = boards;
   redo_.pop_back();
   model_->rebuild();
   return true;
@@ -866,6 +877,10 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_part_name"), &CadPart::get_part_name);
   ClassDB::bind_method(D_METHOD("get_units"), &CadPart::get_units);
   ClassDB::bind_method(D_METHOD("get_file_id"), &CadPart::get_file_id);
+  ClassDB::bind_method(D_METHOD("get_material"), &CadPart::get_material);
+  ClassDB::bind_method(D_METHOD("get_density"), &CadPart::get_density);
+  ClassDB::bind_method(D_METHOD("get_boards"), &CadPart::get_boards);
+  ClassDB::bind_method(D_METHOD("set_boards", "boards"), &CadPart::set_boards);
   ClassDB::bind_method(D_METHOD("rebuild"), &CadPart::rebuild);
   ClassDB::bind_method(D_METHOD("body_count"), &CadPart::body_count);
   ClassDB::bind_method(D_METHOD("build_mesh", "body", "deflection"), &CadPart::build_mesh);

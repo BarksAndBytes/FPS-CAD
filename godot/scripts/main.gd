@@ -32,6 +32,7 @@ var view: Node3D
 var tools: Node
 var hud: CanvasLayer
 var board: Node3D  # whiteboard.gd: the messages, standing in the room
+var boards: Node3D  # boards.gd: the whiteboards the player adds, and carrying any board
 var wheel: Control
 var touch: Control
 var cmap: CanvasLayer
@@ -80,6 +81,9 @@ func _ready() -> void:
 	board = Whiteboard.new()
 	add_child(board)
 	hud.board = board
+	boards = preload("res://scripts/boards.gd").new()
+	boards.game = self
+	add_child(boards)
 	player = preload("res://scripts/player.gd").new()
 	add_child(player)
 	player.cast = _cast
@@ -91,7 +95,11 @@ func _ready() -> void:
 	tools.player = player
 	tools.hud = hud
 	tools.changed.connect(_on_model_changed)
-	tools.tool_switched.connect(func(_i): _show_tool())
+	tools.tool_switched.connect(func(_i):
+		boards.drop()  # changing tool sets a carried board down
+		_show_tool()
+	)
+	tools.board_tool.connect(boards.act)
 	tools.sketch_requested.connect(_on_sketch_requested)
 	tools.feature_requested.connect(_on_feature_requested)
 	tools.reference_requested.connect(_on_reference_requested)
@@ -189,6 +197,7 @@ func _show_title() -> void:
 	hud.set_panel(false)
 	hud.visible = false
 	board.hide_board()
+	boards.clear()
 	wheel.close(false)
 	player.input_enabled = false
 	if doc == null or is_assembly or doc.get_part_name() != "Pavilion":
@@ -262,6 +271,7 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 		board.place(Vector3(-1.45, fy, -0.25), Vector3(0, fy, view.room.top.end.y + 1.3))
 	elif m != "training":
 		place_board_ahead(false)
+	boards.load_from(doc)  # the part's own boards, and the message board where it was left
 	tools.reset()
 	if m == "new" or m == "challenge":
 		tools.set_tool_id("sketch")
@@ -379,12 +389,14 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 	hud.doc = doc
 	hud.units = doc.get_units() if doc.has_method("get_units") else "mm"
 	hud.refresh_panel()
+	boards.load_from(doc)
 	_show_tool()
 
 
 func _on_model_changed() -> void:
 	view.refresh()
 	tools.model_changed()
+	boards.refresh_properties()
 	if hud.panel_open:
 		hud.refresh_panel()
 	if challenge != null:
@@ -542,8 +554,11 @@ func _cast(origin: Vector3, dir: Vector3, max_distance: float) -> Dictionary:
 		if not th.is_empty() and (hit.is_empty() or th.distance < hit.distance):
 			hit = th
 	var bh: Dictionary = board.cast(origin, dir, max_distance)
-	if not bh.is_empty() and (hit.is_empty() or bh.distance < hit.distance):
+	if not bh.is_empty() and (hit.is_empty() or bh.distance < hit.distance) and bh.board != boards.carried():
 		hit = bh
+	var xh: Dictionary = boards.cast_extra(origin, dir, max_distance)
+	if not xh.is_empty() and (hit.is_empty() or xh.distance < hit.distance):
+		hit = xh
 	var env: Dictionary = view.room.cast(origin, dir, max_distance)
 	if not env.is_empty() and (hit.is_empty() or env.distance < hit.distance):
 		return env
@@ -595,6 +610,7 @@ func _process(dt: float) -> void:
 		hud.set_status(sketcher.status_text(), Color("f2f5f8") if sketcher.defined() else Color("7cc4ff"))
 	else:
 		tools.update(_aim if playing and not dialog.visible else {}, dt)
+		boards.update_carry()
 	hud.set_readout(player.size, player.grid_step(), player.snap_step(), player.fly, player.feet)
 	hud.set_measure(tools.measure_text())
 	touch.set_fly(player.fly)
@@ -717,7 +733,17 @@ func _gameplay_input() -> void:
 	for i in 9:
 		if Input.is_action_just_pressed(StringName("tool_%d" % (i + 1))):
 			_wheel_shortcut(i)
-	if Input.is_action_just_pressed(&"redo"):
+	if boards.carrying():
+		# Carrying a board: the D-pad (or +/- and the mouse wheel) turns and resizes it.
+		if Input.is_action_just_pressed(&"undo"):
+			boards.turn(1.0)
+		if Input.is_action_just_pressed(&"redo"):
+			boards.turn(-1.0)
+		if Input.is_action_just_pressed(&"grow"):
+			boards.rescale(1.0)
+		if Input.is_action_just_pressed(&"shrink"):
+			boards.rescale(-1.0)
+	elif Input.is_action_just_pressed(&"redo"):
 		if doc.has_method("redo") and doc.redo():
 			_on_model_changed()
 			hud.toast("Redo")
@@ -780,6 +806,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if dialog.visible and not hud.menu_open:
 		if dialog.handle(event):
 			get_viewport().set_input_as_handled()
+		return
+	if boards.carrying() and event is InputEventMouseButton and event.pressed \
+			and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		boards.turn(1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0)
+		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed(&"controller_map"):
 		hud.set_panel(false)

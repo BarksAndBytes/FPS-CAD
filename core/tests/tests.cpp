@@ -968,6 +968,7 @@ int main() {
     PartModel m(PartDocument::sample());
     m.rebuild();
     std::string path = (out / "pavilion.fpprt").string();
+    m.document().boards = Json::array({Json{{"kind", "notes"}, {"yaw", 1.5}, {"notes", Json::array({"check the wall"})}}});
     savePart(path, m.document(), &m);
     CHECK(fileKind(path) == FileKind::Part);
     CHECK(!fs::exists(path + ".tmp"));
@@ -976,7 +977,9 @@ int main() {
     CHECK(back.variablesJson() == m.document().variablesJson());
     CHECK(back.fileId == m.document().fileId);
     CHECK(back.viewpoints.size() == 1);
-    CHECK(cachedBodyCount(path) == 1);
+    CHECK(back.boards.size() == 1 && back.boards[0].value("kind", "") == "notes" &&
+          back.boards[0]["notes"][0] == "check the wall");
+    CHECK(cachedBodyCount(path) == 1);  // the boards are not history: the geometry cache still holds
     // Editing the history makes the cache stale.
     back.features[0].params["h"] = 0.5;
     savePart(path, back);

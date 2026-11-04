@@ -35,6 +35,8 @@ var input_enabled := true
 ## While a feature panel is open the player can still walk and look, but the D-pad, A and the
 ## size keys belong to the panel.
 var limited := false
+## While a whiteboard is carried, the size keys, D-pad and mouse wheel turn and scale the board.
+var size_locked := false
 var look_from_touch := Vector2.ZERO
 var look_stick_touch := Vector2.ZERO  # the on-screen look stick, -1..1, like a controller stick
 var move_from_touch := Vector2.ZERO
@@ -175,7 +177,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_pan(Vector2(event.relative.x, -event.relative.y) * 0.0035 * (PRECISION if precision else 1.0))
 	elif event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look(event.relative * MOUSE_SENS * (PRECISION if precision else 1.0))
-	elif event is InputEventMouseButton and event.pressed and not limited:
+	elif event is InputEventMouseButton and event.pressed and not limited and not size_locked:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			scale_by(1.15)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -246,6 +248,8 @@ func _read_actions(dt: float) -> void:
 
 
 func _read_size_actions(dt: float) -> void:
+	if size_locked:
+		return
 	if Input.is_action_just_pressed(&"precision_aim") and view_lock:
 		precision = not precision
 	if Input.is_action_just_pressed(&"reset_size"):

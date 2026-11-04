@@ -25,6 +25,7 @@ var _text_ok: Button
 var _letters: Array[Button] = []
 var _lower := false
 var _text_mode := false
+var _allow_empty := false
 var _cb := Callable()
 var _fresh := true  # the first key press replaces the value shown
 
@@ -86,14 +87,17 @@ func _ready() -> void:
 
 ## Opens the pad. callback(text: String) runs when the value is accepted; cancelling runs nothing.
 func ask(title: String, initial: String, hint: String, callback: Callable) -> void:
+	_allow_empty = false
 	_set_mode(false)
 	_open(title, initial, hint, callback)
 
 
-## Opens the pad for words (sketch text): letters on screen, or type on a keyboard.
-func ask_text(title: String, initial: String, hint: String, callback: Callable) -> void:
+## Opens the pad for words (sketch text, notes): letters on screen, or type on a keyboard.
+## allow_empty: OK with nothing typed hands back "" (a note cleared to delete it).
+func ask_text(title: String, initial: String, hint: String, callback: Callable, allow_empty := false) -> void:
 	_set_mode(true)
 	_open(title, initial, hint, callback)
+	_allow_empty = allow_empty
 
 
 func _set_mode(text: bool) -> void:
@@ -160,7 +164,7 @@ func _key(k: String) -> void:
 
 func _submit() -> void:
 	var text := _edit.text.strip_edges()
-	if text == "":
+	if text == "" and not _allow_empty:
 		return
 	var cb := _cb
 	close()

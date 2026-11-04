@@ -64,6 +64,9 @@ struct PartDocument {
   std::vector<Variable> variables;
   std::vector<Feature> features;
   std::vector<Viewpoint> viewpoints;
+  // Whiteboards standing in the room (the game's own layout data: kind, where, notes). Not part
+  // of the history: undo and redo leave them where they are.
+  Json boards = Json::array();
 
   Feature* find(const std::string& id);
   const Feature* find(const std::string& id) const;

@@ -8,6 +8,7 @@ signal tool_switched(index: int)
 signal sketch_requested(plane: Dictionary, plane_name: String, edit_id: String)
 signal feature_requested(type: String, sketch_id: String, op: String)
 signal reference_requested(type: String, params: Dictionary)  # main.gd opens the panel when it has sizes
+signal board_tool(id: String, primary: bool)  # main.gd hands it to boards.gd
 
 ## How the tool wheel groups the tools: single tools and groups on the inner ring, a group's
 ## tools branching out from it (tool_wheel.gd). Entries are tool ids or [group name, description,
@@ -22,6 +23,8 @@ const WHEEL := [
 	["Primitives", "Place ready-made shapes", ["box", "cylinder", "sphere"]],
 	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
 	["Measure", "Distances, the bounding box, and mass properties", ["measure", "bbox", "mass"]],
+	["Boards", "Whiteboards in the room: part properties, your notes; carry, turn and resize them",
+		["board_props", "board_notes", "board_arrange"]],
 ]
 const TOOLS := [
 	{id = "select", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
@@ -47,9 +50,13 @@ const TOOLS := [
 	{id = "ref_csys", name = "Coordinate system", pri = "place on a face (corner snaps)", alt = "start again", opt = []},
 	{id = "bbox", name = "Bounding box", pri = "show the size on the board", alt = "hide", opt = []},
 	{id = "mass", name = "Mass properties", pri = "show volume, mass and centre of mass", alt = "hide", opt = []},
+	{id = "board_props", name = "Properties board", pri = "set up a board of the part's properties", alt = "remove the board you aim at", opt = []},
+	{id = "board_notes", name = "Notes board", pri = "add a note (here, or to the board you aim at)", alt = "edit the note you aim at", opt = []},
+	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
 const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
-	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass"]
+	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_arrange"]
+const BOARD_TOOLS := ["board_props", "board_notes", "board_arrange"]
 const REF_TOOLS := ["ref_plane", "ref_axis", "ref_point", "ref_csys"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
 const OPS := {"add": "add", "cut": "cut", "new body": "new-body"}
@@ -341,6 +348,8 @@ func _act(primary: bool, repeat: bool) -> void:
 				_grab = {id = copy, plane_y = hit.point.y, last = hit.point}
 		"ref_plane", "ref_axis", "ref_point", "ref_csys":
 			_act_reference(primary, hit)
+		"board_props", "board_notes", "board_arrange":
+			board_tool.emit(tool().id, primary)
 		"bbox":
 			_show_bbox = primary
 			if primary:
