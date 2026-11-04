@@ -12,6 +12,8 @@ signal reference_requested(type: String, params: Dictionary)  # main.gd opens th
 ## How the tool wheel groups the tools: single tools and groups on the inner ring, a group's
 ## tools branching out from it (tool_wheel.gd). Entries are tool ids or [group name, description,
 ## [tool ids]].
+const Units := preload("res://scripts/units.gd")
+
 const WHEEL := [
 	"select",
 	"sketch",
@@ -360,8 +362,7 @@ func _act(primary: bool, repeat: bool) -> void:
 					_show_mass = false
 				else:
 					var c: Vector3 = m.centre_of_mass
-					hud.toast("Volume %s · area %s · mass %.3f kg · centre of mass X %s Y %s Z %s" % [_volume_text(m.volume),
-						_area_text(m.area), float(m.mass), hud.length(c.x), hud.length(-c.z), hud.length(c.y)])
+					hud.toast(mass_summary(m, hud.units, hud.length(c.x), hud.length(-c.z), hud.length(c.y)))
 		"measure":
 			if not primary:
 				_measure_a = null
@@ -813,20 +814,12 @@ func _update_preview(hit: Dictionary) -> void:
 	hud.set_aim(label, on_feature)
 
 
-func _volume_text(v: float) -> String:
-	var u: String = hud.units
-	if u == "m":
-		return "%.4f m³" % v
-	var k: float = {"mm": 1e9, "cm": 1e6, "in": 61023.7}.get(u, 1e9)
-	return "%.4g %s³" % [v * k, u]
-
-
-func _area_text(a: float) -> String:
-	var u: String = hud.units
-	if u == "m":
-		return "%.4f m²" % a
-	var k: float = {"mm": 1e6, "cm": 1e4, "in": 1550.0}.get(u, 1e6)
-	return "%.4g %s²" % [a * k, u]
+## The Mass properties readout: volume, surface area and mass in the document's units, then the
+## centre of mass (already formatted, X Y Z as the player sees them).
+static func mass_summary(m: Dictionary, units: String, cx: String, cy: String, cz: String) -> String:
+	return "Volume %s · area %s · mass %s · centre of mass X %s Y %s Z %s" % [
+		Units.volume_text(float(m.volume), units), Units.area_text(float(m.area), units),
+		Units.mass_text(float(m.mass)), cx, cy, cz]
 
 
 func _sketch_name(id: String) -> String:

@@ -105,6 +105,16 @@ func _run() -> void:
 	var aimed: Dictionary = blank.pick_sketch(Vector3(0.5, 0.25, 5), Vector3(0, 0, -1), 20.0, 0.02, false)
 	_check(aimed.get("feature_id", "") == sk_id and aimed.region == 0, "pick_sketch finds the profile")
 
+	# Mass properties readout: significant figures in the document's units, small masses in grams.
+	var U = load("res://scripts/units.gd")
+	_check(U.significant(1234567.0) == "1,235,000" and U.significant(12.5) == "12.5" and U.significant(0.000123456) == "0.0001235"
+		and U.significant(-2500.0) == "-2,500", "numbers are shown to four significant figures (%s, %s, %s)" % [U.significant(1234567.0), U.significant(12.5), U.significant(0.000123456)])
+	var box_m := {volume = 0.05 * 0.04 * 0.01, area = 2.0 * (0.05 * 0.04 + 0.05 * 0.01 + 0.04 * 0.01), mass = 0.05 * 0.04 * 0.01 * 7850.0}
+	var summary: String = load("res://scripts/tools.gd").mass_summary(box_m, "mm", "25 mm", "20 mm", "5.0 mm")
+	_check(summary.begins_with("Volume 20,000 mm³ · area 5,800 mm² · mass 157 g"), "a 50 × 40 × 10 mm steel block reads 20,000 mm³, 5,800 mm², 157 g (%s)" % summary)
+	_check(U.volume_text(0.25, "m") == "0.25 m³" and U.area_text(0.0001, "cm") == "1 cm²" and U.mass_text(12.3456) == "12.35 kg",
+		"volume, area and mass read in metres, centimetres and kilograms too")
+
 	# Update checks: the decision logic, without touching the network.
 	var up = load("res://scripts/updater.gd")
 	var newer: Dictionary = up.evaluate({build = 12, apk = "https://example.invalid/a.apk", signing = "release"}, 11)
