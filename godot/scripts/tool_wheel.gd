@@ -18,6 +18,8 @@ const RADIUS := 150.0
 const SLOT := 92.0
 const CHILD := 84.0
 const SPREAD := 0.62  # radians between neighbouring tools on a branch
+const BRANCH_PUSH := 130.0  # mouse travel (px) past which pointing picks a tool on the group's branch
+const MAX_PUSH := 220.0
 const ACCENT := Color("ff8a3d")
 
 var tree: Array = []
@@ -166,12 +168,24 @@ func close(_commit := false) -> int:
 	return -1
 
 
-## Accumulates pointer motion (mouse relative or right stick) into a direction.
+## Accumulates pointer motion (mouse relative or right stick) into a direction. At the inner ring,
+## pushing on past a group (beyond BRANCH_PUSH) keeps that group and picks the tool on its branch
+## by direction, so a mouse alone can choose any tool in one move while the wheel key is held.
 func point(delta: Vector2) -> void:
-	_vec = (_vec + delta).limit_length(120.0)
+	_vec = (_vec + delta).limit_length(MAX_PUSH)
 	if _vec.length() < 30.0 or tree.is_empty():
 		return
 	var a := _vec.angle()
+	if group < 0 and _vec.length() > BRANCH_PUSH and hover >= 0 and tree[hover].has("children"):
+		var kids: Array = tree[hover].children
+		var pick := 0
+		for k in kids.size():
+			if absf(angle_difference(a, _kid_angle(hover, k))) < absf(angle_difference(a, _kid_angle(hover, pick))):
+				pick = k
+		if pick != branch:
+			branch = pick
+			_refresh()
+		return
 	if group < 0:
 		var best := 0
 		for i in tree.size():

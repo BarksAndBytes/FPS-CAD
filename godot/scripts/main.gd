@@ -664,7 +664,7 @@ func _open_wheel(from_button: bool, group := -1) -> void:
 	var how := "aim, then %s" % Actions.prompt(&"ui_accept")
 	if not from_button:
 		how = ("right stick: group · left stick: tool · let go to pick" if Actions.last_device == "controller"
-			else "mouse: group · WASD: tool · let go to pick")
+			else "mouse: group, then further out: tool · click or let go to pick")
 	wheel.setup(_wheel_tree(), title, how + "   ·   %s back" % Actions.prompt(&"ui_cancel"))
 	wheel.open(_wheel_current())
 	if group >= 0:
@@ -702,8 +702,11 @@ func _gameplay_input() -> void:
 			wheel.close()
 			return
 		var released: bool = not _wheel_from_button and Input.is_action_just_released(&"tool_wheel")
+		# A click picks too while the mouse is captured (holding Q); with the pointer showing, the
+		# wheel's buttons take clicks themselves.
 		var pressed: bool = Input.is_action_just_pressed(&"ui_accept") \
-			or (Input.is_action_just_pressed(&"primary") and Actions.last_device != "keyboard")
+			or (Input.is_action_just_pressed(&"primary")
+				and (Actions.last_device != "keyboard" or Input.mouse_mode == Input.MOUSE_MODE_CAPTURED))
 		if released or pressed:
 			var r: int = wheel.commit(released)
 			if r == ToolWheel.ENTERED:
@@ -846,11 +849,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(&"model_panel"):
 		hud.toggle_panel()
 		get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and wheel.visible and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		wheel.point(event.relative)
 	elif event is InputEventMouseButton and event.pressed and not modal_open() \
 			and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and Actions.last_device == "keyboard":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED  # first click on the view grabs the mouse
+		get_viewport().set_input_as_handled()
+
+
+## Holding Q, the mouse is captured and steers the wheel. This runs before the GUI: the wheel's
+## full-screen layer sits under the (hidden) pointer and would take the motion otherwise.
+func _input(event: InputEvent) -> void:
+	if wheel != null and wheel.visible and event is InputEventMouseMotion \
+			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and state == "play":
+		wheel.point(event.relative)
 		get_viewport().set_input_as_handled()
 
 

@@ -347,6 +347,25 @@ func _run() -> void:
 	main._wheel_pick(main.wheel.commit(true))
 	_check(not main.wheel.visible and main.tools.tool().id == "sweep",
 		"letting go with only a group picked closes the wheel and keeps the tool")
+	# Mouse, holding Q: move toward Solids, then further out toward Loft, let go: Loft.
+	main._open_wheel(false)
+	main.wheel.point(Vector2.from_angle(main.wheel._slot_angle(solids)) * 100.0)
+	_check(main.wheel.hover == solids and main.wheel.branch == -1, "the mouse points at a group")
+	var out_to: Vector2 = Vector2.from_angle(main.wheel._kid_angle(solids, 3)) * 200.0
+	main.wheel.point(out_to - main.wheel._vec)
+	main._wheel_pick(main.wheel.commit(true))
+	_check(not main.wheel.visible and main.tools.tool().id == "loft", "moving the mouse further out picks a tool on the group's branch")
+	# A captured-mouse motion reaches the wheel before the wheel's own layer can swallow it.
+	main._open_wheel(false)
+	var mm := InputEventMouseMotion.new()
+	mm.relative = Vector2.from_angle(main.wheel._slot_angle(solids)) * 100.0
+	var was_mode := Input.mouse_mode
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:  # headless may not capture
+		main._input(mm)
+		_check(main.wheel.hover == solids, "mouse motion while holding Q steers the wheel")
+	Input.mouse_mode = was_mode
+	main.wheel.close()
 	main._open_wheel(true)
 	main.wheel.enter(solids)
 	main.wheel.back()

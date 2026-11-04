@@ -64,7 +64,7 @@ any way you like, in any orientation, and it passes when the geometry matches. P
 | Left stick | WASD | Move (L3 toggles sprint; Shift sprints) |
 | Right stick | Mouse | Look (R3 / Alt: precision aim) |
 | RT / LT | Left / right click | Tool primary / secondary action |
-| Hold RB | Hold Q | Tool wheel |
+| Hold RB | Hold Q | Tool wheel (mouse toward a group, then further out toward a tool; let go of Q or click to pick) |
 | LB | E | Cycle the tool's option |
 | D-pad ↑ / ↓ | Scroll, = / − | Grow / shrink (a tap is a gentle step, holding keeps going and speeds up; sizes glide); R resets to 1:1, about 6 ft tall |
 | D-pad ← / → | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
