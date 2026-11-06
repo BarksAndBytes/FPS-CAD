@@ -27,6 +27,11 @@ public:
   void make_desk_sample();
   void new_blank(const godot::String& name, const godot::String& units);
   godot::String get_material() const;
+  godot::String get_mass_units() const;
+  godot::Array material_library() const;
+  godot::Dictionary material_info() const;
+  godot::Dictionary set_material(const godot::String& name, double density = 0.0);
+  godot::Dictionary set_units(const godot::String& length, const godot::String& mass);
   double get_density() const;
   godot::Array get_boards() const;
   void set_boards(const godot::Array& boards);

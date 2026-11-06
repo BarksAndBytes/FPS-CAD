@@ -1,5 +1,9 @@
 #include "fpcad/Document.h"
 
+#include <cmath>
+
+#include "fpcad/Expression.h"
+
 #include <cctype>
 #include <random>
 #include <stdexcept>
@@ -330,6 +334,130 @@ void AssemblyDocument::loadMates(const Json& j) {
     m.suppressed = e.value("suppressed", false);
     mates.push_back(std::move(m));
   }
+}
+
+std::string PartDocument::massUnit() const {
+  if (massUnits == "g" || massUnits == "kg" || massUnits == "lb") return massUnits;
+  if (units == "in" || units == "ft") return "lb";
+  if (units == "m") return "kg";
+  return "g";
+}
+
+namespace {
+
+bool same(double a, double b) { return std::abs(a - b) <= 1e-9 * std::max(1.0, std::max(std::abs(a), std::abs(b))); }
+
+// Where each plain number literal sits in expr: [start, end) of numbers not glued to a name and
+// not already followed by a unit or a name.
+std::vector<std::pair<size_t, size_t>> plainNumbers(const std::string& s) {
+  std::vector<std::pair<size_t, size_t>> out;
+  size_t i = 0;
+  auto ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+  while (i < s.size()) {
+    char c = s[i];
+    bool startsNumber = (std::isdigit(static_cast<unsigned char>(c)) || c == '.') && (i == 0 || !ident(s[i - 1]));
+    if (!startsNumber) {
+      if (ident(c)) {
+        while (i < s.size() && ident(s[i])) ++i;  // skip a whole name, digits and all
+      } else {
+        ++i;
+      }
+      continue;
+    }
+    size_t j = i;
+    while (j < s.size() && (std::isdigit(static_cast<unsigned char>(s[j])) || s[j] == '.')) ++j;
+    if (j < s.size() && (s[j] == 'e' || s[j] == 'E')) {
+      size_t k = j + 1;
+      if (k < s.size() && (s[k] == '+' || s[k] == '-')) ++k;
+      if (k < s.size() && std::isdigit(static_cast<unsigned char>(s[k]))) {
+        j = k;
+        while (j < s.size() && std::isdigit(static_cast<unsigned char>(s[j]))) ++j;
+      }
+    }
+    size_t k = j;
+    while (k < s.size() && std::isspace(static_cast<unsigned char>(s[k]))) ++k;
+    if (k >= s.size() || !std::isalpha(static_cast<unsigned char>(s[k]))) out.push_back({i, j});
+    i = j;
+  }
+  return out;
+}
+
+// expr with the old unit written after each plain number read as a length in that unit, so it
+// means the same in any unit. Strings that are not length expressions come back unchanged.
+std::string pinLengths(const std::string& expr, const VariableTable& vars, double oldScale, double newScale,
+                       const std::string& oldUnit) {
+  double base;
+  try {
+    base = evaluate(expr, vars, Quantity::Length, oldScale);
+    if (same(evaluate(expr, vars, Quantity::Length, newScale), base)) return expr;
+  } catch (const std::exception&) {
+    return expr;
+  }
+  std::string s = expr;
+  auto nums = plainNumbers(s);
+  for (auto it = nums.rbegin(); it != nums.rend(); ++it) {
+    std::string candidate = s.substr(0, it->second) + " " + oldUnit + s.substr(it->second);
+    try {
+      if (same(evaluate(candidate, vars, Quantity::Length, oldScale), base)) s = candidate;
+    } catch (const std::exception&) {
+    }
+  }
+  return s;
+}
+
+// Keys whose strings are never lengths: angles, text and references.
+bool notLength(const std::string& key) {
+  static const char* skip[] = {"angle", "total", "text", "font", "name", "id", "kind", "type", "edges", "target",
+                               "refs", "op", "plane", "ref", "centre", "entities"};
+  for (const char* k : skip)
+    if (key == k) return true;
+  return false;
+}
+
+void pinJson(Json& j, const VariableTable& vars, double oldScale, double newScale, const std::string& oldUnit) {
+  if (j.is_object()) {
+    bool angleConstraint = j.value("kind", std::string()) == "angle";
+    for (auto& [k, v] : j.items()) {
+      if (notLength(k) || (angleConstraint && k == "value")) continue;
+      if (v.is_string()) {
+        v = pinLengths(v.get<std::string>(), vars, oldScale, newScale, oldUnit);
+      } else {
+        pinJson(v, vars, oldScale, newScale, oldUnit);
+      }
+    }
+  } else if (j.is_array()) {
+    for (auto& v : j) {
+      if (v.is_string()) {
+        v = pinLengths(v.get<std::string>(), vars, oldScale, newScale, oldUnit);
+      } else {
+        pinJson(v, vars, oldScale, newScale, oldUnit);
+      }
+    }
+  }
+}
+
+}  // namespace
+
+bool PartDocument::changeUnits(const std::string& to) {
+  double oldScale, newScale;
+  try {
+    oldScale = unitScale(units);
+    newScale = unitScale(to);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (to == units) return true;
+  VariableTable vars;
+  for (auto& v : variables) {
+    v.expr = pinLengths(v.expr, vars, oldScale, newScale, units);
+    try {
+      vars[v.name] = evaluate(v.expr, vars, Quantity::Length, newScale);
+    } catch (const std::exception&) {
+    }
+  }
+  for (auto& f : features) pinJson(f.params, vars, oldScale, newScale, units);
+  units = to;
+  return true;
 }
 
 }  // namespace fpcad

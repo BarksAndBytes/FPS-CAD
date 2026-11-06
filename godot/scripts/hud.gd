@@ -11,6 +11,7 @@ const MUTED := Color("9ba7b6")
 const ACCENT := Color("ff8a3d")
 const MEASURE := Color("ffd166")
 const UiTheme := preload("res://scripts/ui_theme.gd")
+const Units := preload("res://scripts/units.gd")
 
 var doc: RefCounted
 ## whiteboard.gd: notices, the sketch status and the readout go on the board in the room; the
@@ -190,9 +191,17 @@ func _process(dt: float) -> void:
 
 # ---------- readouts ----------
 
-## Formats a length in metres the way an engineer reads it: mm below a metre, m above.
+## Formats a length in metres the way an engineer reads it: in metric parts mm below a metre and
+## m above; in inch parts inches (feet past 1,000 in); in foot parts feet (inches below a foot).
 func length(v: float) -> String:
 	var a := absf(v)
+	if units == "in" or units == "ft":
+		var inches := v / 0.0254
+		if absf(inches) < 1.0:
+			return "%.3f in" % inches
+		if units == "in" and absf(inches) < 1000.0 or units == "ft" and absf(inches) < 12.0:
+			return "%.2f in" % inches
+		return "%.2f ft" % (v / 0.3048)
 	if a >= 1000.0:
 		return "%.2f km" % (v / 1000.0)
 	if a >= 1.0:
@@ -325,6 +334,11 @@ func refresh_panel() -> void:
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 		hint.add_theme_color_override("font_color", MUTED)
 		_params.add_child(hint)
+		if doc.has_method("material_info"):
+			var part := Label.new()
+			part.text = "Units  %s\nMaterial  %s" % [Units.system_label(units, doc.get_mass_units()), doc.get_material()]
+			part.autowrap_mode = TextServer.AUTOWRAP_WORD
+			_params.add_child(part)
 	else:
 		title.text = "%s  ·  %s" % [current.name, current.type]
 		if not current.ok:
@@ -411,14 +425,12 @@ func _add_fields(id: String, params: Dictionary, prefix: String) -> void:
 			continue
 		if v is Array or v is bool or key in SKIP_KEYS:
 			continue
-		var shown: String = v if v is String else ("%.4f" % (float(v) * (1000.0 if units == "mm" else 1.0))).rstrip("0").rstrip(".")
+		var shown: String = Units.show(v, units)
 		var row := _field(prefix + key, shown)
 		var full: String = prefix + key
 		row.get_child(1).text_submitted.connect(func(text: String):
 			# Plain numbers are in document units; anything else is an expression.
-			var value: Variant = text
-			if text.is_valid_float():
-				value = float(text) / (1000.0 if units == "mm" else 1.0)
+			var value: Variant = Units.parse(text, units)
 			request.emit("set_param", [id, full, value]))
 		_params.add_child(row)
 
@@ -459,12 +471,12 @@ func _build_menu(root: Control) -> void:
 
 
 ## Rebuilds the pause menu: items are [label, action] pairs sent through the request signal.
-func set_menu_items(items: Array) -> void:
+func set_menu_items(items: Array, heading := "PAUSED") -> void:
 	_menu_buttons.clear()
 	for c in _menu_col.get_children():
 		_menu_col.remove_child(c)
 		c.queue_free()
-	_menu_col.add_child(UiTheme.title("PAUSED", 22))
+	_menu_col.add_child(UiTheme.title(heading, 22))
 	# Two columns on short screens (phones), so every entry fits without scrolling.
 	var grid := GridContainer.new()
 	grid.columns = 2 if UiTheme.short_screen(self) else 1

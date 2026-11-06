@@ -19,6 +19,7 @@ var doc: RefCounted
 var is_assembly := false
 
 var _body_mat := StandardMaterial3D.new()
+var appearance := {}  # what set_appearance last applied
 var _edge_mat := StandardMaterial3D.new()
 var _hl_mat := StandardMaterial3D.new()
 var _ghost_mat := StandardMaterial3D.new()
@@ -134,6 +135,20 @@ func _ready() -> void:
 		n.material_override = _measure_mat
 	_measure_line.mesh = ImmediateMesh.new()
 	_measure_line.material_override = _measure_mat
+
+
+## Makes the part look like its material (CadPart.material_info): colour, metal or not, shine
+## and, for glass and clear plastics, see-through. {} goes back to the plain modelling grey.
+func set_appearance(info: Dictionary) -> void:
+	var col := Color(String(info.get("color", ""))) if String(info.get("color", "")).begins_with("#") else COLOR_PART
+	var opacity := clampf(float(info.get("opacity", 1.0)), 0.15, 1.0)
+	_body_mat.albedo_color = Color(col, opacity)
+	# Full metal reflects only its surroundings, and the room is plain white: keep some colour.
+	_body_mat.metallic = minf(float(info.get("metallic", 0.04)), 0.75)
+	_body_mat.roughness = clampf(float(info.get("roughness", 0.82)), 0.08, 1.0)
+	_body_mat.metallic_specular = 0.6 if float(info.get("metallic", 0.0)) > 0.5 else 0.5
+	_body_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS if opacity < 0.99 else BaseMaterial3D.TRANSPARENCY_DISABLED
+	appearance = info
 
 
 ## Called every frame with the camera so the room and tessellation follow the player.

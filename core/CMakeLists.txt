@@ -8,7 +8,8 @@ add_library(fpcad_core STATIC
   src/SketchGeom.cpp
   src/Compare.cpp
   src/Challenges.cpp
-  src/Export.cpp)
+  src/Export.cpp
+  src/Materials.cpp)
 
 target_include_directories(fpcad_core PUBLIC include)
 target_include_directories(fpcad_core SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})

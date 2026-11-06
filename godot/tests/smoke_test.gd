@@ -1092,6 +1092,49 @@ func _references(main: Node) -> void:
 	tools.update(tools.aim, 0.016)
 	_check(main.view._com.visible, "Mass properties marks the centre of mass")
 	await _boards(main)
+	await _part_settings(main)
+
+
+## Units and material from the pause menu: sizes stay put, mass and looks follow the material.
+func _part_settings(main: Node) -> void:
+	var doc: RefCounted = main.doc
+	var vol: float = doc.mass_properties().volume
+	main.hud.set_menu_items(main._menu_items())
+	_check(main.hud._menu_buttons.has("units_menu") and main.hud._menu_buttons.has("material_menu")
+		and main.hud._menu_buttons.units_menu.text == "Units: MMGS (mm, g)", "the pause menu has Units and Material")
+	main._on_hud_request("material_menu", null)
+	_check(main._menu_page == "material" and main.hud._menu_buttons.has("material:Steel AISI 1020")
+		and main.hud._menu_buttons.has("material_custom"), "Material lists the library and a custom density")
+	main._on_hud_request("material:Steel AISI 1020", null)
+	var steel: Dictionary = doc.material_info()
+	_check(doc.get_material() == "Steel AISI 1020" and absf(doc.mass_properties().mass - vol * 7870.0) < 1e-6
+		and main._menu_page == "" and main.view.appearance.get("color", "") == "#7f8389",
+		"choosing steel sets its density, its look, and returns to the pause menu")
+	_check(absf(float(steel.youngs_modulus) - 200e9) < 1.0 and float(steel.yield_strength) == 350e6, "the material carries its properties")
+	_check(doc.undo() and doc.get_material() == "Aluminium 6061-T6", "undo takes the material back")
+	doc.redo()
+	# Units: IPS keeps every size, shows inches and pounds.
+	main._on_hud_request("units_menu", null)
+	_check(main.hud._menu_buttons.has("units:IPS") and main.hud._menu_buttons.has("units:FPS"), "Units lists MMGS, CGS, MKS, IPS and FPS")
+	main._on_hud_request("units:IPS", null)
+	_check(main.hud.units == "in" and doc.get_units() == "in" and doc.get_mass_units() == "lb"
+		and absf(doc.mass_properties().volume - vol) < 1e-9, "IPS changes the units, not the part")
+	_check(main.hud.length(0.0254) == "1.00 in" and main.hud.length(0.3048 * 100.0) == "100.00 ft", "lengths read in inches (feet when long)")
+	var t: Array = main.boards.properties_text(doc, main.hud.units)
+	_check("in³" in String(t[1]) and " lb" in String(t[1]) and "lb/in³" in String(t[1]) and "Msi" in String(t[1]) and "ksi" in String(t[1]),
+		"the properties read in inches, pounds and ksi (%s)" % String(t[1]).replace("\n", " | "))
+	_check(main.Units.show(0.0254, "in") == "1", "typed and shown values use the part's unit")
+	main._on_hud_request("units:MMGS", null)
+	_check(main.hud.units == "mm" and absf(doc.mass_properties().volume - vol) < 1e-9, "back to MMGS")
+	# A typed density, in the unit system's own unit (g/cm³ in MMGS).
+	main._on_hud_request("material_custom", null)
+	_check(main.numpad.visible, "Custom density asks for a number")
+	main.numpad._edit.text = "1.5"
+	main.numpad._key("OK")
+	_check(doc.get_material() == "Custom" and absf(doc.get_density() - 1500.0) < 1e-9 and doc.material_info().youngs_modulus == null,
+		"a custom density of 1.5 g/cm³ is 1,500 kg/m³, with no other properties claimed")
+	main._on_hud_request("material:Aluminium 6061-T6", null)
+	main.hud.set_menu(false)
 
 
 ## Whiteboards the player adds: a properties board, a notes board, carrying, saving.
@@ -1109,7 +1152,7 @@ func _boards(main: Node) -> void:
 	var pb: Node3D = boards.extra[-1]
 	var pl: Array = pb.text_lines()
 	_check(String(pl[0]) == "PART PROPERTIES" and "Volume" in String(pl[2]) and "Bounding box   1,000 × 1,000 × 500 mm" in String(pl[2])
-		and "Mass" in String(pl[2]) and "kg/m³" in String(pl[2]), "it shows the part's volume, mass and bounding box (%s)" % String(pl[2]).replace("\n", " | "))
+		and "Mass" in String(pl[2]) and "Material   Aluminium 6061-T6   ·   2.7 g/cm³" in String(pl[2]) and "E 68.9 GPa" in String(pl[2]), "it shows the part's volume, mass and bounding box (%s)" % String(pl[2]).replace("\n", " | "))
 	_check(absf(pb.global_position.y - fy) < 1e-6 and pb.global_position.z < 3.0, "it stands on the floor ahead of the player")
 	# A notes board: the first note comes from the text pad.
 	main.tools.set_tool_id("board_notes")

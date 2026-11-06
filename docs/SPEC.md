@@ -87,6 +87,33 @@ The **Measure** group adds **Bounding box** (the parts' extent as a wire box, X 
 whiteboard) and **Mass properties** (volume, area, mass from the part's material, and a marker at
 the centre of mass).
 
+## Units and materials
+
+**Units** (pause menu → Units) are the standard CAD unit systems: **MMGS** (mm, g), **CGS** (cm,
+g), **MKS** (m, kg), **IPS** (in, lb) and **FPS** (ft, lb), seconds throughout. The length unit is
+the part's display and typing unit; the mass unit is used for mass, and density reads g/cm³,
+kg/m³, lb/in³ or lb/ft³ to match. Changing units never changes the part: plain numbers inside
+expressions that were read in the old unit get it written after them ("wall + 2" becomes
+"wall + 2 mm"; factors such as "width / 2" and angles are left alone), and `CadPart.set_units`
+rebuilds and compares volume, area, centre of mass and bounding box before and after, refusing
+(and restoring the part) if anything moved. Lengths on screen follow: mm and m in metric parts,
+inches (feet past 1,000 in) in IPS, feet (inches under a foot) in FPS; stresses read MPa / GPa,
+or ksi / Msi in IPS and FPS. Export uses the part's length unit (FPS exports in inches). The mass
+unit is saved in the manifest as `massUnits`; older files use g for mm and cm, kg for m and lb
+for in and ft.
+
+**Materials** (pause menu → Material) come from a library in the core (`core/src/Materials.cpp`):
+aluminium 6061-T6 and 7075-T6, steel AISI 1020, stainless 304, grey cast iron, titanium
+Ti-6Al-4V, brass C360, copper C110, ABS, PLA, nylon 6/6, polycarbonate, acrylic, oak, concrete and
+soda-lime glass. Each has typical room-temperature properties (density, Young's modulus,
+Poisson's ratio, yield and ultimate tensile strength, where a brittle material has no yield,
+thermal conductivity, specific heat and expansion) and an appearance (colour, metallic,
+roughness, opacity) that the part takes on: metals shine, plastics are matt, glass and the clear
+plastics are see-through. **Custom density…** takes a density typed in the unit system's density
+unit; a custom material claims no other properties. Choosing a material is undoable; the
+properties board shows the material, its density, E, yield, UTS and Poisson's ratio. Files from
+before the library call aluminium "Aluminium 6061", read as 6061-T6.
+
 ## The room
 
 Everything happens in a bright white room with a skylight that grows with the player and fades

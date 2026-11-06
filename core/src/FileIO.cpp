@@ -153,6 +153,7 @@ void savePart(const std::string& path, const PartDocument& doc, const PartModel*
   atomicWrite(path, [&](ZipWriter& z) {
     Json m = manifest("part", doc.fileId, doc.name, doc.units);
     m["material"] = doc.material;
+    if (!doc.massUnits.empty()) m["massUnits"] = doc.massUnits;
     m["density"] = doc.density;
     m["historyHash"] = hashOf(partHistory(doc));
     int bodies = 0;
@@ -181,6 +182,7 @@ PartDocument loadPart(const std::string& path) {
   d.name = m.value("name", std::string("Part"));
   d.units = m.value("units", std::string("mm"));
   d.material = m.value("material", d.material);
+  d.massUnits = m.value("massUnits", std::string());
   d.density = m.value("density", d.density);
   try {
     d.loadFeatures(z.json("history/features.json"));

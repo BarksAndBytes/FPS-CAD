@@ -59,7 +59,8 @@ struct PartDocument {
   std::string fileId = newId();
   std::string name = "Part";
   std::string units = "mm";  // display and bare-number unit
-  std::string material = "Aluminium 6061";
+  std::string massUnits;      // "g", "kg" or "lb"; empty: the usual one for the length unit
+  std::string material = "Aluminium 6061-T6";  // a library name (Materials.h) or "Custom"
   double density = 2700;  // kg/m^3
   std::vector<Variable> variables;
   std::vector<Feature> features;
@@ -72,6 +73,14 @@ struct PartDocument {
   const Feature* find(const std::string& id) const;
   std::string uniqueName(const std::string& base) const;
   Feature& add(Feature f);  // fills id and name when empty
+
+  // The mass unit shown with this part: massUnits, or g for mm and cm, kg for m, lb for in and ft.
+  std::string massUnit() const;
+
+  // Changes the length unit, keeping every size as it is: plain numbers in expressions that were
+  // read in the old unit get that unit written after them ("width + 5" → "width + 5 mm").
+  // Returns false (and changes nothing) for an unknown unit.
+  bool changeUnits(const std::string& to);
 
   Json featuresJson() const;
   Json variablesJson() const;

@@ -1,6 +1,7 @@
 #include "cad_part.h"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 
 #include <godot_cpp/core/class_db.hpp>
@@ -14,6 +15,7 @@
 #include "fpcad/Expression.h"
 #include "fpcad/Export.h"
 #include "fpcad/FileIO.h"
+#include "fpcad/Materials.h"
 
 using namespace godot;
 
@@ -27,6 +29,34 @@ Dictionary result(bool ok, const std::string& message) {
   d["ok"] = ok;
   d["message"] = str(message);
   return d;
+}
+
+Dictionary materialDict(const fpcad::Material& m) {
+  Dictionary d;
+  d["name"] = str(m.name);
+  d["category"] = str(m.category);
+  d["density"] = m.density;
+  d["youngs_modulus"] = m.youngsModulus;
+  d["poissons_ratio"] = m.poissonsRatio;
+  d["yield_strength"] = m.yieldStrength ? Variant(*m.yieldStrength) : Variant();
+  d["tensile_strength"] = m.tensileStrength ? Variant(*m.tensileStrength) : Variant();
+  d["thermal_conductivity"] = m.thermalConductivity;
+  d["specific_heat"] = m.specificHeat;
+  d["thermal_expansion"] = m.thermalExpansion;
+  d["color"] = str(m.color);
+  d["metallic"] = m.metallic;
+  d["roughness"] = m.roughness;
+  d["opacity"] = m.opacity;
+  return d;
+}
+
+// Size and position of everything, to check a unit change left the part as it was.
+std::vector<double> signature(const fpcad::PartModel& m) {
+  fpcad::MassProperties mp = m.massProperties();
+  std::vector<double> s = {mp.volume, mp.area, mp.centreOfMass[0], mp.centreOfMass[1], mp.centreOfMass[2]};
+  if (auto b = m.boundingBox())
+    for (int i = 0; i < 3; ++i) s.insert(s.end(), {b->min[i], b->max[i]});
+  return s;
 }
 }  // namespace
 
@@ -82,7 +112,76 @@ String CadPart::save_file(const String& path) {
 String CadPart::get_part_name() const { return str(model_->document().name); }
 String CadPart::get_units() const { return str(model_->document().units); }
 String CadPart::get_file_id() const { return str(model_->document().fileId); }
-String CadPart::get_material() const { return str(model_->document().material); }
+String CadPart::get_material() const {
+  const fpcad::Material* m = fpcad::findMaterial(model_->document().material);
+  return str(m ? m->name : model_->document().material);
+}
+
+String CadPart::get_mass_units() const { return str(model_->document().massUnit()); }
+
+Array CadPart::material_library() const {
+  Array out;
+  for (const auto& m : fpcad::materialLibrary()) out.push_back(materialDict(m));
+  return out;
+}
+
+Dictionary CadPart::material_info() const {
+  const auto& doc = model_->document();
+  if (const fpcad::Material* m = fpcad::findMaterial(doc.material)) {
+    Dictionary d = materialDict(*m);
+    d["density"] = doc.density;
+    return d;
+  }
+  fpcad::Material custom;  // a typed-in density: no other properties known
+  custom.name = doc.material.empty() ? fpcad::kCustomMaterial : doc.material;
+  custom.category = "Custom";
+  custom.density = doc.density;
+  Dictionary d = materialDict(custom);
+  d["youngs_modulus"] = Variant();
+  d["poissons_ratio"] = Variant();
+  d["thermal_conductivity"] = Variant();
+  d["specific_heat"] = Variant();
+  d["thermal_expansion"] = Variant();
+  return d;
+}
+
+Dictionary CadPart::set_material(const String& name, double density) {
+  std::string n = str(name);
+  const fpcad::Material* m = fpcad::findMaterial(n);
+  if (!m && n != fpcad::kCustomMaterial) return result(false, "Unknown material '" + n + "'");
+  if (!m && !(density > 0 && density < 1e6)) return result(false, "A density must be above zero");
+  checkpoint();
+  auto& doc = model_->document();
+  doc.material = m ? m->name : n;
+  doc.density = m ? m->density : density;
+  return result(true, "");
+}
+
+Dictionary CadPart::set_units(const String& length, const String& mass) {
+  std::string len = str(length), ms = str(mass);
+  if (ms != "g" && ms != "kg" && ms != "lb") return result(false, "Unknown mass unit '" + ms + "'");
+  fpcad::PartDocument backup = model_->document();
+  bool wasOk = model_->lastReport().ok;
+  std::vector<double> before = signature(*model_);
+  checkpoint();
+  if (!model_->document().changeUnits(len)) {
+    drop_checkpoint();
+    return result(false, "Unknown length unit '" + len + "'");
+  }
+  model_->document().massUnits = ms;
+  fpcad::RebuildReport r = model_->rebuild();
+  std::vector<double> after = signature(*model_);
+  bool same = before.size() == after.size();
+  for (size_t i = 0; same && i < before.size(); ++i)
+    same = std::abs(before[i] - after[i]) <= 1e-7 * std::max(1.0, std::abs(before[i]));
+  if ((wasOk && !r.ok) || !same) {
+    model_->document() = backup;
+    model_->rebuild();
+    drop_checkpoint();
+    return result(false, "The units were not changed: an expression would change size with them. Give its plain numbers a unit (\"5 mm\") and try again.");
+  }
+  return result(true, "");
+}
 double CadPart::get_density() const { return model_->document().density; }
 Array CadPart::get_boards() const {
   Variant v = jsonToVariant(model_->document().boards);
@@ -879,6 +978,11 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_file_id"), &CadPart::get_file_id);
   ClassDB::bind_method(D_METHOD("get_material"), &CadPart::get_material);
   ClassDB::bind_method(D_METHOD("get_density"), &CadPart::get_density);
+  ClassDB::bind_method(D_METHOD("get_mass_units"), &CadPart::get_mass_units);
+  ClassDB::bind_method(D_METHOD("material_library"), &CadPart::material_library);
+  ClassDB::bind_method(D_METHOD("material_info"), &CadPart::material_info);
+  ClassDB::bind_method(D_METHOD("set_material", "name", "density"), &CadPart::set_material, DEFVAL(0.0));
+  ClassDB::bind_method(D_METHOD("set_units", "length", "mass"), &CadPart::set_units);
   ClassDB::bind_method(D_METHOD("get_boards"), &CadPart::get_boards);
   ClassDB::bind_method(D_METHOD("set_boards", "boards"), &CadPart::set_boards);
   ClassDB::bind_method(D_METHOD("rebuild"), &CadPart::rebuild);

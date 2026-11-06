@@ -308,7 +308,8 @@ func _build_writing() -> void:
 	margin.add_child(col)
 	_kicker = _ink(30, RED, true)
 	_heading = _ink(60, INK, true)
-	_body = _ink(38 if kind == "messages" else 50, INK)  # the player's boards have room to spare
+	# The player's boards have room for bigger writing; properties run to nine lines.
+	_body = _ink({"messages": 38, "properties": 42}.get(kind, 50), INK)
 	_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_body.custom_minimum_size.x = TEX.x - 96
 	for l in [_kicker, _heading, _body]:

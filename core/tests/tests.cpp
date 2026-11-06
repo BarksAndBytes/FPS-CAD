@@ -18,6 +18,7 @@
 #include <chrono>
 
 #include "fpcad/Model.h"
+#include "fpcad/Materials.h"
 #include "fpcad/Sketch.h"
 #include "fpcad/Challenges.h"
 #include "fpcad/Compare.h"
@@ -964,6 +965,54 @@ int main() {
     CHECK(failed == 1);
   });
 
+  run("changing units keeps every size, pinning plain numbers to the old unit", [&] {
+    PartModel m(PartDocument::deskSample());
+    m.document().variables.push_back({"lip", "wall + 2"});      // 2 mm, written without a unit
+    m.document().variables.push_back({"half", "width / 2"});    // a plain factor: not a length
+    m.document().features[0].params["h"] = "wall * 2 + 1";      // the 1 is a length; the 2 is not
+    m.rebuild();
+    CHECK(m.lastReport().ok);
+    double vol = m.massProperties().volume;
+    auto bb = m.boundingBox();
+    CHECK(m.document().changeUnits("in"));
+    m.rebuild();
+    CHECK(m.lastReport().ok);
+    CHECK(std::abs(m.massProperties().volume - vol) < 1e-12);
+    CHECK(std::abs(m.boundingBox()->max[0] - bb->max[0]) < 1e-12);
+    auto expr = [&](const std::string& name) {
+      for (auto& v : m.document().variables)
+        if (v.name == name) return v.expr;
+      return std::string();
+    };
+    CHECK(expr("lip") == "wall + 2 mm");
+    CHECK(expr("half") == "width / 2");
+    CHECK(expr("width") == "240 mm");  // already had a unit
+    CHECK(m.document().features[0].params["h"] == "wall * 2 + 1 mm");
+    CHECK(m.document().units == "in" && m.document().massUnit() == "lb");
+    CHECK(!m.document().changeUnits("furlong"));
+    // An angle keeps its plain number in degrees.
+    PartDocument d;
+    d.features.push_back({});
+    d.features[0].params = {{"angle", "90"}, {"r", "5"}};
+    CHECK(d.changeUnits("cm"));
+    CHECK(d.features[0].params["angle"] == "90" && d.features[0].params["r"] == "5 mm");
+  });
+
+  run("the material library has densities, strengths and appearances", [&] {
+    CHECK(materialLibrary().size() >= 12);
+    const Material* steel = findMaterial("Steel AISI 1020");
+    CHECK(steel && steel->density == 7870 && steel->youngsModulus == 200e9 && steel->yieldStrength && steel->metallic == 1.0);
+    const Material* old = findMaterial("Aluminium 6061");  // what older files call it
+    CHECK(old && old->name == "Aluminium 6061-T6" && old->density == 2700);
+    CHECK(findMaterial("Grey cast iron") && !findMaterial("Grey cast iron")->yieldStrength);  // brittle
+    CHECK(!findMaterial("Unobtainium"));
+    for (auto& mat : materialLibrary()) CHECK(mat.density > 0 && mat.youngsModulus > 0 && mat.color.size() == 7);
+    PartModel m(PartDocument::deskSample());
+    m.rebuild();
+    m.document().density = steel->density;
+    CHECK(std::abs(m.massProperties().mass - m.massProperties().volume * 7870) < 1e-9);
+  });
+
   run("native part file round-trips with cached geometry", [&] {
     PartModel m(PartDocument::sample());
     m.rebuild();
@@ -977,6 +1026,7 @@ int main() {
     CHECK(back.variablesJson() == m.document().variablesJson());
     CHECK(back.fileId == m.document().fileId);
     CHECK(back.viewpoints.size() == 1);
+    CHECK(back.material == m.document().material && back.massUnits.empty());
     CHECK(back.boards.size() == 1 && back.boards[0].value("kind", "") == "notes" &&
           back.boards[0]["notes"][0] == "check the wall");
     CHECK(cachedBodyCount(path) == 1);  // the boards are not history: the geometry cache still holds

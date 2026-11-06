@@ -20,6 +20,8 @@ const Sketcher := preload("res://scripts/sketcher.gd")
 const Challenge := preload("res://scripts/challenge.gd")
 const ToolWheel := preload("res://scripts/tool_wheel.gd")
 const Whiteboard := preload("res://scripts/whiteboard.gd")
+const Units := preload("res://scripts/units.gd")
+const Boards := preload("res://scripts/boards.gd")
 
 var doc: RefCounted
 var is_assembly := false
@@ -31,6 +33,7 @@ var player: Node3D
 var view: Node3D
 var tools: Node
 var hud: CanvasLayer
+var _menu_page := ""  # "", "units" or "material": which page of the pause menu shows
 var board: Node3D  # whiteboard.gd: the messages, standing in the room
 var boards: Node3D  # boards.gd: the whiteboards the player adds, and carrying any board
 var wheel: Control
@@ -281,6 +284,89 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+func _toggle_menu() -> void:
+	if not hud.menu_open and _menu_page != "":
+		_menu_page = ""
+		hud.set_menu_items(_menu_items())
+	hud.set_menu(not hud.menu_open)
+
+
+## From the Units or Material page back to the pause menu, on the entry that opened it.
+func _menu_back() -> void:
+	var was := _menu_page
+	_menu_page = ""
+	hud.set_menu_items(_menu_items())
+	hud.focus_menu_action(was + "_menu")
+
+
+func _units_items() -> Array:
+	var items := []
+	var now := Units.system_of(hud.units, doc.get_mass_units())
+	for s in Units.SYSTEMS:
+		items.append(["%s%s  ·  %s" % [s.id, "  ✓" if s == now else "", s.name], "units:" + s.id])
+	items.append(["Back", "menu_back"])
+	return items
+
+
+func _material_items() -> Array:
+	var items := []
+	var mu: String = doc.get_mass_units()
+	var now: String = doc.get_material()
+	for m in doc.material_library():
+		items.append(["%s%s  ·  %s" % [m.name, "  ✓" if m.name == now else "", Units.density_text(float(m.density), hud.units, mu)],
+			"material:" + String(m.name)])
+	items.append(["Custom density…" + ("  ✓  " + Units.density_text(doc.get_density(), hud.units, mu) if now == "Custom" else ""),
+		"material_custom"])
+	items.append(["Back", "menu_back"])
+	return items
+
+
+func _apply_units(id: String) -> void:
+	var s := {}
+	for sys in Units.SYSTEMS:
+		if sys.id == id:
+			s = sys
+	if s.is_empty() or doc == null or not doc.has_method("set_units"):
+		return
+	if sketcher.active:
+		hud.toast("Finish the sketch before changing units")
+		return
+	var r: Dictionary = doc.set_units(s.length, s.mass)
+	if not r.ok:
+		hud.toast(r.message)
+		return
+	hud.units = s.length
+	_after_part_settings()
+	_menu_back()
+	hud.toast("Units: %s (%s) · sizes stay as they are" % [s.id, s.name])
+
+
+func _apply_material(name: String) -> void:
+	if doc == null or not doc.has_method("set_material"):
+		return
+	var r: Dictionary = doc.set_material(name, 0.0)
+	if not r.ok:
+		hud.toast(r.message)
+		return
+	_after_part_settings()
+	_menu_back()
+	var lines: PackedStringArray = Boards.material_lines(doc.material_info(), hud.units, doc.get_mass_units())
+	var parts := PackedStringArray()
+	for l in lines:
+		parts.append(l.trim_prefix("Material   ").replace("   ·   ", " · ").replace("   ", " · "))
+	hud.toast("Material: " + " · ".join(parts))
+
+
+## After the units or material change: redraw what shows them and save.
+func _after_part_settings() -> void:
+	view.set_appearance(doc.material_info())
+	hud.refresh_panel()
+	boards.refresh_properties()
+	tools.model_changed()
+	_show_tool()
+	_autosave()
+
+
 func _menu_items() -> Array:
 	var items := [["Resume", "resume"]]
 	if sketcher != null and sketcher.active:
@@ -296,6 +382,9 @@ func _menu_items() -> Array:
 		items.append(["Restart training", "restart_training"])
 	if mode == "challenge":
 		items += [["Restart challenge", "restart_challenge"], ["Challenge list", "challenge_list"]]
+	if doc != null and doc.has_method("material_info") and not is_assembly:
+		items += [["Units: " + Units.system_label(hud.units, doc.get_mass_units()), "units_menu"],
+			["Material: " + doc.get_material(), "material_menu"]]
 	items += [
 		["Save", "save"], ["Open last saved", "open_saved"],
 		["Export STEP", "export_step"], ["Export IGES", "export_iges"],
@@ -388,6 +477,7 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 	tools.selected = ""
 	hud.doc = doc
 	hud.units = doc.get_units() if doc.has_method("get_units") else "mm"
+	view.set_appearance(doc.material_info() if doc.has_method("material_info") else {})
 	hud.refresh_panel()
 	boards.load_from(doc)
 	_show_tool()
@@ -525,7 +615,7 @@ func _export(ext: String) -> void:
 	var path := ProjectSettings.globalize_path("%s/%s.%s" % [EXPORTS, _doc_name(), ext])
 	hud.toast("Exporting %s…" % ext.to_upper())
 	await get_tree().process_frame
-	var r: Dictionary = doc.export_file(path, hud.units if hud.units in ["mm", "cm", "m", "in"] else "mm")
+	var r: Dictionary = doc.export_file(path, "in" if hud.units == "ft" else hud.units if hud.units in ["mm", "cm", "m", "in"] else "mm")
 	hud.toast(("Exported %s · %s" % [path, r.message]) if r.ok else ("Export failed: " + r.message))
 
 
@@ -825,7 +915,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed(&"ui_cancel"):
 		var closed := true
-		if hud.menu_open:
+		if hud.menu_open and _menu_page != "":
+			_menu_back()  # from Units or Material back to the pause menu
+		elif hud.menu_open:
 			hud.set_menu(false)
 		elif hud.panel_open:
 			hud.set_panel(false)
@@ -844,7 +936,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if hud.panel_open:
 			hud.set_panel(false)
 		else:
-			hud.set_menu(not hud.menu_open)
+			_toggle_menu()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed(&"model_panel"):
 		hud.toggle_panel()
@@ -937,7 +1029,39 @@ func _on_touch_released(name: String) -> void:
 
 
 func _on_hud_request(action: String, arg: Variant) -> void:
+	if action.begins_with("units:"):
+		_apply_units(action.substr(6))
+		return
+	if action.begins_with("material:"):
+		_apply_material(action.substr(9))
+		return
 	match action:
+		"units_menu":
+			_menu_page = "units"
+			hud.set_menu_items(_units_items(), "UNITS")
+			hud.focus_menu_action("units:" + Units.system_of(hud.units, doc.get_mass_units()).get("id", ""))
+		"material_menu":
+			_menu_page = "material"
+			hud.set_menu_items(_material_items(), "MATERIAL")
+			hud.focus_menu_action("material:" + doc.get_material())
+		"menu_back":
+			_menu_back()
+		"material_custom":
+			_menu_back()
+			hud.set_menu(false)
+			var mu: String = doc.get_mass_units()
+			var unit_text: String = Units.density_text(1.0, hud.units, mu).get_slice(" ", 1)
+			var now: String = Units.density_text(doc.get_density(), hud.units, mu).get_slice(" ", 0).replace(",", "")
+			numpad.ask("Density (%s)" % unit_text, now, "The part's mass uses it; other properties stay unknown",
+				func(text: String) -> void:
+					var v := text.replace(",", "").to_float()
+					var r: Dictionary = doc.set_material("Custom", Units.density_from(v, hud.units, mu))
+					if not r.ok:
+						hud.toast(r.message)
+						return
+					_after_part_settings()
+					hud.toast("Material: Custom · %s" % Units.density_text(doc.get_density(), hud.units, mu))
+			)
 		"open_wheel":
 			if state == "play" and not dialog.visible:
 				_open_wheel(true)
@@ -971,7 +1095,7 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 		"panel":
 			hud.toggle_panel()
 		"menu":
-			hud.set_menu(not hud.menu_open)
+			_toggle_menu()
 		"controls":
 			_cmap_from_menu = hud.menu_open
 			hud.set_menu(false)

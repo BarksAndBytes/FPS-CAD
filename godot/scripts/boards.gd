@@ -157,11 +157,10 @@ static func properties_text(doc: RefCounted, units: String) -> Array:
 	var u: String = units if Units.SCALE.has(units) else "mm"
 	var k := Units.length_scale(u)
 	var lines := PackedStringArray()
+	var mu: String = doc.get_mass_units() if doc.has_method("get_mass_units") else ""
 	lines.append("Volume   %s" % Units.volume_text(float(m.volume), u))
 	lines.append("Surface area   %s" % Units.area_text(float(m.area), u))
-	var material: String = doc.get_material() if doc.has_method("get_material") else ""
-	var density: float = doc.get_density() if doc.has_method("get_density") else 0.0
-	lines.append("Mass   %s   (%s, %s kg/m³)" % [Units.mass_text(float(m.mass)), material, Units.significant(density)])
+	lines.append("Mass   %s" % Units.mass_text(float(m.mass), mu))
 	var b: Dictionary = doc.bounding_box()
 	if b.get("ok", false):
 		var sz: Vector3 = b.size
@@ -170,9 +169,30 @@ static func properties_text(doc: RefCounted, units: String) -> Array:
 	var c: Vector3 = m.centre_of_mass  # Godot space: CAD X = x, Y = -z, Z = y
 	lines.append("Centre of mass   X %s  Y %s  Z %s %s" % [Units.significant(c.x / k, 3), Units.significant(-c.z / k, 3),
 		Units.significant(c.y / k, 3), u])
+	if doc.has_method("material_info"):
+		lines.append_array(material_lines(doc.material_info(), u, mu))
 	var feats: int = doc.get_features().size() if doc.has_method("get_features") else 0
 	lines.append("%d bod%s · %d feature%s" % [int(m.bodies), "y" if int(m.bodies) == 1 else "ies", feats, "" if feats == 1 else "s"])
 	return [name, "\n".join(lines)]
+
+
+## The material and its properties, two short lines for a board: name and density, then stiffness
+## and strength (what is known: a typed-in density has nothing else).
+static func material_lines(info: Dictionary, units: String, mass: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	out.append("Material   %s   ·   %s" % [info.get("name", ""), Units.density_text(float(info.get("density", 0.0)), units, mass)])
+	var props := PackedStringArray()
+	if info.get("youngs_modulus") != null:
+		props.append("E %s" % Units.stress_text(float(info.youngs_modulus), units))
+	if info.get("yield_strength") != null:
+		props.append("yield %s" % Units.stress_text(float(info.yield_strength), units))
+	if info.get("tensile_strength") != null:
+		props.append("UTS %s" % Units.stress_text(float(info.tensile_strength), units))
+	if info.get("poissons_ratio") != null:
+		props.append("Poisson %s" % Units.significant(float(info.poissons_ratio), 2))
+	if not props.is_empty():
+		out.append("   ".join(props))
+	return out
 
 
 # ---------- the board tools ----------
