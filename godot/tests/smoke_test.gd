@@ -1135,6 +1135,11 @@ func _video_board(main: Node) -> void:
 		"an Ogg source is preferred: it plays without converting")
 	_check(WB.find_page_video('<meta property="og:video" content="https://www.youtube.com/embed/abc">', page).contains("youtube.com"),
 		"an embedded YouTube video is found, so the board can say why it can't play it")
+	_check(WB.user_agent().begins_with("FPS-CAD/") and WB.user_agent().contains("https://github.com/BarksAndBytes/FPS-CAD") and WB.user_agent().contains("Godot/"),
+		"downloads name the game and where to find out about it, as Wikimedia asks (%s)" % WB.user_agent())
+	_check(WB.retry_delay(PackedStringArray(["Retry-After: 3"]), 0) == 3.0 and WB.retry_delay(PackedStringArray(), 0) == 5.0
+		and WB.retry_delay(PackedStringArray(), 2) == 20.0 and WB.retry_delay(PackedStringArray(), 3) < 0.0
+		and WB.retry_delay(PackedStringArray(["retry-after: 600"]), 0) < 0.0, "a busy server is asked again after its Retry-After, three times at most")
 	main.tools.set_tool_id("board_video")
 	main.tools._act(true, false)
 	await _frames(2)

@@ -48,7 +48,12 @@ const VIDEO_LIMIT := 1024 * 1024 * 1024  # 1 GB
 const CONVERT_HINT := "The whiteboard plays Ogg Theora (.ogv) videos. Convert one with:\nffmpeg -i video.mp4 -c:v libtheora -q:v 7 -c:a libvorbis video.ogv"
 const MAX_WIDTH := 1280  # converted videos are scaled down to this: Theora decodes on the CPU
 const MAX_WIDTH_MOBILE := 854  # phones: 480p converts and plays smoothly
-const USER_AGENT := "User-Agent: Mozilla/5.0 (compatible; FPS-CAD video board)"
+const BuildInfo := preload("res://scripts/build_info.gd")
+## How the board names itself to web servers. Wikimedia (and others) turn away clients that don't
+## say who they are and where to find out more, so: product/version (project link) engine/version.
+const PROJECT_URL := "https://github.com/BarksAndBytes/FPS-CAD"
+const RETRIES := 3        # a busy server (HTTP 429 / 503) is asked again up to this many times
+const RETRY_MAX := 60.0   # seconds; a longer Retry-After gives up instead
 ## Sites that show their videos inside web pages, which the board can't display.
 const VIDEO_SITES := ["youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com", "dailymotion.com",
 	"facebook.com", "instagram.com", "twitter.com", "x.com/"]
@@ -66,6 +71,7 @@ var _video: VideoStreamPlayer = null
 var _video_back := ColorRect.new()
 var _http: HTTPRequest = null
 var _video_fitted := false
+var _retry_token := 0  # bumped when the board stops, so a waiting retry knows to give up
 var _ff := {}              # the FFmpeg conversion running: {pid, stdio, stderr, src, out, part, out_text, err_text, duration, done_us}
 static var _ffmpeg_path: Variant = null  # found once: the FFmpeg program, or "" if there is none
 static var ffmpeg_note := ""  # why there is none: what was tried
@@ -323,7 +329,7 @@ static func ffmpeg_path() -> String:
 
 ## The FFmpeg arguments that turn src into an Ogg Theora video at out (at most MAX_WIDTH wide).
 static func convert_args(src: String, out: String) -> PackedStringArray:
-	var web := PackedStringArray(["-user_agent", USER_AGENT.trim_prefix("User-Agent: ")]) if src.begins_with("http") else PackedStringArray()
+	var web := PackedStringArray(["-user_agent", user_agent()]) if src.begins_with("http") else PackedStringArray()
 	return web + PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src,
 		"-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=w='min(%d,iw)':h=-2" % (MAX_WIDTH_MOBILE if OS.has_feature("mobile") else MAX_WIDTH),
 		"-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "4",
@@ -366,7 +372,7 @@ func play_url(url: String) -> void:
 
 
 ## Fetches url into path + ".part"; from_page: url was found on the page the player linked.
-func _download(url: String, path: String, from_page: bool) -> void:
+func _download(url: String, path: String, from_page: bool, attempt := 0) -> void:
 	DirAccess.make_dir_recursive_absolute(VIDEO_DIR)
 	_http = HTTPRequest.new()
 	_http.max_redirects = 8
@@ -374,13 +380,33 @@ func _download(url: String, path: String, from_page: bool) -> void:
 	_http.download_chunk_size = 262144
 	_http.download_file = ProjectSettings.globalize_path(path + ".part")
 	add_child(_http)
-	_http.request_completed.connect(_on_video_downloaded.bind(path, url, from_page))
-	var err := _http.request(url, [USER_AGENT])
+	_http.request_completed.connect(_on_video_downloaded.bind(path, url, from_page, attempt))
+	var err := _http.request(url, ["User-Agent: " + user_agent()])
 	if err != OK:
 		_video_error("The download could not start (error %d)." % err)
 		return
 	video_state = "loading"
 	set_card("VIDEO", "Downloading…", url, INK, 0.0)
+
+
+## "FPS-CAD/0.2.68 (https://github.com/BarksAndBytes/FPS-CAD; whiteboard video) Godot/4.7.2-stable".
+static func user_agent() -> String:
+	var v: Dictionary = Engine.get_version_info()
+	return "FPS-CAD/%s (%s; whiteboard video) Godot/%s" % [BuildInfo.VERSION, PROJECT_URL, v.get("string", "4")]
+
+
+## How long to wait before asking a busy server again: its Retry-After (seconds) if it gave one,
+## else 5, 10, 20 s. -1 when that is too long to wait, or attempts are used up.
+static func retry_delay(headers: PackedStringArray, attempt: int) -> float:
+	if attempt >= RETRIES:
+		return -1.0
+	var wait := 5.0 * pow(2.0, attempt)
+	for h in headers:
+		if h.to_lower().begins_with("retry-after:"):
+			var v := h.substr(12).strip_edges()
+			if v.is_valid_float():
+				wait = maxf(1.0, v.to_float())
+	return wait if wait <= RETRY_MAX else -1.0
 
 
 ## HLS and DASH playlists: FFmpeg reads these itself, segment by segment.
@@ -639,14 +665,23 @@ func toggle_video() -> void:
 
 
 func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _body: PackedByteArray, path: String,
-		url: String, from_page: bool) -> void:
+		url: String, from_page: bool, attempt: int) -> void:
 	var part := path + ".part"
 	if _http != null:
 		_http.queue_free()
 		_http = null
 	if result != HTTPRequest.RESULT_SUCCESS or code < 200 or code >= 300:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(part))
-		var why := "The server answered HTTP %d%s." % [code, " (not found)" if code == 404 else ""]
+		if result == HTTPRequest.RESULT_SUCCESS and (code == 429 or code == 503):
+			var wait := retry_delay(headers, attempt)
+			if wait > 0.0:
+				_retry_later(url, path, from_page, attempt + 1, wait)
+				return
+		var why := "The server answered HTTP %d%s." % [code, {404: " (not found)", 403: " (not allowed)",
+			429: " (too many requests): the site limits how often apps download from it. Try again in a few minutes",
+			503: " (busy). Try again in a few minutes"}.get(code, "")]
+		if url != video_url:
+			why += "\nThat was the video found on the page:\n" + url
 		match result:
 			HTTPRequest.RESULT_SUCCESS:
 				pass
@@ -703,6 +738,20 @@ func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _b
 	_convert(src, path, video_problem(head, content_type), true)
 
 
+## Asks a busy server again after wait seconds, counting down on the board.
+func _retry_later(url: String, path: String, from_page: bool, attempt: int, wait: float) -> void:
+	video_state = "loading"
+	var token := _retry_token
+	var left := ceili(wait)
+	while left > 0:
+		set_card("VIDEO", "The server is busy", "%s\n\nTrying again in %d s (%d of %d)" % [url, left, attempt, RETRIES], INK)
+		await get_tree().create_timer(1.0).timeout
+		if token != _retry_token or not is_inside_tree():
+			return  # stopped or given another link meanwhile
+		left -= 1
+	_download(url, path, from_page, attempt)
+
+
 func _start_video(path: String) -> void:
 	var stream := VideoStreamTheora.new()
 	stream.file = path
@@ -719,6 +768,7 @@ func _start_video(path: String) -> void:
 
 
 func _stop_video() -> void:
+	_retry_token += 1
 	_cancel_convert()
 	if _http != null:
 		_http.cancel_request()

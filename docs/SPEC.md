@@ -167,6 +167,10 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
   protection and terms; pages with no video found, failed downloads (HTTP status, no
   connection, TLS), files FFmpeg can't read (with its last message) and, on Android, which has no
   FFmpeg yet, anything that needs converting, with the ffmpeg line to convert it on a computer.
+  Downloads name the game (`FPS-CAD/<version> (<project link>; whiteboard video) Godot/<version>`,
+  as Wikimedia's user-agent policy asks); a busy server (HTTP 429 or 503) is asked again after
+  its `Retry-After` (else 5, 10, 20 s), three times at most, with a countdown on the board, and an
+  error names the link that failed when it was the video found on a page.
   The link is saved with the board; a reopened part shows "Ready to play".
 - **Arrange boards**: RT picks up any board, the message board included. A carried board stays at
   the same distance ahead and turned the same way relative to the player, standing on the floor;
