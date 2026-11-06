@@ -1189,6 +1189,28 @@ func _video_board(main: Node) -> void:
 			await _frames(1)
 		_check(vb.video_state == "playing", "a VP9 / Opus WebM converts and plays (%s)" % vb.video_message)
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
+		# A longer video is cut into slices encoded at once, then joined.
+		var plan: Array = WB.slice_plan(10.0, 3, 10.0)
+		_check(plan.size() == 3 and plan[0][1] == 34 and absf(plan[1][0] - 3.4) < 1e-9 and plan[1][1] == 34 and plan[2][1] == 0 and absf(plan[2][2] - 3.2) < 1e-9,
+			"a 10 s, 10 fps video makes three slices cut on frames: 34, 34 and the last 32")
+		var pi: Dictionary = WB.probe_info("  Duration: 00:01:02.50, start: 0.000000\n  Stream #0:0[0x1](und): Video: vp9 (Profile 0), yuv420p(tv), 1280x720, SAR 1:1 DAR 16:9, 29.97 fps, 29.97 tbr, 1k tbn\n  Stream #0:1: Audio: opus, 48000 Hz")
+		_check(absf(pi.duration - 62.5) < 1e-6 and pi.audio and absf(pi.fps - 29.97) < 1e-6 and not WB.probe_info("Duration: N/A").audio,
+			"FFmpeg's log gives the length, the frame rate and whether there is sound")
+		WB.workers_override = 3
+		url = "https://example.com/ten-%d.mp4" % Time.get_ticks_usec()
+		vb.play_file("res://tests/ten_seconds.mp4", url)
+		var most := 0
+		for i in 3000:
+			if vb.video_state != "converting":
+				break
+			most = maxi(most, vb._jobs.size())
+			await _frames(1)
+		WB.workers_override = 0
+		var length: float = vb._video.get_stream_length() if vb.video_state == "playing" else 0.0
+		_check(vb.video_state == "playing" and most == 4 and absf(length - 10.0) < 0.06 and not DirAccess.dir_exists_absolute(
+			ProjectSettings.globalize_path(WB.cached_path(url).get_basename() + ".parts")),
+			"three slices and the sound convert at once, join into one 10 s video, and the pieces are cleared away (%d jobs, %.2f s, %s)" % [most, length, vb.video_message])
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
 	else:
 		print("SKIP FFmpeg conversion: no ffmpeg on this machine")
 	vb.play_url("https://youtu.be/abc")

@@ -151,7 +151,13 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
   Windows; Android ships a small FFmpeg built by `tools/build_ffmpeg.sh` as
   `lib/arm64-v8a/libffmpeg.so`, run from the app's native library folder, the one place Android
   lets an app run a program it ships; Linux uses an `ffmpeg` on the PATH), scaled to at most
-  1280 px wide (854 on phones), with the
+  1280 px wide (854 on phones). libtheora encodes on one core and encoding is nearly all the time,
+  so a downloaded video of 8 s or more is probed for its length, frame rate and sound, cut on frame
+  boundaries into one slice per worker (every core but one, at most 8; half the cores on phones,
+  at most 4), the slices encoded at once by separate FFmpeg processes (`-ss` / `-frames:v`) with
+  the sound as one more, then joined without re-encoding (concat demuxer, `-c copy`); streams and
+  short clips convert in one process. On 2 cores a 10 s 720p clip took 7.2 s instead of 12.3 s,
+  with identical frame count and length. With the
   percentage on the board from FFmpeg's progress output, then kept like a download. A link to a
   web page plays the page's main video (`find_page_video`): the video the page declares
   (`og:video`, `twitter:player:stream`, a VideoObject's `contentUrl`), else its largest `<video>`

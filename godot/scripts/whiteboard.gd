@@ -48,6 +48,7 @@ const VIDEO_LIMIT := 1024 * 1024 * 1024  # 1 GB
 const CONVERT_HINT := "The whiteboard plays Ogg Theora (.ogv) videos. Convert one with:\nffmpeg -i video.mp4 -c:v libtheora -q:v 7 -c:a libvorbis video.ogv"
 const MAX_WIDTH := 1280  # converted videos are scaled down to this: Theora decodes on the CPU
 const MAX_WIDTH_MOBILE := 854  # phones: 480p converts and plays smoothly
+const MIN_SPLIT := 8.0  # seconds: shorter videos convert in one process
 const BuildInfo := preload("res://scripts/build_info.gd")
 ## How the board names itself to web servers. Wikimedia (and others) turn away clients that don't
 ## say who they are and where to find out more, so: product/version (project link) engine/version.
@@ -72,9 +73,11 @@ var _video_back := ColorRect.new()
 var _http: HTTPRequest = null
 var _video_fitted := false
 var _retry_token := 0  # bumped when the board stops, so a waiting retry knows to give up
-var _ff := {}              # the FFmpeg conversion running: {pid, stdio, stderr, src, out, part, out_text, err_text, duration, done_us}
+var _conv := {}            # the conversion running: src, out, part, input, phase ("probe", "single", "slices", "join")…
+var _jobs: Array = []      # its FFmpeg processes: {pid, stdio, stderr, out_text, err_text, done_us, role}
 static var _ffmpeg_path: Variant = null  # found once: the FFmpeg program, or "" if there is none
 static var ffmpeg_note := ""  # why there is none: what was tried
+static var workers_override := 0  # tests: slices at once regardless of the cores
 var _video_t := 0.0
 var _notes_box := VBoxContainer.new()
 var _note_labels: Array[Label] = []
@@ -327,15 +330,6 @@ static func ffmpeg_path() -> String:
 	return _ffmpeg_path
 
 
-## The FFmpeg arguments that turn src into an Ogg Theora video at out (at most MAX_WIDTH wide).
-static func convert_args(src: String, out: String) -> PackedStringArray:
-	var web := PackedStringArray(["-user_agent", user_agent()]) if src.begins_with("http") else PackedStringArray()
-	return web + PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src,
-		"-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=w='min(%d,iw)':h=-2" % (MAX_WIDTH_MOBILE if OS.has_feature("mobile") else MAX_WIDTH),
-		"-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "4",
-		"-progress", "pipe:1", "-nostats", "-f", "ogg", out])
-
-
 ## Where a link's video is kept once downloaded.
 static func cached_path(url: String) -> String:
 	return "%s/%s.ogv" % [VIDEO_DIR, url.strip_edges().md5_text()]
@@ -563,6 +557,11 @@ func play_file(path: String, url := "") -> void:
 
 ## Converts src to Ogg Theora at out with FFmpeg in the background, then plays it. why: what the
 ## board says if it can't. remove_src: src was only downloaded for this.
+##
+## libtheora encodes on one core, and encoding is nearly all the time, so a downloaded video
+## longer than MIN_SPLIT seconds is cut into one slice per worker (workers()), the slices are
+## encoded at once by separate FFmpeg processes (the sound by one more), and the pieces are joined
+## without re-encoding. Streams and short clips convert in one process.
 func _convert(src: String, out: String, why: String, remove_src: bool) -> void:
 	var ff := ffmpeg_path()
 	if ff == "":
@@ -571,77 +570,274 @@ func _convert(src: String, out: String, why: String, remove_src: bool) -> void:
 		var kind_line := why.replace(CONVERT_HINT, "").strip_edges() if CONVERT_HINT in why else "That video needs converting."
 		_video_error(kind_line + "\n\nConverting it needs FFmpeg, which this version of the game doesn't have (%s).\n\n%s" % [ffmpeg_note, CONVERT_HINT])
 		return
-	var part := out + ".part"
-	var input := src if src.begins_with("http://") or src.begins_with("https://") else ProjectSettings.globalize_path(src)
-	var info := OS.execute_with_pipe(ff, convert_args(input, ProjectSettings.globalize_path(part)), false)
-	if info.is_empty():
-		_video_error("FFmpeg didn't start.")
-		return
-	_ff = {pid = info.pid, stdio = info.stdio, stderr = info.stderr, src = src, out = out, part = part,
-		remove_src = remove_src, out_text = "", err_text = "", duration = 0.0, done_us = 0.0}
+	var web := src.begins_with("http://") or src.begins_with("https://")
+	_conv = {src = src, out = out, part = out + ".part", remove_src = remove_src, ff = ff,
+		input = src if web else ProjectSettings.globalize_path(src), duration = 0.0, audio = false,
+		dir = out.get_basename() + ".parts", phase = ""}
 	video_state = "converting"
 	set_card("VIDEO", "Converting for the whiteboard…", video_url, INK, 0.0)
+	if web or workers() < 2:
+		_start_single()
+	else:
+		_conv.phase = "probe"
+		_spawn(PackedStringArray(["-hide_banner", "-nostdin", "-i", _conv.input]), "probe")
 
 
-## Reads FFmpeg's progress (key=value lines on stdout; the duration from its log on stderr) and
-## finishes when it stops.
-func _poll_convert() -> void:
+## How many slices to encode at once: every core but one for the game; on phones, which also run
+## hot, half of them. At most 8 (4 on phones).
+static func workers() -> int:
+	if workers_override > 0:
+		return workers_override
+	var n := OS.get_processor_count()
+	if OS.has_feature("mobile"):
+		return clampi(n / 2, 1, 4)
+	return clampi(n - 1, 1, 8)
+
+
+static func _scale_filter() -> String:
+	return "scale=w='min(%d,iw)':h=-2" % (MAX_WIDTH_MOBILE if OS.has_feature("mobile") else MAX_WIDTH)
+
+
+## The FFmpeg arguments that turn src into an Ogg Theora video at out in one go (at most MAX_WIDTH
+## wide, MAX_WIDTH_MOBILE on phones).
+static func convert_args(src: String, out: String) -> PackedStringArray:
+	var web := PackedStringArray(["-user_agent", user_agent()]) if src.begins_with("http") else PackedStringArray()
+	return web + PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src,
+		"-map", "0:v:0", "-map", "0:a:0?", "-vf", _scale_filter(),
+		"-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "4",
+		"-progress", "pipe:1", "-nostats", "-f", "ogg", out])
+
+
+## One slice of the picture, no sound: frames frames from start seconds (frames 0: to the end).
+## Counting frames, not seconds, keeps the slices from overlapping where a cut falls between two.
+static func slice_args(src: String, out: String, start: float, frames: int) -> PackedStringArray:
+	var a := PackedStringArray(["-hide_banner", "-nostdin", "-y", "-ss", "%.6f" % start, "-i", src,
+		"-map", "0:v:0", "-an", "-vf", _scale_filter(), "-c:v", "libtheora", "-q:v", "7"])
+	if frames > 0:
+		a.append_array(["-frames:v", str(frames)])
+	a.append_array(["-progress", "pipe:1", "-nostats", "-f", "ogg", out])
+	return a
+
+
+static func audio_args(src: String, out: String) -> PackedStringArray:
+	return PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src, "-vn", "-map", "0:a:0",
+		"-c:a", "libvorbis", "-q:a", "4", "-progress", "pipe:1", "-nostats", "-f", "ogg", out])
+
+
+## Joins the slices (listed in list, FFmpeg's concat format) and the sound without re-encoding.
+static func join_args(list: String, audio: String, out: String) -> PackedStringArray:
+	var a := PackedStringArray(["-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list])
+	if audio != "":
+		a.append_array(["-i", audio])
+	a.append_array(["-map", "0:v"])
+	if audio != "":
+		a.append_array(["-map", "1:a"])
+	a.append_array(["-c", "copy", "-progress", "pipe:1", "-nostats", "-f", "ogg", out])
+	return a
+
+
+## [start seconds, frames, seconds] for n slices of a video duration seconds long at fps frames a
+## second, cut on frame boundaries; the last runs to the end (frames 0).
+static func slice_plan(duration: float, n: int, fps: float) -> Array:
+	var total := roundi(duration * fps)
+	var per := ceili(float(total) / n)
+	var plan := []
+	var first := 0
+	while first < total:
+		var count := mini(per, total - first)
+		var last := first + count >= total
+		plan.append([first / fps, 0 if last else count, count / fps])
+		first += count
+	return plan
+
+
+## What FFmpeg's log says about its input: {duration (seconds, 0 if unknown), audio}.
+static func probe_info(log_text: String) -> Dictionary:
+	var info := {duration = 0.0, audio = false, fps = 0.0}
+	var at := log_text.find("Duration: ")
+	if at >= 0:
+		var hms := log_text.substr(at + 10, 11).split(":")
+		if hms.size() == 3 and hms[0].is_valid_int():
+			info.duration = float(hms[0]) * 3600.0 + float(hms[1]) * 60.0 + float(hms[2])
+	for line in log_text.split("\n"):
+		if "Stream #" in line and "Audio:" in line:
+			info.audio = true
+		if "Stream #" in line and "Video:" in line and info.fps <= 0.0:
+			for unit in [" fps", " tbr"]:
+				var m := RegEx.create_from_string("([0-9]+(?:\\.[0-9]+)?)" + unit).search(line)
+				if m != null and m.get_string(1).to_float() > 0.0:
+					info.fps = m.get_string(1).to_float()
+					break
+	return info
+
+
+func _spawn(args: PackedStringArray, role: String, extra := {}) -> bool:
+	var info := OS.execute_with_pipe(_conv.ff, args, false)
+	if info.is_empty():
+		_conv_failed("FFmpeg didn't start.")
+		return false
+	var job := {pid = info.pid, stdio = info.stdio, stderr = info.stderr, out_text = "", err_text = "", done_us = 0.0, role = role}
+	job.merge(extra)
+	_jobs.append(job)
+	return true
+
+
+func _start_single() -> void:
+	_conv.phase = "single"
+	_spawn(convert_args(_conv.input, ProjectSettings.globalize_path(_conv.part)), "single")
+
+
+func _start_slices(duration: float, audio: bool, fps: float) -> void:
+	_conv.phase = "slices"
+	_conv.duration = duration
+	_conv.audio = audio
+	DirAccess.make_dir_recursive_absolute(_conv.dir)
+	var list := PackedStringArray()
+	var plan := slice_plan(duration, workers(), fps)
+	for i in plan.size():
+		var piece := ProjectSettings.globalize_path(_conv.dir.path_join("v%d.ogv" % i))
+		list.append("file '%s'" % piece.replace("'", "'\\''"))
+		if not _spawn(slice_args(_conv.input, piece, plan[i][0], plan[i][1]), "slice", {length = plan[i][2]}):
+			return
+	var f := FileAccess.open(_conv.dir.path_join("list.txt"), FileAccess.WRITE)
+	f.store_string("\n".join(list) + "\n")
+	f.close()
+	if audio:
+		_spawn(audio_args(_conv.input, ProjectSettings.globalize_path(_conv.dir.path_join("a.oga"))), "audio")
+
+
+## Reads a job's progress (key=value lines on stdout) and log (stderr); true while it runs.
+func _pump(job: Dictionary) -> bool:
 	for pair in [["stdio", "out_text"], ["stderr", "err_text"]]:
-		var fa: FileAccess = _ff[pair[0]]
+		var fa: FileAccess = job[pair[0]]
 		if fa == null:
 			continue
 		var chunk := fa.get_buffer(65536)
 		if not chunk.is_empty():
-			_ff[pair[1]] += chunk.get_string_from_utf8()
-	var err: String = _ff.err_text
-	if _ff.duration <= 0.0:
-		var at := err.find("Duration: ")
-		if at >= 0:
-			var hms := err.substr(at + 10, 11).split(":")
-			if hms.size() == 3:
-				_ff.duration = float(hms[0]) * 3600.0 + float(hms[1]) * 60.0 + float(hms[2])
-	var out: String = _ff.out_text
+			job[pair[1]] += chunk.get_string_from_utf8()
+	var out: String = job.out_text
 	var key := out.rfind("out_time_us=")
 	if key < 0:
 		key = out.rfind("out_time_ms=")  # older FFmpeg: also microseconds, despite the name
 	if key >= 0:
-		_ff.done_us = out.substr(key + 12, out.find("\n", key) - key - 12).to_float()
-	if len(err) > 20000:
-		_ff.err_text = err.substr(err.length() - 4000)
-	if len(out) > 20000:
-		_ff.out_text = out.substr(out.length() - 2000)
-	var p: float = clampf(_ff.done_us / 1e6 / _ff.duration, 0.0, 1.0) if _ff.duration > 0.0 else 0.0
-	set_card("VIDEO", "Converting for the whiteboard…", "%s\n\n%d%%" % [video_url, roundi(p * 100.0)], INK, p)
-	if OS.is_process_running(int(_ff.pid)):
-		return
-	var code := OS.get_process_exit_code(int(_ff.pid))
-	var ff := _ff
-	_ff = {}
-	if ff.remove_src:
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(ff.src))
-	var f := FileAccess.open(ff.part, FileAccess.READ)
+		job.done_us = out.substr(key + 12, out.find("\n", key) - key - 12).to_float()
+	if job.err_text.length() > 20000:
+		job.err_text = job.err_text.substr(job.err_text.length() - 4000)
+	if out.length() > 20000:
+		job.out_text = out.substr(out.length() - 2000)
+	return OS.is_process_running(int(job.pid))
+
+
+static func _last_line(text: String) -> String:
+	var lines := text.strip_edges().split("\n")
+	return lines[lines.size() - 1].strip_edges() if not lines.is_empty() else ""
+
+
+## Moves the conversion along: progress on the board, and the next step when a step's jobs end.
+func _poll_convert() -> void:
+	var running := false
+	for job in _jobs:
+		if _pump(job):
+			running = true
+	match _conv.phase:
+		"probe":
+			if running:
+				return
+			var info := probe_info(_jobs[0].err_text)
+			_jobs.clear()
+			if info.duration >= MIN_SPLIT and info.fps > 0.0:
+				_start_slices(info.duration, info.audio, info.fps)
+			else:
+				_start_single()
+		"single":
+			var job: Dictionary = _jobs[0]
+			if _conv.duration <= 0.0:
+				_conv.duration = probe_info(job.err_text).duration
+			var p: float = clampf(job.done_us / 1e6 / _conv.duration, 0.0, 1.0) if _conv.duration > 0.0 else 0.0
+			set_card("VIDEO", "Converting for the whiteboard…", "%s\n\n%d%%" % [video_url, roundi(p * 100.0)], INK, p)
+			if running:
+				return
+			var code := OS.get_process_exit_code(int(job.pid))
+			var log_text: String = job.err_text
+			_jobs.clear()
+			_finish_convert(code, log_text)
+		"slices":
+			var done := 0.0
+			var n := 0
+			for job in _jobs:
+				if job.role == "slice":
+					done += minf(job.done_us / 1e6, job.length)
+					n += 1
+			var p := clampf(done / _conv.duration, 0.0, 1.0) * 0.98
+			set_card("VIDEO", "Converting for the whiteboard…", "%s\n\n%d%%  ·  %d at once" % [video_url, roundi(p * 100.0), n], INK, p)
+			if running:
+				return
+			for job in _jobs:
+				var code := OS.get_process_exit_code(int(job.pid))
+				if code != 0:
+					_conv_failed("FFmpeg couldn't convert this file (exit code %d).\n%s" % [code, _last_line(job.err_text)])
+					return
+			_jobs.clear()
+			_conv.phase = "join"
+			var audio := ProjectSettings.globalize_path(_conv.dir.path_join("a.oga")) if _conv.audio else ""
+			_spawn(join_args(ProjectSettings.globalize_path(_conv.dir.path_join("list.txt")), audio,
+				ProjectSettings.globalize_path(_conv.part)), "join")
+		"join":
+			set_card("VIDEO", "Converting for the whiteboard…", "%s\n\nJoining the pieces" % video_url, INK, 0.99)
+			if running:
+				return
+			var code := OS.get_process_exit_code(int(_jobs[0].pid))
+			var log_text: String = _jobs[0].err_text
+			_jobs.clear()
+			_finish_convert(code, log_text)
+
+
+func _finish_convert(code: int, log_text: String) -> void:
+	var c := _conv
+	_remove_pieces()
+	if c.remove_src:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(c.src))
+	var f := FileAccess.open(c.part, FileAccess.READ)
 	var head := f.get_buffer(4096) if f != null else PackedByteArray()
 	if f != null:
 		f.close()
+	_conv = {}
 	if code != 0 or video_kind(head) != "theora":
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(ff.part))
-		var lines := String(ff.err_text).strip_edges().split("\n")
-		var last := lines[lines.size() - 1].strip_edges() if not lines.is_empty() else ""
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(c.part))
+		var last := _last_line(log_text)
 		_video_error("FFmpeg couldn't convert this file (exit code %d).%s" % [code, "\n" + last if last != "" else ""])
 		return
-	DirAccess.rename_absolute(ProjectSettings.globalize_path(ff.part), ProjectSettings.globalize_path(ff.out))
-	_start_video(ff.out)
+	DirAccess.rename_absolute(ProjectSettings.globalize_path(c.part), ProjectSettings.globalize_path(c.out))
+	_start_video(c.out)
+
+
+func _conv_failed(message: String) -> void:
+	_cancel_convert()
+	_video_error(message)
+
+
+func _remove_pieces() -> void:
+	if _conv.is_empty() or String(_conv.get("dir", "")) == "":
+		return
+	var d := DirAccess.open(_conv.dir)
+	if d != null:
+		for f in d.get_files():
+			d.remove(f)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(_conv.dir))
 
 
 func _cancel_convert() -> void:
-	if _ff.is_empty():
+	for job in _jobs:
+		if OS.is_process_running(int(job.pid)):
+			OS.kill(int(job.pid))
+	_jobs.clear()
+	if _conv.is_empty():
 		return
-	if OS.is_process_running(int(_ff.pid)):
-		OS.kill(int(_ff.pid))
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(_ff.part))
-	if _ff.remove_src:
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(_ff.src))
-	_ff = {}
+	_remove_pieces()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(_conv.part))
+	if _conv.remove_src:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(_conv.src))
+	_conv = {}
 
 
 func _exit_tree() -> void:
@@ -795,7 +991,7 @@ func _video_live() -> bool:
 
 
 func _update_video(dt: float) -> void:
-	if video_state == "converting" and not _ff.is_empty():
+	if video_state == "converting" and not _conv.is_empty():
 		_poll_convert()
 		return
 	if video_state == "loading" and _http != null:
