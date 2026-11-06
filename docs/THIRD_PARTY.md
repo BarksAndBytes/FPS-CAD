@@ -5,6 +5,7 @@
 | [Open CASCADE Technology](https://github.com/Open-Cascade-SAS/OCCT) 8.0 | B-rep kernel, meshing, STEP/IGES/STL | LGPL 2.1 with the OCCT exception | Separate shared libraries beside the extension |
 | [godot-cpp](https://github.com/godotengine/godot-cpp) | GDExtension bindings | MIT | Statically linked into the extension |
 | [Godot Engine](https://godotengine.org) | Game engine | MIT | Export templates |
+| [FFmpeg](https://ffmpeg.org) ([BtbN's LGPL Windows build](https://github.com/BtbN/FFmpeg-Builds)) | Converts videos to Ogg Theora for the video board | LGPL 2.1+ (the LGPL build: no x264 / x265) | Windows: `ffmpeg.exe` beside the game, a separate program, with `FFmpeg-LICENSE.txt` and `FFmpeg-NOTICE.txt`; elsewhere the game uses an `ffmpeg` on the PATH if there is one |
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON in native files | MIT | Header-only |
 | [miniz](https://github.com/richgel999/miniz) | ZIP containers (.fpprt, .fpasm, .3mf) | MIT | Statically linked |
 | [Chakra Petch](https://github.com/google/fonts/tree/main/ofl/chakrapetch) | Display font (titles, tool names) | SIL OFL 1.1 | `godot/fonts/`, licence beside it |
@@ -21,6 +22,14 @@
 - Any change to Open CASCADE itself must be published under the same licence.
 
 Have counsel review this before the first public release, as the spec's risk table notes.
+
+## FFmpeg
+
+`ffmpeg.exe` is an unmodified FFmpeg program that the game runs as a separate process; nothing is
+linked into the game. The Windows zip carries its licence and a notice naming the exact build and
+where its source is; players can swap in their own build. FFmpeg's H.264 / HEVC decoders read
+patent-encumbered formats: shipping a decoder may need a patent licence in some countries, which is
+why Godot leaves them out of the engine. Have counsel look at this with the LGPL review below.
 
 ## 3MF
 

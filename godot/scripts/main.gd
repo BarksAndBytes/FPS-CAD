@@ -62,6 +62,7 @@ func _ready() -> void:
 		# Packaged-build check (CI): the CAD extension and Open CASCADE loaded and can build a part.
 		var ok := ClassDB.class_exists("CadPart") and ClassDB.instantiate("CadPart") != null
 		print("SELF-CHECK ", "OK" if ok else "FAIL: the CAD extension did not load")
+		print("FFMPEG ", Whiteboard.ffmpeg_path() if Whiteboard.ffmpeg_path() != "" else "none")
 		get_tree().quit(0 if ok else 1)
 		return
 	UiTheme.apply()

@@ -146,11 +146,15 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
   downloads the link into `user://videos` (kept by an MD5 of the URL, so it plays again without
   downloading; 1 GB at most), showing progress, then checks the file's first bytes. A Theora
   video plays, letterboxed, looping, with its sound fading with distance (full within 3 board
-  heights, silent past 20). Anything else gets an error screen on the board saying what it was:
-  links to YouTube, Vimeo and other sites that show video in a page are turned away before
-  downloading; MP4/MOV, WebM/MKV, web pages, sound-only Ogg, failed downloads (HTTP status,
-  no connection, TLS) and undecodable files are named, with the ffmpeg line that converts a
-  video to .ogv. The link is saved with the board; a reopened part shows "Ready to play".
+  heights, silent past 20). Any other video (MP4/MOV, WebM/MKV, AVI, sound-only Ogg…) is
+  converted to Theora by FFmpeg running in the background (`ffmpeg.exe` ships beside the game on
+  Windows; elsewhere an `ffmpeg` on the PATH is used), scaled to at most 1280 px wide, with the
+  percentage on the board from FFmpeg's progress output, then kept like a download. What can't
+  play gets an error screen saying why: links to YouTube, Vimeo and other sites that show video in
+  a page are turned away before downloading; web pages, failed downloads (HTTP status, no
+  connection, TLS), files FFmpeg can't read (with its last message) and, on Android, which has no
+  FFmpeg yet, anything that needs converting, with the ffmpeg line to convert it on a computer.
+  The link is saved with the board; a reopened part shows "Ready to play".
 - **Arrange boards**: RT picks up any board, the message board included. A carried board stays at
   the same distance ahead and turned the same way relative to the player, standing on the floor;
   D-pad ← / → (mouse wheel) turns it 15°, ↑ / ↓ (= / −) resizes it ×1.25 about its feet (0.1× to

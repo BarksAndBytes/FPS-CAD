@@ -15,9 +15,11 @@ extends Node3D
 ## scaled evenly by board_scale.
 ##
 ## Video: Godot plays Ogg Theora (.ogv) only, from a file, so the board downloads the link into
-## user://videos (kept, so it plays again without downloading) and checks what arrived. Anything
-## else (an MP4, a WebM, a web page such as YouTube) gets an error screen on the board saying what
-## it was and how to convert it. Its sound fades with distance from the player.
+## user://videos (kept, so it plays again without downloading) and checks what arrived. Any other
+## video (MP4, MOV, WebM, MKV, AVI…) is converted to Theora with FFmpeg, which ships beside the
+## game on Windows (or is found on the PATH elsewhere), with progress on the board. What can't play
+## (a web page such as YouTube, a failed download, a platform without FFmpeg, a file FFmpeg can't
+## read) gets an error screen on the board saying why. Its sound fades with distance.
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const MODEL := "res://models/whiteboard.glb"
@@ -38,6 +40,7 @@ const NOTICE_LIFE := 12.0  # seconds a notice stays on the board
 const VIDEO_DIR := "user://videos"
 const VIDEO_LIMIT := 1024 * 1024 * 1024  # 1 GB
 const CONVERT_HINT := "The whiteboard plays Ogg Theora (.ogv) videos. Convert one with:\nffmpeg -i video.mp4 -c:v libtheora -q:v 7 -c:a libvorbis video.ogv"
+const MAX_WIDTH := 1280  # converted videos are scaled down to this: Theora decodes on the CPU
 ## Sites that show their videos inside web pages, which the board can't display.
 const VIDEO_SITES := ["youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com", "dailymotion.com",
 	"facebook.com", "instagram.com", "twitter.com", "x.com/"]
@@ -49,12 +52,14 @@ var yaw := 0.0
 var board_scale := 1.0
 var notes: Array = []      # kind "notes": the player's notes, one per line
 var video_url := ""        # kind "video"
-var video_state := ""      # "", "ready", "loading", "playing", "paused" or "error"
+var video_state := ""      # "", "ready", "loading", "converting", "playing", "paused" or "error"
 var video_message := ""    # the error screen's reason
 var _video: VideoStreamPlayer = null
 var _video_back := ColorRect.new()
 var _http: HTTPRequest = null
 var _video_fitted := false
+var _ff := {}              # the FFmpeg conversion running: {pid, stdio, stderr, src, out, part, out_text, err_text, duration, done_us}
+static var _ffmpeg_path: Variant = null  # found once: the FFmpeg program, or "" if there is none
 var _video_t := 0.0
 var _notes_box := VBoxContainer.new()
 var _note_labels: Array[Label] = []
@@ -238,22 +243,67 @@ static func url_problem(url: String) -> String:
 	return ""
 
 
-## Why downloaded bytes (the start of the file) can't play; "" for an Ogg Theora video.
-static func video_problem(head: PackedByteArray, content_type := "") -> String:
+## What the start of a downloaded file is: "theora" (plays as it is), "page" (a web page, never a
+## video), or another kind that FFmpeg may convert: "mp4", "webm", "ogg" (Ogg without Theora),
+## "other".
+static func video_kind(head: PackedByteArray, content_type := "") -> String:
 	var start := head.slice(0, 12).get_string_from_ascii()
 	if start.begins_with("OggS"):
 		for i in maxi(0, head.size() - 7):
 			if head[i] == 0x80 and head.slice(i + 1, i + 7).get_string_from_ascii() == "theora":
-				return ""
-		return "That's an Ogg file without Theora video (sound only, or another video format).\n\n" + CONVERT_HINT
+				return "theora"
+		return "ogg"
 	if head.size() >= 8 and head.slice(4, 8).get_string_from_ascii() == "ftyp":
-		return "That's an MP4 / MOV video, which the whiteboard can't decode.\n\n" + CONVERT_HINT
+		return "mp4"
 	if head.size() >= 4 and head[0] == 0x1A and head[1] == 0x45 and head[2] == 0xDF and head[3] == 0xA3:
-		return "That's a WebM / MKV video, which the whiteboard can't decode.\n\n" + CONVERT_HINT
-	var text := start.strip_edges().to_lower()
-	if "text/html" in content_type.to_lower() or text.begins_with("<"):
-		return "That link is a web page, not a video file.\n\n" + CONVERT_HINT
+		return "webm"
+	if "text/html" in content_type.to_lower() or start.strip_edges().to_lower().begins_with("<"):
+		return "page"
+	return "other"
+
+
+## Why downloaded bytes can't play without converting; "" for an Ogg Theora video.
+static func video_problem(head: PackedByteArray, content_type := "") -> String:
+	match video_kind(head, content_type):
+		"theora":
+			return ""
+		"ogg":
+			return "That's an Ogg file without Theora video (sound only, or another video format).\n\n" + CONVERT_HINT
+		"mp4":
+			return "That's an MP4 / MOV video, which the whiteboard can't decode itself.\n\n" + CONVERT_HINT
+		"webm":
+			return "That's a WebM / MKV video, which the whiteboard can't decode itself.\n\n" + CONVERT_HINT
+		"page":
+			return "That link is a web page, not a video file.\n\n" + CONVERT_HINT
 	return "That file isn't a video the whiteboard can play.\n\n" + CONVERT_HINT
+
+
+## The FFmpeg program that converts videos: beside the game (Windows builds ship it), else on the
+## PATH. "" when there is none (Android).
+static func ffmpeg_path() -> String:
+	if _ffmpeg_path != null:
+		return _ffmpeg_path
+	_ffmpeg_path = ""
+	if OS.has_feature("android") or OS.has_feature("web"):
+		return ""
+	var exe := "ffmpeg.exe" if OS.has_feature("windows") else "ffmpeg"
+	var beside := OS.get_executable_path().get_base_dir().path_join(exe)
+	for candidate in [beside, exe]:
+		if candidate == beside and not FileAccess.file_exists(beside):
+			continue
+		var out := []
+		if OS.execute(candidate, ["-hide_banner", "-encoders"], out, true) == 0 and "libtheora" in "".join(out):
+			_ffmpeg_path = candidate
+			break
+	return _ffmpeg_path
+
+
+## The FFmpeg arguments that turn src into an Ogg Theora video at out (at most MAX_WIDTH wide).
+static func convert_args(src: String, out: String) -> PackedStringArray:
+	return PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src,
+		"-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=w='min(%d,iw)':h=-2" % MAX_WIDTH,
+		"-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "4",
+		"-progress", "pipe:1", "-nostats", "-f", "ogg", out])
 
 
 ## Where a link's video is kept once downloaded.
@@ -309,12 +359,100 @@ func play_file(path: String, url := "") -> void:
 	if f == null:
 		_video_error("The video file is missing.")
 		return
-	var problem := video_problem(f.get_buffer(4096))
+	var head := f.get_buffer(4096)
 	f.close()
-	if problem != "":
-		_video_error(problem)
+	var kind := video_kind(head)
+	if kind == "theora":
+		_start_video(path)
+	elif kind == "page":
+		_video_error(video_problem(head))
+	else:
+		_convert(path, cached_path(video_url), video_problem(head), false)
+
+
+## Converts src to Ogg Theora at out with FFmpeg in the background, then plays it. why: what the
+## board says if it can't. remove_src: src was only downloaded for this.
+func _convert(src: String, out: String, why: String, remove_src: bool) -> void:
+	var ff := ffmpeg_path()
+	if ff == "":
+		if remove_src:
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(src))
+		_video_error(why.replace(CONVERT_HINT, "Converting it needs FFmpeg, which this version of the game doesn't have.\n\n" + CONVERT_HINT))
 		return
-	_start_video(path)
+	var part := out + ".part"
+	var info := OS.execute_with_pipe(ff, convert_args(ProjectSettings.globalize_path(src), ProjectSettings.globalize_path(part)), false)
+	if info.is_empty():
+		_video_error("FFmpeg didn't start.")
+		return
+	_ff = {pid = info.pid, stdio = info.stdio, stderr = info.stderr, src = src, out = out, part = part,
+		remove_src = remove_src, out_text = "", err_text = "", duration = 0.0, done_us = 0.0}
+	video_state = "converting"
+	set_card("VIDEO", "Converting for the whiteboard…", video_url, INK, 0.0)
+
+
+## Reads FFmpeg's progress (key=value lines on stdout; the duration from its log on stderr) and
+## finishes when it stops.
+func _poll_convert() -> void:
+	for pair in [["stdio", "out_text"], ["stderr", "err_text"]]:
+		var fa: FileAccess = _ff[pair[0]]
+		if fa == null:
+			continue
+		var chunk := fa.get_buffer(65536)
+		if not chunk.is_empty():
+			_ff[pair[1]] += chunk.get_string_from_utf8()
+	var err: String = _ff.err_text
+	if _ff.duration <= 0.0:
+		var at := err.find("Duration: ")
+		if at >= 0:
+			var hms := err.substr(at + 10, 11).split(":")
+			if hms.size() == 3:
+				_ff.duration = float(hms[0]) * 3600.0 + float(hms[1]) * 60.0 + float(hms[2])
+	var out: String = _ff.out_text
+	var key := out.rfind("out_time_us=")
+	if key < 0:
+		key = out.rfind("out_time_ms=")  # older FFmpeg: also microseconds, despite the name
+	if key >= 0:
+		_ff.done_us = out.substr(key + 12, out.find("\n", key) - key - 12).to_float()
+	if len(err) > 20000:
+		_ff.err_text = err.substr(err.length() - 4000)
+	if len(out) > 20000:
+		_ff.out_text = out.substr(out.length() - 2000)
+	var p: float = clampf(_ff.done_us / 1e6 / _ff.duration, 0.0, 1.0) if _ff.duration > 0.0 else 0.0
+	set_card("VIDEO", "Converting for the whiteboard…", "%s\n\n%d%%" % [video_url, roundi(p * 100.0)], INK, p)
+	if OS.is_process_running(int(_ff.pid)):
+		return
+	var code := OS.get_process_exit_code(int(_ff.pid))
+	var ff := _ff
+	_ff = {}
+	if ff.remove_src:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(ff.src))
+	var f := FileAccess.open(ff.part, FileAccess.READ)
+	var head := f.get_buffer(4096) if f != null else PackedByteArray()
+	if f != null:
+		f.close()
+	if code != 0 or video_kind(head) != "theora":
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(ff.part))
+		var lines := String(ff.err_text).strip_edges().split("\n")
+		var last := lines[lines.size() - 1].strip_edges() if not lines.is_empty() else ""
+		_video_error("FFmpeg couldn't convert this file (exit code %d).%s" % [code, "\n" + last if last != "" else ""])
+		return
+	DirAccess.rename_absolute(ProjectSettings.globalize_path(ff.part), ProjectSettings.globalize_path(ff.out))
+	_start_video(ff.out)
+
+
+func _cancel_convert() -> void:
+	if _ff.is_empty():
+		return
+	if OS.is_process_running(int(_ff.pid)):
+		OS.kill(int(_ff.pid))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(_ff.part))
+	if _ff.remove_src:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(_ff.src))
+	_ff = {}
+
+
+func _exit_tree() -> void:
+	_cancel_convert()
 
 
 ## The primary button on the board: pause, carry on, or (re)load.
@@ -326,7 +464,7 @@ func toggle_video() -> void:
 		"paused":
 			_video.paused = false
 			video_state = "playing"
-		"loading":
+		"loading", "converting":
 			pass
 		_:
 			if video_url != "":
@@ -364,13 +502,18 @@ func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _b
 	var head := f.get_buffer(4096) if f != null else PackedByteArray()
 	if f != null:
 		f.close()
-	var problem := video_problem(head, content_type)
-	if problem != "":
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(part))
-		_video_error(problem)
+	var kind := video_kind(head, content_type)
+	if kind == "theora":
+		DirAccess.rename_absolute(ProjectSettings.globalize_path(part), ProjectSettings.globalize_path(path))
+		_start_video(path)
 		return
-	DirAccess.rename_absolute(ProjectSettings.globalize_path(part), ProjectSettings.globalize_path(path))
-	_start_video(path)
+	if kind == "page":
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(part))
+		_video_error(video_problem(head, content_type))
+		return
+	var src := path.get_basename() + ".src"
+	DirAccess.rename_absolute(ProjectSettings.globalize_path(part), ProjectSettings.globalize_path(src))
+	_convert(src, path, video_problem(head, content_type), true)
 
 
 func _start_video(path: String) -> void:
@@ -389,6 +532,7 @@ func _start_video(path: String) -> void:
 
 
 func _stop_video() -> void:
+	_cancel_convert()
 	if _http != null:
 		_http.cancel_request()
 		_http.queue_free()
@@ -414,6 +558,9 @@ func _video_live() -> bool:
 
 
 func _update_video(dt: float) -> void:
+	if video_state == "converting" and not _ff.is_empty():
+		_poll_convert()
+		return
 	if video_state == "loading" and _http != null:
 		var total := _http.get_body_size()
 		var got := _http.get_downloaded_bytes()

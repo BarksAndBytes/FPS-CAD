@@ -1126,11 +1126,30 @@ func _video_board(main: Node) -> void:
 	var f := FileAccess.open(bad, FileAccess.WRITE)
 	f.store_buffer(mp4)
 	f.close()
-	vb.play_file(bad, "https://example.com/clip.mp4")
+	var has_ff: bool = WB.ffmpeg_path() != ""
+	vb.play_file(bad, "https://example.com/broken.mp4")
+	for i in 600:
+		if vb.video_state != "converting":
+			break
+		await _frames(1)
 	var lines: Array = vb.text_lines()
-	_check(vb.video_state == "error" and String(lines[1]) == "Can't play this video" and String(lines[2]).contains("MP4")
-		and String(lines[2]).contains("ffmpeg") and not vb._video.visible, "an MP4 gets the error screen, with how to convert it")
+	_check(vb.video_state == "error" and String(lines[1]) == "Can't play this video" and not vb._video.visible
+		and (String(lines[2]).contains("FFmpeg couldn't convert") if has_ff else String(lines[2]).contains("needs FFmpeg")),
+		"a broken MP4 gets the error screen (%s)" % String(lines[2]).get_slice("\n", 0))
 	DirAccess.remove_absolute(bad)
+	if has_ff:
+		# A real MP4 is converted to Theora in the background, with progress, then plays.
+		var url := "https://example.com/tiny-%d.mp4" % Time.get_ticks_usec()
+		vb.play_file("res://tests/tiny.mp4", url)
+		_check(vb.video_state == "converting" and String(vb.text_lines()[1]).begins_with("Converting"), "an MP4 is converted with FFmpeg")
+		for i in 900:
+			if vb.video_state != "converting":
+				break
+			await _frames(1)
+		_check(vb.video_state == "playing" and FileAccess.file_exists(WB.cached_path(url)), "then plays, kept for next time (%s)" % vb.video_message)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
+	else:
+		print("SKIP FFmpeg conversion: no ffmpeg on this machine")
 	vb.play_url("https://youtu.be/abc")
 	_check(vb.video_state == "error" and String(vb.text_lines()[2]).contains("youtu.be"), "a YouTube link gets the error screen at once")
 	vb.set_video("https://example.com/tiny.ogv")

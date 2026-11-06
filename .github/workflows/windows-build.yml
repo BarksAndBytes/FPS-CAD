@@ -87,6 +87,33 @@ jobs:
           PY
           ls godot-bin "$DEST"
 
+      - name: FFmpeg for converting videos (BtbN's LGPL build)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The newest release-branch build, else master. LGPL: no x264/x265; Theora and Vorbis
+          # encoders are what the video board needs, so check they are there.
+          NAME=$(gh api repos/BtbN/FFmpeg-Builds/releases/tags/latest --jq '[.assets[].name | select(test("^ffmpeg-n[0-9.]+-latest-win64-lgpl-[0-9.]+\\.zip$"))] | sort | last // ""')
+          [ -n "$NAME" ] || NAME=ffmpeg-master-latest-win64-lgpl.zip
+          echo "FFmpeg build: $NAME"
+          echo "FFMPEG_BUILD=$NAME" >> "$GITHUB_ENV"
+          curl -sSL -o ffmpeg.zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$NAME"
+          mkdir -p ffmpeg-bin
+          python - <<'PY'
+          import os, zipfile
+          with zipfile.ZipFile("ffmpeg.zip") as z:
+              for n in z.namelist():
+                  base = os.path.basename(n)
+                  if n.endswith("/bin/ffmpeg.exe") or base == "LICENSE.txt":
+                      with open(os.path.join("ffmpeg-bin", "FFmpeg-LICENSE.txt" if base == "LICENSE.txt" else base), "wb") as fh:
+                          fh.write(z.read(n))
+          PY
+          ls -la ffmpeg-bin
+          ./ffmpeg-bin/ffmpeg.exe -hide_banner -version | sed -n 1p
+          ENC=$(./ffmpeg-bin/ffmpeg.exe -hide_banner -encoders)
+          grep -q libtheora <<< "$ENC" || { echo "::error::$NAME has no libtheora encoder"; exit 1; }
+          grep -q libvorbis <<< "$ENC" || { echo "::error::$NAME has no libvorbis encoder"; exit 1; }
+
       - name: Export FPS-CAD.exe
         run: |
           GODOT="$PWD/$(ls godot-bin/*_console.exe | head -1)"
@@ -102,6 +129,14 @@ jobs:
           ls -la "$OUT"
           ls "$OUT" | grep -q "libfpcad" || { echo "::error::the build is missing the CAD extension"; exit 1; }
           ls "$OUT" | grep -q "^TKernel.dll$" || { echo "::error::the build is missing Open CASCADE"; exit 1; }
+          # FFmpeg, a separate program the video board runs to convert videos to Ogg Theora.
+          cp ffmpeg-bin/ffmpeg.exe ffmpeg-bin/FFmpeg-LICENSE.txt "$OUT"/
+          printf '%s\r\n' "FFmpeg (ffmpeg.exe) converts videos for the whiteboard's video board." \
+            "It is FFmpeg, licensed under the LGPL 2.1 or later (FFmpeg-LICENSE.txt), built by BtbN:" \
+            "https://github.com/BtbN/FFmpeg-Builds (build $FFMPEG_BUILD)." \
+            "Its source: https://ffmpeg.org/download.html and https://github.com/FFmpeg/FFmpeg" \
+            "You may replace ffmpeg.exe with your own build; it needs the libtheora and libvorbis encoders." \
+            > "$OUT/FFmpeg-NOTICE.txt"
           rm -f "$OUT"/*.pdb
 
       - name: Smoke-run the exported game
@@ -115,6 +150,7 @@ jobs:
           cat run.log
           cp run.log ../smoke-run.log
           grep -q "SELF-CHECK OK" run.log || { echo "::error::the exported game failed its self-check (see the log above)"; exit 1; }
+          grep -q "FFMPEG .*ffmpeg.exe" run.log || { echo "::error::the game did not find ffmpeg.exe beside it"; exit 1; }
           rm -f run.log
 
       - name: Zip
@@ -156,6 +192,6 @@ jobs:
             --title "Windows build ${BUILD} (${GITHUB_SHA::7})" \
             --notes "Build ${BUILD} (version 0.2.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a PC.
 
-          Run: download the zip, right-click it and choose Extract All, then open the folder and run FPS-CAD.exe. Keep every file together; the DLLs beside the exe are the CAD kernel. Windows 10 or 11, 64-bit, with a GPU that supports Vulkan or Direct3D 12. If it closes straight away, run FPS-CAD.console.exe instead to see the error.
+          Run: download the zip, right-click it and choose Extract All, then open the folder and run FPS-CAD.exe. Keep every file together; the DLLs beside the exe are the CAD kernel, and ffmpeg.exe converts videos for the video board. Windows 10 or 11, 64-bit, with a GPU that supports Vulkan or Direct3D 12. If it closes straight away, run FPS-CAD.console.exe instead to see the error.
 
           The build isn't code-signed, so Windows SmartScreen may say it protected your PC: choose More info, then Run anyway. The game checks for newer Windows builds when it starts and can install them itself (pause menu → Check for updates); if its folder isn't writable, download the newest zip instead. Your saved parts live in your user folder, not beside the exe."
