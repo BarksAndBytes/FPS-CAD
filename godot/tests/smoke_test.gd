@@ -1108,6 +1108,22 @@ func _video_board(main: Node) -> void:
 		and WB.video_problem("<!DOCTYPE html><html>".to_ascii_buffer(), "text/html").contains("web page")
 		and WB.video_problem("OggS".to_ascii_buffer() + PackedByteArray([0, 2, 0, 0]) + "vorbis".to_ascii_buffer()).contains("without Theora"),
 		"downloads are told apart: Ogg Theora plays; MP4, WebM, web pages and sound-only Ogg get an error screen")
+	# Web pages: the page's main video.
+	var page := "https://news.example.com/stories/today/item.html?x=1"
+	_check(WB.find_page_video('<meta property="og:video" content="https://cdn.example.com/a.mp4"><video src="b.mp4" width="1920" height="1080"></video>', page)
+		== "https://cdn.example.com/a.mp4", "a page's declared video (og:video) comes first")
+	_check(WB.find_page_video('<video src="small.mp4" width="320" height="180"></video><video width="1280" height="720"><source src="../media/big.webm" type="video/webm"></video>', page)
+		== "https://news.example.com/stories/media/big.webm", "else the largest <video>, its <source> made absolute")
+	_check(WB.find_page_video('<script type="application/ld+json">{"@type":"VideoObject","contentUrl":"https:\\/\\/v.example.com\\/c.mp4"}</script>', page)
+		== "https://v.example.com/c.mp4", "a VideoObject's contentUrl counts as declared")
+	_check(WB.find_page_video('<base href="https://static.example.org/x/"><p><a href="clips/d.mp4?dl=1&amp;t=2">download</a></p>', page)
+		== "https://static.example.org/x/clips/d.mp4?dl=1&t=2", "else a link to a video file, with <base> and entities")
+	_check(WB.find_page_video('<video src="blob:https://x/123"></video><video><source src="/live/master.m3u8" type="application/x-mpegURL"></video>', page)
+		== "https://news.example.com/live/master.m3u8" and WB.is_stream("https://news.example.com/live/master.m3u8?t=1"),
+		"script-made blob: videos are skipped; an HLS playlist is taken as a stream")
+	_check(WB.find_page_video("<p>No video here</p><a href='/about.html'>about</a>", page) == "", "a page with no video finds nothing")
+	_check(WB.find_page_video('<meta property="og:video" content="https://www.youtube.com/embed/abc">', page).contains("youtube.com"),
+		"an embedded YouTube video is found, so the board can say why it can't play it")
 	main.tools.set_tool_id("board_video")
 	main.tools._act(true, false)
 	await _frames(2)

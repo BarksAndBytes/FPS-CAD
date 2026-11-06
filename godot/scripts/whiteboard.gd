@@ -18,8 +18,14 @@ extends Node3D
 ## user://videos (kept, so it plays again without downloading) and checks what arrived. Any other
 ## video (MP4, MOV, WebM, MKV, AVI…) is converted to Theora with FFmpeg, which ships beside the
 ## game on Windows (or is found on the PATH elsewhere), with progress on the board. What can't play
-## (a web page such as YouTube, a failed download, a platform without FFmpeg, a file FFmpeg can't
-## read) gets an error screen on the board saying why. Its sound fades with distance.
+## (a failed download, a platform without FFmpeg, a file FFmpeg can't read) gets an error screen
+## on the board saying why. Its sound fades with distance.
+##
+## A link to a web page plays the page's main video (find_page_video): the video the page declares
+## (og:video, or a VideoObject's contentUrl), else its largest <video>, else a link to a video
+## file. HLS and DASH playlists (.m3u8, .mpd) go straight to FFmpeg, which reads the stream.
+## YouTube, Vimeo and the like are turned away: their pages hold no video file, and getting one
+## would mean working around their stream protection and terms.
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const MODEL := "res://models/whiteboard.glb"
@@ -41,6 +47,7 @@ const VIDEO_DIR := "user://videos"
 const VIDEO_LIMIT := 1024 * 1024 * 1024  # 1 GB
 const CONVERT_HINT := "The whiteboard plays Ogg Theora (.ogv) videos. Convert one with:\nffmpeg -i video.mp4 -c:v libtheora -q:v 7 -c:a libvorbis video.ogv"
 const MAX_WIDTH := 1280  # converted videos are scaled down to this: Theora decodes on the CPU
+const USER_AGENT := "User-Agent: Mozilla/5.0 (compatible; FPS-CAD video board)"
 ## Sites that show their videos inside web pages, which the board can't display.
 const VIDEO_SITES := ["youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com", "dailymotion.com",
 	"facebook.com", "instagram.com", "twitter.com", "x.com/"]
@@ -238,8 +245,8 @@ static func url_problem(url: String) -> String:
 		return "That isn't a web link: it should start with https://"
 	for site in VIDEO_SITES:
 		if site in u:
-			return "%s shows its videos inside a web page, which a whiteboard can't play. Link straight to a video file instead.\n\n%s" % [
-				String(site).trim_suffix("/"), CONVERT_HINT]
+			return "%s streams its videos in a protected player, so the whiteboard can't take the video from the page. Link to a page with an ordinary video, or to the video file itself." % [
+				String(site).trim_suffix("/")]
 	return ""
 
 
@@ -300,7 +307,8 @@ static func ffmpeg_path() -> String:
 
 ## The FFmpeg arguments that turn src into an Ogg Theora video at out (at most MAX_WIDTH wide).
 static func convert_args(src: String, out: String) -> PackedStringArray:
-	return PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src,
+	var web := PackedStringArray(["-user_agent", USER_AGENT.trim_prefix("User-Agent: ")]) if src.begins_with("http") else PackedStringArray()
+	return web + PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src,
 		"-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=w='min(%d,iw)':h=-2" % MAX_WIDTH,
 		"-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "4",
 		"-progress", "pipe:1", "-nostats", "-f", "ogg", out])
@@ -335,6 +343,14 @@ func play_url(url: String) -> void:
 	if FileAccess.file_exists(path):
 		_start_video(path)
 		return
+	if is_stream(video_url):
+		_convert(video_url, path, "That stream couldn't be read.", false)
+		return
+	_download(video_url, path, false)
+
+
+## Fetches url into path + ".part"; from_page: url was found on the page the player linked.
+func _download(url: String, path: String, from_page: bool) -> void:
 	DirAccess.make_dir_recursive_absolute(VIDEO_DIR)
 	_http = HTTPRequest.new()
 	_http.max_redirects = 8
@@ -342,13 +358,123 @@ func play_url(url: String) -> void:
 	_http.download_chunk_size = 262144
 	_http.download_file = ProjectSettings.globalize_path(path + ".part")
 	add_child(_http)
-	_http.request_completed.connect(_on_video_downloaded.bind(path))
-	var err := _http.request(video_url)
+	_http.request_completed.connect(_on_video_downloaded.bind(path, url, from_page))
+	var err := _http.request(url, [USER_AGENT])
 	if err != OK:
 		_video_error("The download could not start (error %d)." % err)
 		return
 	video_state = "loading"
-	set_card("VIDEO", "Downloading…", video_url, INK, 0.0)
+	set_card("VIDEO", "Downloading…", url, INK, 0.0)
+
+
+## HLS and DASH playlists: FFmpeg reads these itself, segment by segment.
+static func is_stream(url: String) -> bool:
+	var u := url.to_lower().get_slice("?", 0).get_slice("#", 0)
+	return u.ends_with(".m3u8") or u.ends_with(".mpd")
+
+
+## The main video on a web page, as an absolute link, or "". In order: the video the page
+## declares (og:video / twitter:player:stream when it is a file or a stream, a VideoObject's
+## contentUrl), the largest <video> (its src or first <source>), a link to a video file.
+static func find_page_video(html: String, page_url: String) -> String:
+	var base := page_url
+	var bm := RegEx.create_from_string("(?is)<base\\s[^>]*href\\s*=\\s*[\"']([^\"']+)").search(html)
+	if bm != null:
+		base = resolve_url(page_url, _unescape(bm.get_string(1)))
+	var found: Array = []  # [url, score]
+	var meta := RegEx.create_from_string("(?is)<meta\\s[^>]*>")
+	var declared := ["og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"]
+	for m in meta.search_all(html):
+		var a := _attributes(m.get_string())
+		var key := String(a.get("property", a.get("name", ""))).to_lower()
+		var content := String(a.get("content", ""))
+		if key in declared and content != "":
+			var u := resolve_url(base, content)
+			if _video_file(u):
+				found.append([u, 3000000000 - declared.find(key)])
+	for m in RegEx.create_from_string("(?s)\"contentUrl\"\\s*:\\s*\"([^\"]+)\"").search_all(html):
+		var u := resolve_url(base, m.get_string(1).replace("\\/", "/"))
+		if _video_file(u):
+			found.append([u, 2000000000])
+	var order := 0
+	for m in RegEx.create_from_string("(?is)<video\\b([^>]*)>(.*?)</video>").search_all(html):
+		order += 1
+		var a := _attributes("<video " + m.get_string(1) + ">")
+		var src := String(a.get("src", ""))
+		if src == "":
+			for s in RegEx.create_from_string("(?is)<source\\b[^>]*>").search_all(m.get_string(2)):
+				var sa := _attributes(s.get_string())
+				var t := String(sa.get("type", "")).to_lower()
+				if String(sa.get("src", "")) != "" and (t == "" or t.begins_with("video/") or "mpegurl" in t or "dash" in t):
+					src = sa.src
+					break
+		if src == "" or src.begins_with("blob:") or src.begins_with("data:"):
+			continue
+		var area := int(String(a.get("width", "0")).to_int()) * int(String(a.get("height", "0")).to_int())
+		found.append([resolve_url(base, src), 1000000000 + mini(area, 99999999) * 2 - order])
+	for m in RegEx.create_from_string("(?is)href\\s*=\\s*[\"']([^\"']+)[\"']").search_all(html):
+		var u := resolve_url(base, _unescape(m.get_string(1)))
+		if _video_file(u, true):
+			found.append([u, 1])
+			break
+	if found.is_empty():
+		return ""
+	found.sort_custom(func(x, y): return int(x[1]) > int(y[1]))
+	return found[0][0]
+
+
+## True for a link that looks like a video file or a stream (not a page). strict: by its extension
+## only (links in the page text); otherwise anything but an obvious page counts.
+static func _video_file(url: String, strict := false) -> bool:
+	var u := url.to_lower().get_slice("?", 0).get_slice("#", 0)
+	if not (u.begins_with("http://") or u.begins_with("https://")):
+		return false
+	for ext in [".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv", ".ogg", ".avi", ".m3u8", ".mpd"]:
+		if u.ends_with(ext):
+			return true
+	if strict:
+		return false
+	for site in VIDEO_SITES:
+		if site in u:
+			return true  # kept, so the board can say why it can't play
+	return not (u.ends_with(".html") or u.ends_with(".htm") or u.ends_with(".php") or "/embed/" in u or u.ends_with("/"))
+
+
+## Attributes of one HTML tag, names lower-cased, entities in values undone.
+static func _attributes(tag: String) -> Dictionary:
+	var out := {}
+	for m in RegEx.create_from_string("(?s)([a-zA-Z_:][-a-zA-Z0-9_:.]*)\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))").search_all(tag):
+		var v := m.get_string(3) if m.get_string(3) != "" else (m.get_string(4) if m.get_string(4) != "" else m.get_string(5))
+		out[m.get_string(1).to_lower()] = _unescape(v)
+	return out
+
+
+static func _unescape(s: String) -> String:
+	return s.replace("&amp;", "&").replace("&#38;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&#x2F;", "/").replace("&#47;", "/").strip_edges()
+
+
+## rel made absolute against base (a page's address).
+static func resolve_url(base: String, rel: String) -> String:
+	var r := rel.strip_edges()
+	if r.begins_with("http://") or r.begins_with("https://"):
+		return r
+	var scheme := base.get_slice("://", 0)
+	if r.begins_with("//"):
+		return scheme + ":" + r
+	var rest := base.get_slice("://", 1)
+	var host := rest.get_slice("/", 0)
+	if r.begins_with("/"):
+		return "%s://%s%s" % [scheme, host, r]
+	var path := rest.substr(host.length()).get_slice("?", 0).get_slice("#", 0)
+	var dir := path.substr(0, path.rfind("/") + 1) if path.contains("/") else "/"
+	var parts: Array = []
+	for seg in (dir + r).split("/"):
+		if seg == "..":
+			if not parts.is_empty():
+				parts.pop_back()
+		elif seg != ".":
+			parts.append(seg)
+	return "%s://%s%s" % [scheme, host, "/".join(parts)]
 
 
 ## Plays a video file that is already on this device (also used by the tests).
@@ -377,10 +503,12 @@ func _convert(src: String, out: String, why: String, remove_src: bool) -> void:
 	if ff == "":
 		if remove_src:
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(src))
-		_video_error(why.replace(CONVERT_HINT, "Converting it needs FFmpeg, which this version of the game doesn't have.\n\n" + CONVERT_HINT))
+		var kind_line := why.replace(CONVERT_HINT, "").strip_edges() if CONVERT_HINT in why else "That video needs converting."
+		_video_error(kind_line + "\n\nConverting it needs FFmpeg, which this version of the game doesn't have.\n\n" + CONVERT_HINT)
 		return
 	var part := out + ".part"
-	var info := OS.execute_with_pipe(ff, convert_args(ProjectSettings.globalize_path(src), ProjectSettings.globalize_path(part)), false)
+	var input := src if src.begins_with("http://") or src.begins_with("https://") else ProjectSettings.globalize_path(src)
+	var info := OS.execute_with_pipe(ff, convert_args(input, ProjectSettings.globalize_path(part)), false)
 	if info.is_empty():
 		_video_error("FFmpeg didn't start.")
 		return
@@ -471,7 +599,8 @@ func toggle_video() -> void:
 				play_url(video_url)
 
 
-func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _body: PackedByteArray, path: String) -> void:
+func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _body: PackedByteArray, path: String,
+		url: String, from_page: bool) -> void:
 	var part := path + ".part"
 	if _http != null:
 		_http.queue_free()
@@ -508,8 +637,27 @@ func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _b
 		_start_video(path)
 		return
 	if kind == "page":
+		var html := ""
+		var pf := FileAccess.open(part, FileAccess.READ)
+		if pf != null:
+			html = pf.get_buffer(mini(pf.get_length(), 4 * 1048576)).get_string_from_utf8()
+			pf.close()
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(part))
-		_video_error(video_problem(head, content_type))
+		if from_page:
+			_video_error("The video link on that page led to another page, not a video.")
+			return
+		var found := find_page_video(html, url)
+		if found == "":
+			_video_error("Couldn't find a video on that page. Pages whose video appears only through scripts or a protected player can't be used: link the video file itself.")
+			return
+		var problem := url_problem(found)
+		if problem != "":
+			_video_error("The video on that page is from " + problem.get_slice(" streams", 0) + ", which streams its videos in a protected player, so the whiteboard can't play it.")
+			return
+		if is_stream(found):
+			_convert(found, path, "The stream on that page couldn't be read.", false)
+			return
+		_download(found, path, true)
 		return
 	var src := path.get_basename() + ".src"
 	DirAccess.rename_absolute(ProjectSettings.globalize_path(part), ProjectSettings.globalize_path(src))

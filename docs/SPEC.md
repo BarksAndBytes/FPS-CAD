@@ -149,9 +149,16 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
   heights, silent past 20). Any other video (MP4/MOV, WebM/MKV, AVI, sound-only Ogg…) is
   converted to Theora by FFmpeg running in the background (`ffmpeg.exe` ships beside the game on
   Windows; elsewhere an `ffmpeg` on the PATH is used), scaled to at most 1280 px wide, with the
-  percentage on the board from FFmpeg's progress output, then kept like a download. What can't
-  play gets an error screen saying why: links to YouTube, Vimeo and other sites that show video in
-  a page are turned away before downloading; web pages, failed downloads (HTTP status, no
+  percentage on the board from FFmpeg's progress output, then kept like a download. A link to a
+  web page plays the page's main video (`find_page_video`): the video the page declares
+  (`og:video`, `twitter:player:stream`, a VideoObject's `contentUrl`), else its largest `<video>`
+  by width × height (its `src` or first video `<source>`; script-made `blob:` sources skipped),
+  else the first link to a video file; relative links resolve against the page or its `<base>`.
+  HLS and DASH playlists (`.m3u8`, `.mpd`) go straight to FFmpeg, which reads the stream. Only one
+  hop: a page whose video link leads to another page is an error. What can't play gets an error
+  screen saying why: YouTube, Vimeo and similar sites (linked, or embedded in the page) are turned
+  away, since their pages hold no video file and taking one means working around their stream
+  protection and terms; pages with no video found, failed downloads (HTTP status, no
   connection, TLS), files FFmpeg can't read (with its last message) and, on Android, which has no
   FFmpeg yet, anything that needs converting, with the ffmpeg line to convert it on a computer.
   The link is saved with the board; a reopened part shows "Ready to play".
