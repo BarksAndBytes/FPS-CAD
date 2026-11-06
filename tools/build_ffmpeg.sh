@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds a small FFmpeg program for the video board: it reads common web videos and streams and
 # writes Ogg Theora, nothing else. One static executable with libogg, libvorbis, libtheora and
-# mbedtls (for https streams) linked in. LGPL: no GPL parts (no x264 / x265).
+# mbedtls (for https streams) linked in. LGPL 3 (Mbed TLS is Apache 2.0, which needs FFmpeg's
+# --enable-version3); no GPL parts (no x264 / x265).
 #
 #   tools/build_ffmpeg.sh <install prefix> android   # arm64-v8a, needs ANDROID_NDK_HOME
 #   tools/build_ffmpeg.sh <install prefix> linux     # the same build for this machine (testing)
@@ -72,7 +73,7 @@ fetch "https://github.com/xiph/vorbis/releases/download/v$VORBIS_VERSION/libvorb
 
 echo "== libtheora $THEORA_TAG"
 if [ ! -f "$DEPS/lib/libtheoraenc.a" ]; then
-  [ -d "$WORK/theora" ] || git clone -q --depth 1 --branch "$THEORA_TAG" https://github.com/xiph/theora "$WORK/theora"
+  [ -d "$WORK/theora" ] || git -c advice.detachedHead=false clone -q --depth 1 --branch "$THEORA_TAG" https://github.com/xiph/theora "$WORK/theora"
   (cd "$WORK/theora" && { [ -x configure ] || ./autogen.sh > "$WORK/theora.autogen.log" 2>&1; } \
     && PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" ./configure "${CONF_HOST[@]}" --prefix="$DEPS" \
        --disable-shared --enable-static --disable-examples --disable-spec --disable-doc \
@@ -86,7 +87,7 @@ fetch "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-$MBEDTLS_VE
 [ -f "$DEPS/lib/libmbedtls.a" ] || cmake_lib mbedtls -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF -DMBEDTLS_FATAL_WARNINGS=OFF
 
 echo "== FFmpeg $FFMPEG_TAG"
-[ -d "$WORK/ffmpeg" ] || git clone -q --depth 1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg "$WORK/ffmpeg"
+[ -d "$WORK/ffmpeg" ] || git -c advice.detachedHead=false clone -q --depth 1 --branch "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg "$WORK/ffmpeg"
 CROSS=()
 if [ "$PLATFORM" = android ]; then
   CROSS=(--enable-cross-compile --target-os=android --arch=aarch64 --cpu=armv8-a
@@ -100,7 +101,7 @@ PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" ./
   --extra-cflags="-I$DEPS/include" --extra-ldflags="-L$DEPS/lib" --extra-libs="-lm" \
   --disable-everything --disable-autodetect --disable-doc --disable-debug \
   --disable-ffplay --disable-ffprobe --enable-ffmpeg --disable-shared --enable-static --enable-small \
-  --enable-zlib --enable-libtheora --enable-libvorbis --enable-mbedtls --enable-swscale --enable-swresample \
+  --enable-version3 --enable-zlib --enable-libtheora --enable-libvorbis --enable-mbedtls --enable-swscale --enable-swresample \
   --enable-protocol=file,pipe,http,https,tcp,tls,hls,crypto \
   --enable-demuxer=mov,matroska,ogg,mpegts,hls,avi,flv,mpegps,m4v,mp3,aac,wav,flac,h264,hevc \
   --enable-decoder=h264,hevc,vp8,vp9,mpeg4,mpeg2video,mpeg1video,h263,msmpeg4v3,mjpeg,theora,aac,aac_latm,mp3,mp3float,mp2,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le \
