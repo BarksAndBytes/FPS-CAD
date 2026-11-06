@@ -1206,10 +1206,26 @@ func _video_board(main: Node) -> void:
 			most = maxi(most, vb._jobs.size())
 			await _frames(1)
 		WB.workers_override = 0
+		_check(WB.last_split_problem == "", "the slices joined without falling back (%s)" % WB.last_split_problem)
 		var length: float = vb._video.get_stream_length() if vb.video_state == "playing" else 0.0
 		_check(vb.video_state == "playing" and most == 4 and absf(length - 10.0) < 0.06 and not DirAccess.dir_exists_absolute(
 			ProjectSettings.globalize_path(WB.cached_path(url).get_basename() + ".parts")),
 			"three slices and the sound convert at once, join into one 10 s video, and the pieces are cleared away (%d jobs, %.2f s, %s)" % [most, length, vb.video_message])
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
+		# If joining fails (as with an FFmpeg that lacks the concat reader), it converts in one go.
+		WB.workers_override = 2
+		WB.test_bad_join = true
+		url = "https://example.com/ten-bad-join-%d.mp4" % Time.get_ticks_usec()
+		vb.play_file("res://tests/ten_seconds.mp4", url)
+		for i in 3000:
+			if vb.video_state != "converting":
+				break
+			await _frames(1)
+		WB.workers_override = 0
+		WB.test_bad_join = false
+		_check(vb.video_state == "playing" and WB.last_split_problem.begins_with("joining"),
+			"a failed join falls back to converting in one process, and still plays (%s)" % WB.last_split_problem)
+		WB.last_split_problem = ""
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
 	else:
 		print("SKIP FFmpeg conversion: no ffmpeg on this machine")

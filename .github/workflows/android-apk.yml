@@ -62,6 +62,17 @@ jobs:
               || { echo "::error::$clip did not convert to Ogg Theora"; exit 1; }
             echo "$clip -> Ogg Theora, $(stat -c %s "$RUNNER_TEMP/out.ogv") bytes"
           done
+          # The board's parallel path: slices cut on frames, the sound, then a join without
+          # re-encoding (whiteboard.gd slice_args / audio_args / join_args).
+          T="$RUNNER_TEMP/split"; mkdir -p "$T"; CLIP=godot/tests/ten_seconds.mp4
+          "$FF" -hide_banner -loglevel error -nostdin -y -ss 0 -i $CLIP -map 0:v:0 -an -vf "scale=w='min(854,iw)':h=-2" -c:v libtheora -q:v 7 -frames:v 50 -f ogg "$T/v0.ogv"
+          "$FF" -hide_banner -loglevel error -nostdin -y -ss 5 -i $CLIP -map 0:v:0 -an -vf "scale=w='min(854,iw)':h=-2" -c:v libtheora -q:v 7 -f ogg "$T/v1.ogv"
+          "$FF" -hide_banner -loglevel error -nostdin -y -i $CLIP -vn -map 0:a:0 -c:a libvorbis -q:a 4 -f ogg "$T/a.oga"
+          printf "file '%s'\nfile '%s'\n" "$T/v0.ogv" "$T/v1.ogv" > "$T/list.txt"
+          "$FF" -hide_banner -loglevel error -nostdin -y -f concat -safe 0 -i "$T/list.txt" -i "$T/a.oga" -map 0:v -map 1:a -c copy -progress pipe:1 -nostats -f ogg "$T/joined.ogv" > /dev/null \
+            || { echo "::error::the FFmpeg build can't join slices (the video board's parallel conversion)"; exit 1; }
+          python3 -c "import sys; d=open(sys.argv[1],'rb').read(4096); sys.exit(0 if d[:4]==b'OggS' and b'\\x80theora' in d else 1)" "$T/joined.ogv"
+          echo "split + join -> $(stat -c %s "$T/joined.ogv") bytes"
           A="${{ runner.temp }}/ffmpeg-android/bin/ffmpeg"
           file "$A"
           file "$A" | grep -q "ARM aarch64" || { echo "::error::the Android FFmpeg is not an arm64 program"; exit 1; }

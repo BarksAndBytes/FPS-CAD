@@ -103,7 +103,7 @@ PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig" ./
   --disable-ffplay --disable-ffprobe --enable-ffmpeg --disable-shared --enable-static --enable-small \
   --enable-version3 --enable-zlib --enable-libtheora --enable-libvorbis --enable-mbedtls --enable-swscale --enable-swresample \
   --enable-protocol=file,pipe,http,https,tcp,udp,tls,hls,crypto \
-  --enable-demuxer=mov,matroska,ogg,mpegts,hls,avi,flv,mpegps,m4v,mp3,aac,wav,flac,h264,hevc \
+  --enable-demuxer=mov,matroska,ogg,mpegts,hls,avi,flv,mpegps,m4v,mp3,aac,wav,flac,h264,hevc,concat \
   --enable-decoder=h264,hevc,vp8,vp9,mpeg4,mpeg2video,mpeg1video,h263,msmpeg4v3,mjpeg,theora,aac,aac_latm,mp3,mp3float,mp2,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le \
   --enable-parser=h264,hevc,vp8,vp9,mpeg4video,mpegvideo,mjpeg,aac,aac_latm,mpegaudio,opus,vorbis,flac,ac3 \
   --enable-encoder=libtheora,libvorbis \

@@ -78,6 +78,8 @@ var _jobs: Array = []      # its FFmpeg processes: {pid, stdio, stderr, out_text
 static var _ffmpeg_path: Variant = null  # found once: the FFmpeg program, or "" if there is none
 static var ffmpeg_note := ""  # why there is none: what was tried
 static var workers_override := 0  # tests: slices at once regardless of the cores
+static var last_split_problem := ""  # why the last split conversion fell back to one process
+static var test_bad_join := false  # tests: make the join fail the way a build without concat does
 var _video_t := 0.0
 var _notes_box := VBoxContainer.new()
 var _note_labels: Array[Label] = []
@@ -626,7 +628,7 @@ static func audio_args(src: String, out: String) -> PackedStringArray:
 
 ## Joins the slices (listed in list, FFmpeg's concat format) and the sound without re-encoding.
 static func join_args(list: String, audio: String, out: String) -> PackedStringArray:
-	var a := PackedStringArray(["-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list])
+	var a := PackedStringArray(["-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe" if not test_bad_join else "-not_an_option", "0", "-i", list])
 	if audio != "":
 		a.append_array(["-i", audio])
 	a.append_array(["-map", "0:v"])
@@ -775,7 +777,7 @@ func _poll_convert() -> void:
 			for job in _jobs:
 				var code := OS.get_process_exit_code(int(job.pid))
 				if code != 0:
-					_conv_failed("FFmpeg couldn't convert this file (exit code %d).\n%s" % [code, _last_line(job.err_text)])
+					_one_process_instead("a slice: exit code %d, %s" % [code, _last_line(job.err_text)])
 					return
 			_jobs.clear()
 			_conv.phase = "join"
@@ -789,7 +791,24 @@ func _poll_convert() -> void:
 			var code := OS.get_process_exit_code(int(_jobs[0].pid))
 			var log_text: String = _jobs[0].err_text
 			_jobs.clear()
+			if code != 0:
+				_one_process_instead("joining: exit code %d, %s" % [code, _last_line(log_text)])
+				return
 			_finish_convert(code, log_text)
+
+
+## Slicing went wrong (a slice or the join failed): convert the whole video in one process
+## instead, slower but plain. Kept in last_split_problem for the record.
+func _one_process_instead(problem: String) -> void:
+	last_split_problem = problem
+	push_warning("video board: converting in one process after a split problem (%s)" % problem)
+	for job in _jobs:
+		if OS.is_process_running(int(job.pid)):
+			OS.kill(int(job.pid))
+	_jobs.clear()
+	_remove_pieces()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(_conv.part))
+	_start_single()
 
 
 func _finish_convert(code: int, log_text: String) -> void:
