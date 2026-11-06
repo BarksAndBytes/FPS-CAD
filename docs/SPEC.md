@@ -140,6 +140,17 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
 - **Notes board**: the player's notes, one bullet per line. RT on empty floor sets up a board and
   asks for the first note; RT on a notes board adds a note; LT on a note edits it (clear it to
   delete it).
+- **Video board**: plays a video from a link. RT on empty floor sets one up and asks for the link
+  (the on-screen keyboard has URL signs and Paste); RT on a video board pauses and resumes it, LT
+  changes its link. Godot plays only Ogg Theora (.ogv) and only from a file, so the board
+  downloads the link into `user://videos` (kept by an MD5 of the URL, so it plays again without
+  downloading; 1 GB at most), showing progress, then checks the file's first bytes. A Theora
+  video plays, letterboxed, looping, with its sound fading with distance (full within 3 board
+  heights, silent past 20). Anything else gets an error screen on the board saying what it was:
+  links to YouTube, Vimeo and other sites that show video in a page are turned away before
+  downloading; MP4/MOV, WebM/MKV, web pages, sound-only Ogg, failed downloads (HTTP status,
+  no connection, TLS) and undecodable files are named, with the ffmpeg line that converts a
+  video to .ogv. The link is saved with the board; a reopened part shows "Ready to play".
 - **Arrange boards**: RT picks up any board, the message board included. A carried board stays at
   the same distance ahead and turned the same way relative to the player, standing on the floor;
   D-pad ← / → (mouse wheel) turns it 15°, ↑ / ↓ (= / −) resizes it ×1.25 about its feet (0.1× to

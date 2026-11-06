@@ -24,7 +24,7 @@ const WHEEL := [
 	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
 	["Measure", "Distances, the bounding box, and mass properties", ["measure", "bbox", "mass"]],
 	["Boards", "Whiteboards in the room: part properties, your notes; carry, turn and resize them",
-		["board_props", "board_notes", "board_arrange"]],
+		["board_props", "board_notes", "board_video", "board_arrange"]],
 ]
 const TOOLS := [
 	{id = "select", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
@@ -52,11 +52,12 @@ const TOOLS := [
 	{id = "mass", name = "Mass properties", pri = "show volume, mass and centre of mass", alt = "hide", opt = []},
 	{id = "board_props", name = "Properties board", pri = "set up a board of the part's properties", alt = "remove the board you aim at", opt = []},
 	{id = "board_notes", name = "Notes board", pri = "add a note (here, or to the board you aim at)", alt = "edit the note you aim at", opt = []},
+	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "change its video link", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
 const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
-	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_arrange"]
-const BOARD_TOOLS := ["board_props", "board_notes", "board_arrange"]
+	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_arrange"]
+const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_arrange"]
 const REF_TOOLS := ["ref_plane", "ref_axis", "ref_point", "ref_csys"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
 const OPS := {"add": "add", "cut": "cut", "new body": "new-body"}
@@ -348,7 +349,7 @@ func _act(primary: bool, repeat: bool) -> void:
 				_grab = {id = copy, plane_y = hit.point.y, last = hit.point}
 		"ref_plane", "ref_axis", "ref_point", "ref_csys":
 			_act_reference(primary, hit)
-		"board_props", "board_notes", "board_arrange":
+		"board_props", "board_notes", "board_video", "board_arrange":
 			board_tool.emit(tool().id, primary)
 		"bbox":
 			_show_bbox = primary

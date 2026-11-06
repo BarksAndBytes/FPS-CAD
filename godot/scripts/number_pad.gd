@@ -12,6 +12,7 @@ const TEXT_KEYS := ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
 	"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P",
 	"A", "S", "D", "F", "G", "H", "J", "K", "L", "-",
 	"Z", "X", "C", "V", "B", "N", "M", ".", ",", "/",
+	":", "_", "?", "=", "&", "%", "#", "@", "+", "Paste",
 	"aA", "Space", "⌫", "Cancel", "OK"]
 
 var _panel := PanelContainer.new()
@@ -96,8 +97,21 @@ func ask(title: String, initial: String, hint: String, callback: Callable) -> vo
 ## allow_empty: OK with nothing typed hands back "" (a note cleared to delete it).
 func ask_text(title: String, initial: String, hint: String, callback: Callable, allow_empty := false) -> void:
 	_set_mode(true)
+	_set_lower(false)
 	_open(title, initial, hint, callback)
 	_allow_empty = allow_empty
+
+
+## Opens the text pad for a web address: lower-case letters to start with, and Paste.
+func ask_url(title: String, initial: String, hint: String, callback: Callable) -> void:
+	ask_text(title, initial, hint, callback)
+	_set_lower(true)
+
+
+func _set_lower(on: bool) -> void:
+	_lower = on
+	for b in _letters:
+		b.text = b.text.to_lower() if _lower else b.text.to_upper()
 
 
 func _set_mode(text: bool) -> void:
@@ -150,9 +164,12 @@ func _key(k: String) -> void:
 			_edit.text = _edit.text.substr(1) if _edit.text.begins_with("-") else "-" + _edit.text
 			_fresh = false
 		"aA":
-			_lower = not _lower
-			for b in _letters:
-				b.text = b.text.to_lower() if _lower else b.text.to_upper()
+			_set_lower(not _lower)
+		"Paste":
+			var clip := DisplayServer.clipboard_get().strip_edges()
+			if clip != "":
+				_edit.text = clip if _fresh else _edit.text + clip
+				_fresh = false
 		"Space":
 			_edit.text = " " if _fresh else _edit.text + " "
 			_fresh = false

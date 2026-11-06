@@ -10,8 +10,14 @@ extends Node3D
 ## sketch status on screen as before.
 ##
 ## The same board also serves the boards the player adds (boards.gd): kind "properties" shows the
-## part's volume, area, mass and size; kind "notes" shows the player's own notes. Every board
-## stands on the floor at its feet, turned by yaw and scaled evenly by board_scale.
+## part's volume, area, mass and size; kind "notes" shows the player's own notes; kind "video"
+## plays a video from a link. Every board stands on the floor at its feet, turned by yaw and
+## scaled evenly by board_scale.
+##
+## Video: Godot plays Ogg Theora (.ogv) only, from a file, so the board downloads the link into
+## user://videos (kept, so it plays again without downloading) and checks what arrived. Anything
+## else (an MP4, a WebM, a web page such as YouTube) gets an error screen on the board saying what
+## it was and how to convert it. Its sound fades with distance from the player.
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const MODEL := "res://models/whiteboard.glb"
@@ -29,6 +35,12 @@ const RED := Color("c0392b")
 const GREEN := Color("23855a")
 const NOTICES := 3
 const NOTICE_LIFE := 12.0  # seconds a notice stays on the board
+const VIDEO_DIR := "user://videos"
+const VIDEO_LIMIT := 1024 * 1024 * 1024  # 1 GB
+const CONVERT_HINT := "The whiteboard plays Ogg Theora (.ogv) videos. Convert one with:\nffmpeg -i video.mp4 -c:v libtheora -q:v 7 -c:a libvorbis video.ogv"
+## Sites that show their videos inside web pages, which the board can't display.
+const VIDEO_SITES := ["youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com", "dailymotion.com",
+	"facebook.com", "instagram.com", "twitter.com", "x.com/"]
 
 var active := false
 var kind := "messages"     # "messages", "properties" or "notes"
@@ -36,6 +48,14 @@ var board_id := ""
 var yaw := 0.0
 var board_scale := 1.0
 var notes: Array = []      # kind "notes": the player's notes, one per line
+var video_url := ""        # kind "video"
+var video_state := ""      # "", "ready", "loading", "playing", "paused" or "error"
+var video_message := ""    # the error screen's reason
+var _video: VideoStreamPlayer = null
+var _video_back := ColorRect.new()
+var _http: HTTPRequest = null
+var _video_fitted := false
+var _video_t := 0.0
 var _notes_box := VBoxContainer.new()
 var _note_labels: Array[Label] = []
 var _model: Node3D
@@ -199,7 +219,228 @@ func to_dict() -> Dictionary:
 	var d := {id = board_id, kind = kind, position = [p.x, p.y, p.z], yaw = yaw, scale = board_scale}
 	if kind == "notes":
 		d.notes = notes.duplicate()
+	if kind == "video":
+		d.url = video_url
 	return d
+
+
+# ---------- video ----------
+
+## Why a link can't play, before downloading anything; "" when it might.
+static func url_problem(url: String) -> String:
+	var u := url.strip_edges().to_lower()
+	if not (u.begins_with("https://") or u.begins_with("http://")):
+		return "That isn't a web link: it should start with https://"
+	for site in VIDEO_SITES:
+		if site in u:
+			return "%s shows its videos inside a web page, which a whiteboard can't play. Link straight to a video file instead.\n\n%s" % [
+				String(site).trim_suffix("/"), CONVERT_HINT]
+	return ""
+
+
+## Why downloaded bytes (the start of the file) can't play; "" for an Ogg Theora video.
+static func video_problem(head: PackedByteArray, content_type := "") -> String:
+	var start := head.slice(0, 12).get_string_from_ascii()
+	if start.begins_with("OggS"):
+		for i in maxi(0, head.size() - 7):
+			if head[i] == 0x80 and head.slice(i + 1, i + 7).get_string_from_ascii() == "theora":
+				return ""
+		return "That's an Ogg file without Theora video (sound only, or another video format).\n\n" + CONVERT_HINT
+	if head.size() >= 8 and head.slice(4, 8).get_string_from_ascii() == "ftyp":
+		return "That's an MP4 / MOV video, which the whiteboard can't decode.\n\n" + CONVERT_HINT
+	if head.size() >= 4 and head[0] == 0x1A and head[1] == 0x45 and head[2] == 0xDF and head[3] == 0xA3:
+		return "That's a WebM / MKV video, which the whiteboard can't decode.\n\n" + CONVERT_HINT
+	var text := start.strip_edges().to_lower()
+	if "text/html" in content_type.to_lower() or text.begins_with("<"):
+		return "That link is a web page, not a video file.\n\n" + CONVERT_HINT
+	return "That file isn't a video the whiteboard can play.\n\n" + CONVERT_HINT
+
+
+## Where a link's video is kept once downloaded.
+static func cached_path(url: String) -> String:
+	return "%s/%s.ogv" % [VIDEO_DIR, url.strip_edges().md5_text()]
+
+
+## Shows a link without playing it (a board coming back from a saved part).
+func set_video(url: String) -> void:
+	video_url = url.strip_edges()
+	_stop_video()
+	if video_url == "":
+		video_state = ""
+		set_card("VIDEO", "No video yet", "Aim here with the Video board tool and press the primary button to give it a link to a .ogv video file.")
+	else:
+		video_state = "ready"
+		set_card("VIDEO", "Ready to play", video_url, INK)
+
+
+## Downloads (unless kept from before) and plays the video at url.
+func play_url(url: String) -> void:
+	video_url = url.strip_edges()
+	_stop_video()
+	var problem := url_problem(video_url)
+	if problem != "":
+		_video_error(problem)
+		return
+	var path := cached_path(video_url)
+	if FileAccess.file_exists(path):
+		_start_video(path)
+		return
+	DirAccess.make_dir_recursive_absolute(VIDEO_DIR)
+	_http = HTTPRequest.new()
+	_http.max_redirects = 8
+	_http.body_size_limit = VIDEO_LIMIT
+	_http.download_chunk_size = 262144
+	_http.download_file = ProjectSettings.globalize_path(path + ".part")
+	add_child(_http)
+	_http.request_completed.connect(_on_video_downloaded.bind(path))
+	var err := _http.request(video_url)
+	if err != OK:
+		_video_error("The download could not start (error %d)." % err)
+		return
+	video_state = "loading"
+	set_card("VIDEO", "Downloading…", video_url, INK, 0.0)
+
+
+## Plays a video file that is already on this device (also used by the tests).
+func play_file(path: String, url := "") -> void:
+	video_url = url if url != "" else path
+	_stop_video()
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		_video_error("The video file is missing.")
+		return
+	var problem := video_problem(f.get_buffer(4096))
+	f.close()
+	if problem != "":
+		_video_error(problem)
+		return
+	_start_video(path)
+
+
+## The primary button on the board: pause, carry on, or (re)load.
+func toggle_video() -> void:
+	match video_state:
+		"playing":
+			_video.paused = true
+			video_state = "paused"
+		"paused":
+			_video.paused = false
+			video_state = "playing"
+		"loading":
+			pass
+		_:
+			if video_url != "":
+				play_url(video_url)
+
+
+func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _body: PackedByteArray, path: String) -> void:
+	var part := path + ".part"
+	if _http != null:
+		_http.queue_free()
+		_http = null
+	if result != HTTPRequest.RESULT_SUCCESS or code < 200 or code >= 300:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(part))
+		var why := "The server answered HTTP %d%s." % [code, " (not found)" if code == 404 else ""]
+		match result:
+			HTTPRequest.RESULT_SUCCESS:
+				pass
+			HTTPRequest.RESULT_BODY_SIZE_LIMIT_EXCEEDED:
+				why = "The video is over 1 GB, too big to download here."
+			HTTPRequest.RESULT_CANT_RESOLVE, HTTPRequest.RESULT_CANT_CONNECT, HTTPRequest.RESULT_CONNECTION_ERROR:
+				why = "Couldn't reach the server. Check the link and the connection."
+			HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR:
+				why = "The secure connection to the server failed."
+			HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED:
+				why = "The link redirects too many times."
+			_:
+				why = "The download failed (error %d)." % result
+		_video_error(why)
+		return
+	var content_type := ""
+	for h in headers:
+		if h.to_lower().begins_with("content-type:"):
+			content_type = h.substr(13).strip_edges()
+	var f := FileAccess.open(part, FileAccess.READ)
+	var head := f.get_buffer(4096) if f != null else PackedByteArray()
+	if f != null:
+		f.close()
+	var problem := video_problem(head, content_type)
+	if problem != "":
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(part))
+		_video_error(problem)
+		return
+	DirAccess.rename_absolute(ProjectSettings.globalize_path(part), ProjectSettings.globalize_path(path))
+	_start_video(path)
+
+
+func _start_video(path: String) -> void:
+	var stream := VideoStreamTheora.new()
+	stream.file = path
+	_video.stream = stream
+	_video.paused = false
+	_video.play()
+	_video_fitted = false
+	_video_t = 0.0
+	video_state = "playing"
+	video_message = ""
+	_video.visible = true
+	_video_back.visible = true
+	_view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+
+
+func _stop_video() -> void:
+	if _http != null:
+		_http.cancel_request()
+		_http.queue_free()
+		_http = null
+	if _video != null:
+		_video.stop()
+		_video.stream = null
+		_video.visible = false
+	_video_back.visible = false
+	_view.render_target_update_mode = SubViewport.UPDATE_ONCE
+	_dirty = true
+
+
+func _video_error(message: String) -> void:
+	_stop_video()
+	video_state = "error"
+	video_message = message
+	set_card("VIDEO", "Can't play this video", "%s\n\n%s" % [message, video_url], RED)
+
+
+func _video_live() -> bool:
+	return _video != null and _video.visible
+
+
+func _update_video(dt: float) -> void:
+	if video_state == "loading" and _http != null:
+		var total := _http.get_body_size()
+		var got := _http.get_downloaded_bytes()
+		var mb := "%.1f MB" % (got / 1048576.0) if total <= 0 else "%.1f of %.1f MB" % [got / 1048576.0, total / 1048576.0]
+		set_card("VIDEO", "Downloading…", "%s\n\n%s" % [video_url, mb], INK, float(got) / total if total > 0 else 0.0)
+		return
+	if video_state != "playing" and video_state != "paused":
+		return
+	var tex := _video.get_video_texture()
+	var size := tex.get_size() if tex != null else Vector2.ZERO
+	if not _video_fitted and size.x > 0.0 and size.y > 0.0:
+		# Letterbox: the whole picture, as large as the board allows, centred.
+		var k := minf(TEX.x / size.x, TEX.y / size.y)
+		_video.size = size * k
+		_video.position = (Vector2(TEX) - size * k) / 2.0
+		_video_fitted = true
+	if video_state == "playing":
+		_video_t += dt
+		if _video_t > 3.0 and not _video_fitted:
+			_video_error("The video downloaded but could not be decoded.")
+			return
+	# The sound fades with distance: full within 3 board heights, silent past 20.
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		var d := cam.global_position.distance_to(global_transform * PANEL_CENTRE) / maxf(board_scale, 0.01)
+		var loud := clampf(1.0 - (d - 3.0) / 17.0, 0.0, 1.0)
+		_video.volume_db = linear_to_db(maxf(loud, 0.0001))
 
 
 # ---------- notes ----------
@@ -263,7 +504,10 @@ func _process(dt: float) -> void:
 		_redraw_t = 0.1
 		_dirty = false
 		_lay_out()
-		_view.render_target_update_mode = SubViewport.UPDATE_ONCE
+		if not _video_live():
+			_view.render_target_update_mode = SubViewport.UPDATE_ONCE
+	if kind == "video":
+		_update_video(dt)
 	_readable = _visible_to_camera()
 
 
@@ -309,7 +553,7 @@ func _build_writing() -> void:
 	_kicker = _ink(30, RED, true)
 	_heading = _ink(60, INK, true)
 	# The player's boards have room for bigger writing; properties run to nine lines.
-	_body = _ink({"messages": 38, "properties": 42}.get(kind, 50), INK)
+	_body = _ink({"messages": 38, "properties": 42, "video": 38}.get(kind, 50), INK)
 	_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_body.custom_minimum_size.x = TEX.x - 96
 	for l in [_kicker, _heading, _body]:
@@ -341,6 +585,16 @@ func _build_writing() -> void:
 		_notices.append(l)
 	_readout = _ink(26, INK_SOFT)
 	col.add_child(_readout)
+	if kind == "video":
+		_video_back.color = Color(0.02, 0.02, 0.03)
+		_video_back.size = Vector2(TEX)
+		_video_back.visible = false
+		_view.add_child(_video_back)
+		_video = VideoStreamPlayer.new()
+		_video.expand = true
+		_video.loop = true
+		_video.visible = false
+		_view.add_child(_video)
 
 	var quad := QuadMesh.new()
 	quad.size = PANEL_SIZE

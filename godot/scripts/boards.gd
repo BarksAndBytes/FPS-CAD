@@ -1,8 +1,9 @@
 extends Node3D
 ## The whiteboards the player sets up in the room, beside the message board (main.board).
 ##
-## Two kinds: a properties board shows the part's volume, surface area, mass, bounding box and
-## centre of mass, kept up to date as the part changes; a notes board holds the player's own notes.
+## Three kinds: a properties board shows the part's volume, surface area, mass, bounding box and
+## centre of mass, kept up to date as the part changes; a notes board holds the player's own notes;
+## a video board plays a video from a link (whiteboard.gd says which videos can play).
 ## Any board, the message board included, can be picked up and carried: it stays at the same
 ## distance ahead, turned the same way relative to the player, and always stands on the floor;
 ## the D-pad (or mouse wheel and +/-) turns and resizes it while it is carried.
@@ -60,10 +61,12 @@ func load_from(doc: RefCounted) -> void:
 		if kind == "messages":
 			game.board.set_pose(at, float(d.get("yaw", 0.0)), s)
 			messages_saved = true
-		elif kind in ["properties", "notes"]:
+		elif kind in ["properties", "notes", "video"]:
 			var b := add(kind, at, float(d.get("yaw", 0.0)), s, String(d.get("id", "")))
 			if kind == "notes":
 				b.set_notes(d.get("notes", []))
+			elif kind == "video":
+				b.set_video(String(d.get("url", "")))
 	refresh_properties()
 
 
@@ -90,6 +93,8 @@ func add(kind: String, feet: Vector3, yaw: float, s: float, id := "") -> Node3D:
 	if kind == "notes":
 		b.set_card("NOTES", "", "")
 		b.set_notes([])
+	elif kind == "video":
+		b.set_video("")
 	extra.append(b)
 	if kind == "properties":
 		refresh_properties()
@@ -234,6 +239,25 @@ func act(id: String, primary: bool) -> void:
 					game.hud.toast("Aim at the note itself to change it")
 					return
 				_ask_note(b, i)
+		"board_video":
+			if primary:
+				if b != null and b.kind == "video":
+					if b.video_url == "":
+						_ask_video(b)
+					else:
+						b.toggle_video()
+						var what := {"playing": "Playing", "paused": "Paused", "loading": "Downloading the video"}
+						game.hud.toast(what.get(b.video_state, ""))
+				else:
+					var vb := add("video", spot_ahead(), 0.0, new_scale())
+					_face_player(vb)
+					save()
+					_ask_video(vb)
+			else:
+				if b == null or b.kind != "video":
+					game.hud.toast("Aim at a video board to change its link")
+					return
+				_ask_video(b)
 		"board_arrange":
 			if primary:
 				if b == null:
@@ -242,6 +266,19 @@ func act(id: String, primary: bool) -> void:
 				pick_up(b)
 			else:
 				_remove_aimed(b)
+
+
+func _ask_video(b: Node3D) -> void:
+	var done := func(text: String) -> void: play_video(b, text)
+	game.numpad.ask_url("Video link", b.video_url, "A link to an Ogg Theora (.ogv) video file. Paste works too.", done)
+
+
+## Gives a video board its link, plays it and saves.
+func play_video(b: Node3D, url: String) -> void:
+	if not is_instance_valid(b):
+		return
+	b.play_url(url)
+	save()
 
 
 func _remove_aimed(b: Node3D) -> void:

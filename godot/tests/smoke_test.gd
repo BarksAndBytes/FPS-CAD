@@ -1093,6 +1093,51 @@ func _references(main: Node) -> void:
 	_check(main.view._com.visible, "Mass properties marks the centre of mass")
 	await _boards(main)
 	await _part_settings(main)
+	await _video_board(main)
+
+
+## A video board: what can play, the error screen for what can't, pause, and saving the link.
+func _video_board(main: Node) -> void:
+	var WB = load("res://scripts/whiteboard.gd")
+	_check(WB.url_problem("https://www.youtube.com/watch?v=abc").contains("youtube.com") and WB.url_problem("ftp://x/v.ogv").contains("web link")
+		and WB.url_problem("https://example.com/clip.ogv") == "", "links to video sites and non-web links are turned away before downloading")
+	var ogv := FileAccess.get_file_as_bytes("res://tests/tiny.ogv")
+	var mp4 := PackedByteArray([0, 0, 0, 32]) + "ftypisom".to_ascii_buffer() + PackedByteArray([0, 0, 2, 0])
+	var webm := PackedByteArray([0x1A, 0x45, 0xDF, 0xA3, 1, 0, 0, 0])
+	_check(WB.video_problem(ogv.slice(0, 4096)) == "" and WB.video_problem(mp4).contains("MP4") and WB.video_problem(webm).contains("WebM")
+		and WB.video_problem("<!DOCTYPE html><html>".to_ascii_buffer(), "text/html").contains("web page")
+		and WB.video_problem("OggS".to_ascii_buffer() + PackedByteArray([0, 2, 0, 0]) + "vorbis".to_ascii_buffer()).contains("without Theora"),
+		"downloads are told apart: Ogg Theora plays; MP4, WebM, web pages and sound-only Ogg get an error screen")
+	main.tools.set_tool_id("board_video")
+	main.tools._act(true, false)
+	await _frames(2)
+	var vb: Node3D = main.boards.extra[-1]
+	_check(vb.kind == "video" and main.numpad.visible and main.numpad._lower, "Video board sets up a board and asks for a link (lower case)")
+	main.numpad.close()
+	vb.play_file("res://tests/tiny.ogv", "https://example.com/tiny.ogv")
+	await _frames(10)
+	_check(vb.video_state == "playing" and vb._video.is_playing() and vb._view.render_target_update_mode == SubViewport.UPDATE_ALWAYS,
+		"an Ogg Theora video plays on the board")
+	vb.toggle_video()
+	_check(vb.video_state == "paused" and vb._video.paused, "the primary button pauses it")
+	vb.toggle_video()
+	_check(vb.video_state == "playing" and not vb._video.paused, "and carries on")
+	var bad := OS.get_user_data_dir().path_join("smoke-video.mp4")
+	var f := FileAccess.open(bad, FileAccess.WRITE)
+	f.store_buffer(mp4)
+	f.close()
+	vb.play_file(bad, "https://example.com/clip.mp4")
+	var lines: Array = vb.text_lines()
+	_check(vb.video_state == "error" and String(lines[1]) == "Can't play this video" and String(lines[2]).contains("MP4")
+		and String(lines[2]).contains("ffmpeg") and not vb._video.visible, "an MP4 gets the error screen, with how to convert it")
+	DirAccess.remove_absolute(bad)
+	vb.play_url("https://youtu.be/abc")
+	_check(vb.video_state == "error" and String(vb.text_lines()[2]).contains("youtu.be"), "a YouTube link gets the error screen at once")
+	vb.set_video("https://example.com/tiny.ogv")
+	main.boards.save()
+	var saved: Array = main.doc.get_boards().filter(func(d): return d.kind == "video")
+	_check(not saved.is_empty() and saved[-1].url == "https://example.com/tiny.ogv" and vb.video_state == "ready", "the link is saved with the part")
+	main.boards.remove(vb)
 
 
 ## Units and material from the pause menu: sizes stay put, mass and looks follow the material.
