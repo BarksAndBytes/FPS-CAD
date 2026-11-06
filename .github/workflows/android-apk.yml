@@ -32,7 +32,40 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+        run: sudo apt-get update && sudo apt-get install -y ninja-build autoconf automake libtool pkg-config zlib1g-dev
+
+      - name: Cache FFmpeg (Android, and its Linux twin for testing)
+        id: ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/ffmpeg-android
+            ${{ runner.temp }}/ffmpeg-linux
+          key: ffmpeg-${{ hashFiles('tools/build_ffmpeg.sh') }}-v1
+
+      - name: Build FFmpeg for the video board
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" tools/ci_run.sh tools/build_ffmpeg.sh "${{ runner.temp }}/ffmpeg-android" android
+          tools/ci_run.sh tools/build_ffmpeg.sh "${{ runner.temp }}/ffmpeg-linux" linux
+          rm -rf "${{ runner.temp }}"/ffmpeg-*/.build "${{ runner.temp }}"/ffmpeg-*/deps
+
+      - name: Test the FFmpeg build on real clips
+        run: |
+          # The Linux twin has the same codecs, so it shows what the phone's copy can convert.
+          FF="${{ runner.temp }}/ffmpeg-linux/bin/ffmpeg"
+          "$FF" -hide_banner -encoders | grep -E "libtheora|libvorbis"
+          for clip in godot/tests/tiny.mp4 godot/tests/tiny.webm; do
+            "$FF" -hide_banner -loglevel error -nostdin -y -i "$clip" -map 0:v:0 -map "0:a:0?" \
+              -vf "scale=w='min(854,iw)':h=-2" -c:v libtheora -q:v 7 -c:a libvorbis -q:a 4 -f ogg "$RUNNER_TEMP/out.ogv"
+            python3 -c "import sys; d=open(sys.argv[1],'rb').read(4096); sys.exit(0 if d[:4]==b'OggS' and b'\\x80theora' in d else 1)" "$RUNNER_TEMP/out.ogv" \
+              || { echo "::error::$clip did not convert to Ogg Theora"; exit 1; }
+            echo "$clip -> Ogg Theora, $(stat -c %s "$RUNNER_TEMP/out.ogv") bytes"
+          done
+          A="${{ runner.temp }}/ffmpeg-android/bin/ffmpeg"
+          file "$A"
+          file "$A" | grep -q "ARM aarch64" || { echo "::error::the Android FFmpeg is not an arm64 program"; exit 1; }
+          "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$A" | grep NEEDED
 
       - name: Cache Open CASCADE (Android)
         id: occt
@@ -59,7 +92,10 @@ jobs:
       - name: Stage Open CASCADE and libc++ beside the extension
         run: |
           LIBCXX=$(find "$ANDROID_NDK_LATEST_HOME" -path "*aarch64-linux-android/libc++_shared.so" | head -1)
-          python3 tools/stage_occt.py --occt "${{ runner.temp }}/occt-android" --platform android --extra "$LIBCXX"
+          # FFmpeg rides along as lib/arm64-v8a/libffmpeg.so: Android unpacks native libraries to a
+          # folder the app may run programs from (whiteboard.gd finds it there).
+          cp "${{ runner.temp }}/ffmpeg-android/bin/ffmpeg" "$RUNNER_TEMP/libffmpeg.so"
+          python3 tools/stage_occt.py --occt "${{ runner.temp }}/occt-android" --platform android --extra "$LIBCXX" --extra "$RUNNER_TEMP/libffmpeg.so"
           ls -la godot/bin
 
       - name: Install Godot and its export templates
@@ -151,6 +187,7 @@ jobs:
           echo "CERT_SHA256=$(grep -m1 'SHA-256 digest' export/android/certs.txt | awk '{print $NF}')" >> "$GITHUB_ENV"
           unzip -l export/android/FPS-CAD.apk | grep -E "lib/arm64-v8a/.*\.so" | tee export/android/libs.txt
           grep -q libfpcad export/android/libs.txt || { echo "::error::the APK is missing the CAD extension"; exit 1; }
+          grep -q "lib/arm64-v8a/libffmpeg.so" export/android/libs.txt || { echo "::error::the APK is missing FFmpeg"; exit 1; }
           cp export/android/FPS-CAD.apk "export/android/FPS-CAD-${GITHUB_SHA::7}.apk"
           APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/android-dev/FPS-CAD-${GITHUB_SHA::7}.apk"
           python3 - "$APK_URL" > export/android/latest.json <<'PY'

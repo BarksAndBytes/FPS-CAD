@@ -1122,6 +1122,17 @@ func _video_board(main: Node) -> void:
 		== "https://news.example.com/live/master.m3u8" and WB.is_stream("https://news.example.com/live/master.m3u8?t=1"),
 		"script-made blob: videos are skipped; an HLS playlist is taken as a stream")
 	_check(WB.find_page_video("<p>No video here</p><a href='/about.html'>about</a>", page) == "", "a page with no video finds nothing")
+	var wiki := ('<video controls width="220" height="124" data-mwtitle="Clip.webm">'
+		+ '<source src="//upload.wikimedia.org/wikipedia/commons/a/ab/Clip.webm" type="video/webm; codecs=&quot;vp9, opus&quot;" data-width="3840" data-height="2160">'
+		+ '<source src="//upload.wikimedia.org/wikipedia/commons/transcoded/a/ab/Clip.webm/Clip.webm.1080p.vp9.webm" type="video/webm; codecs=&quot;vp9, opus&quot;" data-transcodekey="1080p.vp9.webm" data-width="1920" data-height="1080">'
+		+ '<source src="//upload.wikimedia.org/wikipedia/commons/transcoded/a/ab/Clip.webm/Clip.webm.720p.vp9.webm" type="video/webm; codecs=&quot;vp9, opus&quot;" data-transcodekey="720p.vp9.webm" data-width="1280" data-height="720">'
+		+ '<source src="//upload.wikimedia.org/wikipedia/commons/transcoded/a/ab/Clip.webm/Clip.webm.480p.vp9.webm" type="video/webm; codecs=&quot;vp9, opus&quot;" data-transcodekey="480p.vp9.webm" data-width="854" data-height="480">'
+		+ '<source src="//upload.wikimedia.org/wikipedia/commons/transcoded/a/ab/Clip.webm/Clip.webm.144p.mjpeg.mov" type="video/quicktime" data-transcodekey="144p.mjpeg.mov" data-width="256" data-height="144">'
+		+ '</video>')
+	_check(WB.find_page_video(wiki, "https://en.wikipedia.org/wiki/Video") == "https://upload.wikimedia.org/wikipedia/commons/transcoded/a/ab/Clip.webm/Clip.webm.720p.vp9.webm",
+		"on a Wikipedia page the 720p version is taken, not the 4K original (%s)" % WB.find_page_video(wiki, "https://en.wikipedia.org/wiki/Video").get_file())
+	_check(WB.find_page_video('<video><source src="a.webm" type="video/webm" data-height="720"><source src="a.ogv" type="video/ogg"></video>', page).ends_with("/a.ogv"),
+		"an Ogg source is preferred: it plays without converting")
 	_check(WB.find_page_video('<meta property="og:video" content="https://www.youtube.com/embed/abc">', page).contains("youtube.com"),
 		"an embedded YouTube video is found, so the board can say why it can't play it")
 	main.tools.set_tool_id("board_video")
@@ -1163,6 +1174,15 @@ func _video_board(main: Node) -> void:
 				break
 			await _frames(1)
 		_check(vb.video_state == "playing" and FileAccess.file_exists(WB.cached_path(url)), "then plays, kept for next time (%s)" % vb.video_message)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
+		# VP9 and Opus in WebM, as Wikipedia serves.
+		url = "https://example.com/tiny-%d.webm" % Time.get_ticks_usec()
+		vb.play_file("res://tests/tiny.webm", url)
+		for i in 900:
+			if vb.video_state != "converting":
+				break
+			await _frames(1)
+		_check(vb.video_state == "playing", "a VP9 / Opus WebM converts and plays (%s)" % vb.video_message)
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
 	else:
 		print("SKIP FFmpeg conversion: no ffmpeg on this machine")

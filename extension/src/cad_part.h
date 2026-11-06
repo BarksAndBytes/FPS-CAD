@@ -28,6 +28,7 @@ public:
   void new_blank(const godot::String& name, const godot::String& units);
   godot::String get_material() const;
   godot::String get_mass_units() const;
+  godot::String native_library_dir() const;
   godot::Array material_library() const;
   godot::Dictionary material_info() const;
   godot::Dictionary set_material(const godot::String& name, double density = 0.0);

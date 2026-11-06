@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#if defined(__unix__) || defined(__APPLE__)
+#include <dlfcn.h>
+#endif
 #include <set>
 
 #include <godot_cpp/core/class_db.hpp>
@@ -115,6 +118,24 @@ String CadPart::get_file_id() const { return str(model_->document().fileId); }
 String CadPart::get_material() const {
   const fpcad::Material* m = fpcad::findMaterial(model_->document().material);
   return str(m ? m->name : model_->document().material);
+}
+
+namespace {
+void libraryMarker() {}
+}  // namespace
+
+// The folder this extension was loaded from. On Android that is the app's native library folder,
+// the one place Android lets an app run a program it ships (the video board's FFmpeg).
+String CadPart::native_library_dir() const {
+#if defined(__unix__) || defined(__APPLE__)
+  Dl_info info;
+  if (dladdr(reinterpret_cast<void*>(&libraryMarker), &info) && info.dli_fname) {
+    std::string p = info.dli_fname;
+    auto slash = p.rfind('/');
+    if (slash != std::string::npos) return str(p.substr(0, slash));
+  }
+#endif
+  return String();
 }
 
 String CadPart::get_mass_units() const { return str(model_->document().massUnit()); }
@@ -979,6 +1000,7 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_material"), &CadPart::get_material);
   ClassDB::bind_method(D_METHOD("get_density"), &CadPart::get_density);
   ClassDB::bind_method(D_METHOD("get_mass_units"), &CadPart::get_mass_units);
+  ClassDB::bind_method(D_METHOD("native_library_dir"), &CadPart::native_library_dir);
   ClassDB::bind_method(D_METHOD("material_library"), &CadPart::material_library);
   ClassDB::bind_method(D_METHOD("material_info"), &CadPart::material_info);
   ClassDB::bind_method(D_METHOD("set_material", "name", "density"), &CadPart::set_material, DEFVAL(0.0));

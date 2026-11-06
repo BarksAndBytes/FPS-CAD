@@ -148,12 +148,18 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
   video plays, letterboxed, looping, with its sound fading with distance (full within 3 board
   heights, silent past 20). Any other video (MP4/MOV, WebM/MKV, AVI, sound-only Ogg…) is
   converted to Theora by FFmpeg running in the background (`ffmpeg.exe` ships beside the game on
-  Windows; elsewhere an `ffmpeg` on the PATH is used), scaled to at most 1280 px wide, with the
+  Windows; Android ships a small FFmpeg built by `tools/build_ffmpeg.sh` as
+  `lib/arm64-v8a/libffmpeg.so`, run from the app's native library folder, the one place Android
+  lets an app run a program it ships; Linux uses an `ffmpeg` on the PATH), scaled to at most
+  1280 px wide (854 on phones), with the
   percentage on the board from FFmpeg's progress output, then kept like a download. A link to a
   web page plays the page's main video (`find_page_video`): the video the page declares
   (`og:video`, `twitter:player:stream`, a VideoObject's `contentUrl`), else its largest `<video>`
   by width × height (its `src` or first video `<source>`; script-made `blob:` sources skipped),
   else the first link to a video file; relative links resolve against the page or its `<base>`.
+  Among a `<video>`'s `<source>`s it takes an Ogg one (plays without converting), else the tallest
+  at or under 720p (480p on phones) by `data-height` or the transcode key, so a Wikipedia video
+  comes as its 720p version rather than the original upload.
   HLS and DASH playlists (`.m3u8`, `.mpd`) go straight to FFmpeg, which reads the stream. Only one
   hop: a page whose video link leads to another page is an error. What can't play gets an error
   screen saying why: YouTube, Vimeo and similar sites (linked, or embedded in the page) are turned

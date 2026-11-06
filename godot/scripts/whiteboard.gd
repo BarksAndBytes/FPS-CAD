@@ -47,6 +47,7 @@ const VIDEO_DIR := "user://videos"
 const VIDEO_LIMIT := 1024 * 1024 * 1024  # 1 GB
 const CONVERT_HINT := "The whiteboard plays Ogg Theora (.ogv) videos. Convert one with:\nffmpeg -i video.mp4 -c:v libtheora -q:v 7 -c:a libvorbis video.ogv"
 const MAX_WIDTH := 1280  # converted videos are scaled down to this: Theora decodes on the CPU
+const MAX_WIDTH_MOBILE := 854  # phones: 480p converts and plays smoothly
 const USER_AGENT := "User-Agent: Mozilla/5.0 (compatible; FPS-CAD video board)"
 ## Sites that show their videos inside web pages, which the board can't display.
 const VIDEO_SITES := ["youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com", "dailymotion.com",
@@ -67,6 +68,7 @@ var _http: HTTPRequest = null
 var _video_fitted := false
 var _ff := {}              # the FFmpeg conversion running: {pid, stdio, stderr, src, out, part, out_text, err_text, duration, done_us}
 static var _ffmpeg_path: Variant = null  # found once: the FFmpeg program, or "" if there is none
+static var ffmpeg_note := ""  # why there is none: what was tried
 var _video_t := 0.0
 var _notes_box := VBoxContainer.new()
 var _note_labels: Array[Label] = []
@@ -285,23 +287,37 @@ static func video_problem(head: PackedByteArray, content_type := "") -> String:
 	return "That file isn't a video the whiteboard can play.\n\n" + CONVERT_HINT
 
 
-## The FFmpeg program that converts videos: beside the game (Windows builds ship it), else on the
-## PATH. "" when there is none (Android).
+## The FFmpeg program that converts videos: on Android the libffmpeg.so the APK ships in its
+## native library folder (tools/build_ffmpeg.sh); on Windows ffmpeg.exe beside the game; else an
+## ffmpeg on the PATH. "" when there is none.
 static func ffmpeg_path() -> String:
 	if _ffmpeg_path != null:
 		return _ffmpeg_path
 	_ffmpeg_path = ""
-	if OS.has_feature("android") or OS.has_feature("web"):
+	if OS.has_feature("web"):
 		return ""
-	var exe := "ffmpeg.exe" if OS.has_feature("windows") else "ffmpeg"
-	var beside := OS.get_executable_path().get_base_dir().path_join(exe)
-	for candidate in [beside, exe]:
-		if candidate == beside and not FileAccess.file_exists(beside):
-			continue
+	var candidates := []
+	if OS.has_feature("android"):
+		var part: Object = ClassDB.instantiate(&"CadPart") if ClassDB.class_exists(&"CadPart") else null
+		var dir: String = part.native_library_dir() if part != null and part.has_method("native_library_dir") else ""
+		if dir != "":
+			candidates.append(dir.path_join("libffmpeg.so"))
+	else:
+		var exe := "ffmpeg.exe" if OS.has_feature("windows") else "ffmpeg"
+		var beside := OS.get_executable_path().get_base_dir().path_join(exe)
+		if FileAccess.file_exists(beside):
+			candidates.append(beside)
+		candidates.append(exe)
+	var tried := PackedStringArray()
+	for candidate in candidates:
 		var out := []
-		if OS.execute(candidate, ["-hide_banner", "-encoders"], out, true) == 0 and "libtheora" in "".join(out):
+		var code := OS.execute(candidate, ["-hide_banner", "-encoders"], out, true)
+		if code == 0 and "libtheora" in "".join(out):
 			_ffmpeg_path = candidate
 			break
+		var missing: bool = candidate.is_absolute_path() and not FileAccess.file_exists(candidate)
+		tried.append("%s (%s)" % [candidate, "not there" if missing else "exit code %d" % code if code != 0 else "no Theora encoder"])
+	ffmpeg_note = "" if _ffmpeg_path != "" else ("Looked for " + ", ".join(tried) if not tried.is_empty() else "No place to look on this platform")
 	return _ffmpeg_path
 
 
@@ -309,7 +325,7 @@ static func ffmpeg_path() -> String:
 static func convert_args(src: String, out: String) -> PackedStringArray:
 	var web := PackedStringArray(["-user_agent", USER_AGENT.trim_prefix("User-Agent: ")]) if src.begins_with("http") else PackedStringArray()
 	return web + PackedStringArray(["-hide_banner", "-nostdin", "-y", "-i", src,
-		"-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=w='min(%d,iw)':h=-2" % MAX_WIDTH,
+		"-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=w='min(%d,iw)':h=-2" % (MAX_WIDTH_MOBILE if OS.has_feature("mobile") else MAX_WIDTH),
 		"-c:v", "libtheora", "-q:v", "7", "-c:a", "libvorbis", "-q:a", "4",
 		"-progress", "pipe:1", "-nostats", "-f", "ogg", out])
 
@@ -402,12 +418,7 @@ static func find_page_video(html: String, page_url: String) -> String:
 		var a := _attributes("<video " + m.get_string(1) + ">")
 		var src := String(a.get("src", ""))
 		if src == "":
-			for s in RegEx.create_from_string("(?is)<source\\b[^>]*>").search_all(m.get_string(2)):
-				var sa := _attributes(s.get_string())
-				var t := String(sa.get("type", "")).to_lower()
-				if String(sa.get("src", "")) != "" and (t == "" or t.begins_with("video/") or "mpegurl" in t or "dash" in t):
-					src = sa.src
-					break
+			src = _best_source(m.get_string(2))
 		if src == "" or src.begins_with("blob:") or src.begins_with("data:"):
 			continue
 		var area := int(String(a.get("width", "0")).to_int()) * int(String(a.get("height", "0")).to_int())
@@ -421,6 +432,34 @@ static func find_page_video(html: String, page_url: String) -> String:
 		return ""
 	found.sort_custom(func(x, y): return int(x[1]) > int(y[1]))
 	return found[0][0]
+
+
+## The <source> to take among a <video>'s: an Ogg one plays without converting; else the tallest
+## at or under 720p (480p on phones), as Wikipedia lists an original and versions from 240p up;
+## else the first video source.
+static func _best_source(inner: String) -> String:
+	var limit := 480 if OS.has_feature("mobile") else 720
+	var first := ""
+	var best := ""
+	var best_h := -1
+	for s in RegEx.create_from_string("(?is)<source\\b[^>]*>").search_all(inner):
+		var sa := _attributes(s.get_string())
+		var src := String(sa.get("src", ""))
+		var t := String(sa.get("type", "")).to_lower()
+		if src == "" or src.begins_with("blob:") or not (t == "" or t.begins_with("video/") or "mpegurl" in t or "dash" in t):
+			continue
+		if t.begins_with("video/ogg") or src.to_lower().get_slice("?", 0).ends_with(".ogv"):
+			return src
+		if first == "":
+			first = src
+		var h := String(sa.get("data-height", sa.get("height", ""))).to_int()
+		if h <= 0:
+			var key := String(sa.get("data-transcodekey", ""))  # "720p.vp9.webm"
+			h = key.get_slice("p", 0).to_int() if key.contains("p.") else 0
+		if h > 0 and h <= limit and h > best_h:
+			best = src
+			best_h = h
+	return best if best != "" else first
 
 
 ## True for a link that looks like a video file or a stream (not a page). strict: by its extension
@@ -504,7 +543,7 @@ func _convert(src: String, out: String, why: String, remove_src: bool) -> void:
 		if remove_src:
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(src))
 		var kind_line := why.replace(CONVERT_HINT, "").strip_edges() if CONVERT_HINT in why else "That video needs converting."
-		_video_error(kind_line + "\n\nConverting it needs FFmpeg, which this version of the game doesn't have.\n\n" + CONVERT_HINT)
+		_video_error(kind_line + "\n\nConverting it needs FFmpeg, which this version of the game doesn't have (%s).\n\n%s" % [ffmpeg_note, CONVERT_HINT])
 		return
 	var part := out + ".part"
 	var input := src if src.begins_with("http://") or src.begins_with("https://") else ProjectSettings.globalize_path(src)

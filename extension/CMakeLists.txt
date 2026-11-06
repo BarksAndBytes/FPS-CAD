@@ -20,7 +20,7 @@ add_library(fpcad_gdext SHARED
   src/cad_part.cpp
   src/cad_assembly.cpp)
 
-target_link_libraries(fpcad_gdext PRIVATE fpcad_core godot::cpp)
+target_link_libraries(fpcad_gdext PRIVATE fpcad_core godot::cpp ${CMAKE_DL_LIBS})
 target_include_directories(fpcad_gdext SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 
 # Name the library the way godot/bin/fpcad.gdextension expects: libfpcad.<platform>.<target>.<arch>
