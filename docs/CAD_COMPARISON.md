@@ -1,8 +1,7 @@
 # FPS-CAD compared with professional CAD
 
 A capability-by-capability review of SOLIDWORKS, Autodesk Fusion and Autodesk Inventor against
-FPS-CAD (first written at build 39, October 2026; the sketching section is updated for the
-November 2026 sketch tools). It is a planning document: nothing here changes the code.
+FPS-CAD (first written at build 39, October 2026; updated through release 1.0, November 2026). It is a planning document: nothing here changes the code.
 
 **Versions reviewed:** SOLIDWORKS 2026; Autodesk Fusion through its October 2026 update;
 Autodesk Inventor 2026, plus what Autodesk lists as new for Inventor 2027. Sources are at the end.
@@ -38,7 +37,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Simulation and generative | FEA, motion, CFD, topology, generative | None | None |
 | Manufacturing | CAM, additive prep, nesting, costing | STL/3MF export only | Low |
 | Data management | PDM / Vault / cloud versions, branching | Local native files with history; undo/redo; autosave | Low (by design) |
-| Interoperability | Dozens of import/export formats | Export STEP, IGES, STL, 3MF with read-back validation; no import | Low–medium |
+| Interoperability | Dozens of import/export formats | Export STEP, IGES, STL, 3MF with read-back validation; STEP import; PDF and DXF drawings | Medium |
 | Automation and API | VBA/C# API, Python/JS API, iLogic | Headless C++ core and CLI | Low |
 | Platform and input | Desktop, mouse and keyboard; Fusion also web | First person, any size, controller first, Android and Windows, offline | Unique |
 
@@ -52,7 +51,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | --- | --- | --- | --- |
 | Sketch on standard planes | Front, Top, Right / XY, XZ, YZ / origin planes | ✓ | Top, Front, Right |
 | Sketch on a planar face | All three | ✓ | Aim at a flat face |
-| Sketch on a user-defined plane | Reference plane / construction plane / work plane | ✗ | Needs reference planes (§2) |
+| Sketch on a user-defined plane | Reference plane / construction plane / work plane | ✓ | On reference planes (§2); the sketch follows its plane |
 | 3D sketch | 3D Sketch / sketch in 3D / 3D Sketch | ✗ | |
 | Sketch view square to the plane | Normal To / Look At / Look At | ✓ | Automatic on entering a sketch; Y toggles free look |
 | Edit sketch plane after creation | Edit Sketch Plane / Redefine / Redefine | ✗ | |
@@ -271,7 +270,7 @@ UI work rather than a kernel limitation.
 
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
-| Insert components from files | All three | ◐ | Assembly files reference parts; no in-game insert yet (sandbox only) |
+| Insert components from files | All three | ✓ | Insert part places a saved part where you aim (0.8) |
 | Multiple instances | All three | ✓ | |
 | Virtual / in-place components | Virtual Components / components in one design / Virtual | ✓ | Virtual parts supported by the core |
 | Sub-assemblies (rigid / flexible) | All three | ◐ | Nested components in the core; no flexible solving |
@@ -389,7 +388,7 @@ solving; a small local static solver is possible later but is not core to the ga
 | Named views and saved camera positions | All three | ◐ | Viewpoints stored in `.fpprt`; no UI |
 | Walkthrough, VR/AR | SW (eDrawings AR/VR), Fusion, Inventor (VRED/AR) | ✓ | First person at any scale is the core of the game |
 | Display styles (shaded, edges, wireframe, hidden lines) | All three | ◐ | Shaded with edges only |
-| Section and cut-away displays | All three | ✗ | |
+| Section and cut-away displays | All three | ✓ | Walkable section view (0.7) |
 
 ---
 
@@ -397,7 +396,7 @@ solving; a small local static solver is possible later but is not core to the ga
 
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
-| Native files with full history | `.sldprt/.sldasm/.slddrw` / cloud designs / `.ipt/.iam/.idw` | ✓ | `.fpprt`, `.fpasm` (ZIP + JSON, cached B-rep, format version) |
+| Native files with full history | `.sldprt/.sldasm/.slddrw` / cloud designs / `.ipt/.iam/.idw` | ✓ | `.fpprt`, `.fpasm`, `.fpdrw` (ZIP + JSON, cached B-rep, format version) |
 | Version history | PDM / automatic cloud versions / Vault | ◐ | Undo history in a session; autosave recovery file |
 | Branching and merging | Fusion | ✗ | |
 | Check-in/out, lifecycle, revisions, where-used | SW PDM, Vault | — | Local-only by design |
@@ -413,7 +412,7 @@ spec).
 
 | Format | Professional import / export | FPS-CAD export | FPS-CAD import |
 | --- | --- | --- | --- |
-| STEP (AP203/214/242) | All three, both ways | ✓ AP242 / AP214, validated | ✗ (reader used only to validate) |
+| STEP (AP203/214/242) | All three, both ways | ✓ AP242 / AP214, validated | ✓ as a solid feature, stored in the part (0.3) |
 | IGES | All three | ✓ validated | ✗ |
 | STL | All three | ✓ validated | ✗ |
 | 3MF | All three | ✓ validated | ✗ |
@@ -425,8 +424,7 @@ spec).
 | PDF, 3D PDF | All three | PDF drawings (0.9) | — |
 | Images and screenshots | All three | ✓ screenshot (F12 / Share) | — |
 
-STEP import is the biggest gap here: it lets players bring parts in from other tools, and Open
-CASCADE already reads STEP.
+STEP import arrived in 0.3. The next gaps are IGES and mesh import and DWG output.
 
 ---
 
