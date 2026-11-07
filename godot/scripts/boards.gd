@@ -28,6 +28,9 @@ var _carry: Node3D = null
 var _carry_from := {}          # where it stood, to put it back
 var _carry_dist := 0.0
 var _carry_turn := 0.0         # its yaw relative to facing the player
+var _drawings_dirty := false   # a drawing board waits to be redrawn (hidden-line views are slow)
+var _drawn_at := -1e9          # when drawing boards were last redrawn (ms)
+const DRAW_EVERY_MS := 400.0
 
 
 # ---------- the set of boards ----------
@@ -154,11 +157,28 @@ func refresh_properties() -> void:
 		b.set_card("PART PROPERTIES", lines[0], lines[1])
 
 
-## Drawing boards show the part's standard views; they follow the part as it changes.
+## Drawing boards show the part's standard views; they follow the part as it changes. Redrawing
+## runs hidden-line removal, so while the part changes quickly (holding push/pull) it happens at
+## most every 0.4 s, and once more when the changes stop.
 func refresh_drawings() -> void:
-	var boards := extra.filter(func(b): return b.kind == "drawing")
-	if boards.is_empty():
+	if not extra.any(func(b): return b.kind == "drawing"):
+		_drawings_dirty = false
 		return
+	if Time.get_ticks_msec() - _drawn_at < DRAW_EVERY_MS:
+		_drawings_dirty = true
+		return
+	_redraw_drawings()
+
+
+func _process(_dt: float) -> void:
+	if _drawings_dirty and Time.get_ticks_msec() - _drawn_at >= DRAW_EVERY_MS:
+		_redraw_drawings()
+
+
+func _redraw_drawings() -> void:
+	_drawings_dirty = false
+	_drawn_at = Time.get_ticks_msec()
+	var boards := extra.filter(func(b): return b.kind == "drawing")
 	var doc: RefCounted = game.doc
 	for b in boards:
 		if doc == null or not doc.has_method("drawing_sheet"):

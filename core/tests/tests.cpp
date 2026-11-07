@@ -1438,6 +1438,50 @@ int main() {
     CHECK(count(model, "<item ") == 1);
   });
 
+  run("1.0: a large part rebuilds in reasonable time", [&] {
+    // A 500 mm plate with a 12 x 12 grid of holes (a pattern of 144) and a row of 40 bosses.
+    PartDocument d;
+    d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.5}, {"d", 0.5}, {"h", 0.01}}));
+    std::string hole = d.add(feature("hole", {{"point", {-0.22, -0.22, 0.01}}, {"normal", {0, 0, 1}}, {"d", 0.008},
+                                              {"end", "through_all"}}, BodyOp::Cut)).id;
+    d.add(feature("pattern", {{"features", {hole}}, {"kind", "linear"}, {"dir", "x"}, {"count", 12}, {"spacing", 0.04},
+                              {"dir2", "y"}, {"count2", 12}, {"spacing2", 0.04}}));
+    std::string boss = d.add(feature("cylinder", {{"x", -0.2}, {"y", 0.245}, {"z", 0.01}, {"r", 0.003}, {"h", 0.01}})).id;
+    d.add(feature("pattern", {{"features", {boss}}, {"kind", "linear"}, {"dir", "x"}, {"count", 40}, {"spacing", 0.01}}));
+    PartModel m(d);
+    auto t0 = std::chrono::steady_clock::now();
+    auto r = m.rebuild();
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(r.ok);
+    CHECK_NEAR(m.massProperties().volume,
+               0.5 * 0.5 * 0.01 - 144 * kPiT * 0.004 * 0.004 * 0.01 + 40 * kPiT * 0.003 * 0.003 * 0.01, 1e-9);
+    std::printf("    large part: 144 holes + 40 bosses rebuilt in %.0f ms\n", ms);
+    CHECK(ms < 60000);
+    t0 = std::chrono::steady_clock::now();
+    BodyMesh bm = m.mesh(0, 0.0005, 0.3);
+    double mms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    meshed %zu triangles in %.0f ms\n", bm.indices.size() / 3, mms);
+    CHECK(!bm.indices.empty());
+    // A sketch of 60 circles extruded as one feature: every side face gets its role.
+    Json sk = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}, {"points", Json::array()},
+               {"entities", Json::array()}, {"constraints", Json::array()}};
+    for (int i = 0; i < 60; ++i) {
+      std::string c = "c" + std::to_string(i);
+      sk["points"].push_back({{"id", c}, {"x", (i % 10) * 0.03}, {"y", (i / 10) * 0.03}});
+      sk["entities"].push_back({{"id", "k" + std::to_string(i)}, {"kind", "circle"}, {"pts", {c}}, {"r", 0.01}});
+    }
+    PartDocument t;
+    std::string sid = t.add(feature("sketch", sk)).id;
+    t.add(feature("extrude", {{"sketch", sid}, {"depth", 0.02}}));
+    PartModel tm(t);
+    t0 = std::chrono::steady_clock::now();
+    CHECK(tm.rebuild().ok);
+    ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    60-circle extrude with face roles in %.0f ms\n", ms);
+    auto side = tm.pick({0.5, 0.0, 0.01}, {-1, 0, 0});
+    CHECK(side && tm.faceRole(side->body, side->face).rfind("side", 0) == 0);
+  });
+
   run("0.9: standard views with hidden lines and dimensions, flat views, DXF, PDF, .fpdrw", [&] {
     // A 100 x 60 x 40 mm block with a 20 mm hole down through it.
     PartDocument d;

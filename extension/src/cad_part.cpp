@@ -356,13 +356,19 @@ Dictionary CadPart::pick(const Vector3& origin, const Vector3& direction, double
 }
 
 Dictionary CadPart::push_pull(const Dictionary& hit, double delta) {
-  std::string msg;
-  bool ok = model_->pushPull(dictToHit(hit), delta, &msg);
-  Dictionary d = result(ok, msg);
-  if (ok) {
-    if (auto drv = model_->faceDrive(dictToHit(hit))) d["drive_value"] = drv->value;
+  try {
+    std::string msg;
+    bool ok = model_->pushPull(dictToHit(hit), delta, &msg);
+    Dictionary d = result(ok, msg);
+    if (ok) {
+      if (auto drv = model_->faceDrive(dictToHit(hit))) d["drive_value"] = drv->value;
+    }
+    return d;
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  return d;
 }
 
 void CadPart::checkpoint() {
@@ -441,59 +447,71 @@ String CadPart::add_primitive(const String& type, const Vector3& base, const Dic
 }
 
 Dictionary CadPart::move_feature(const String& id, const Vector3& delta) {
-  fpcad::Feature* f = model_->document().find(str(id));
-  if (!f) return result(false, "that feature no longer exists");
-  fpcad::Vec3 d = toCad(delta);
-  fpcad::PartDocument backup = model_->document();
-  auto shift = [&](fpcad::Json& obj, const char* key, double by) {
-    obj[key] = model_->param(*f, key) + by;
-  };
-  if (f->type == "box" || f->type == "cylinder" || f->type == "sphere" || f->type == "cone" || f->type == "import") {
-    shift(f->params, "x", d[0]);
-    shift(f->params, "y", d[1]);
-    shift(f->params, "z", d[2]);
-  } else if (f->type == "extrude") {
-    auto& o = f->params["plane"]["origin"];
-    o = {o[0].get<double>() + d[0], o[1].get<double>() + d[1], o[2].get<double>() + d[2]};
-  } else {
-    return result(false, f->name + " cannot be moved on its own");
+  try {
+    fpcad::Feature* f = model_->document().find(str(id));
+    if (!f) return result(false, "that feature no longer exists");
+    fpcad::Vec3 d = toCad(delta);
+    fpcad::PartDocument backup = model_->document();
+    auto shift = [&](fpcad::Json& obj, const char* key, double by) {
+      obj[key] = model_->param(*f, key) + by;
+    };
+    if (f->type == "box" || f->type == "cylinder" || f->type == "sphere" || f->type == "cone" || f->type == "import") {
+      shift(f->params, "x", d[0]);
+      shift(f->params, "y", d[1]);
+      shift(f->params, "z", d[2]);
+    } else if (f->type == "extrude") {
+      auto& o = f->params["plane"]["origin"];
+      o = {o[0].get<double>() + d[0], o[1].get<double>() + d[1], o[2].get<double>() + d[2]};
+    } else {
+      return result(false, f->name + " cannot be moved on its own");
+    }
+    fpcad::RebuildReport r = model_->rebuild();
+    if (!r.ok) {
+      model_->document() = backup;
+      model_->rebuild();
+      return result(false, "moving there would break the model");
+    }
+    return result(true, "moved");
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  fpcad::RebuildReport r = model_->rebuild();
-  if (!r.ok) {
-    model_->document() = backup;
-    model_->rebuild();
-    return result(false, "moving there would break the model");
-  }
-  return result(true, "moved");
 }
 
 Dictionary CadPart::delete_feature(const String& id) {
-  std::string sid = str(id);
-  auto& feats = model_->document().features;
-  const fpcad::Feature* f = model_->document().find(sid);
-  if (!f) return result(false, "that feature no longer exists");
-  std::string name = f->name;
-  checkpoint();
-  // Features built from the deleted one go with it: edge features that target it, and extrudes,
-  // revolves, sweeps and lofts that use a deleted sketch (repeated so chains are followed).
-  std::set<std::string> gone{sid};
-  auto uses = [&](const fpcad::Feature& x) {
-    for (const char* k : {"target", "sketch", "path"})
-      if (x.params.contains(k) && x.params[k].is_string() && gone.count(x.params[k].get<std::string>())) return true;
-    if (x.params.contains("sketches") && x.params["sketches"].is_array())
-      for (auto& e : x.params["sketches"])
-        if (e.is_string() && gone.count(e.get<std::string>())) return true;
-    return false;
-  };
-  for (bool grew = true; grew;) {
-    grew = false;
-    for (auto& x : feats)
-      if (!gone.count(x.id) && uses(x)) { gone.insert(x.id); grew = true; }
+  try {
+    std::string sid = str(id);
+    auto& feats = model_->document().features;
+    const fpcad::Feature* f = model_->document().find(sid);
+    if (!f) return result(false, "that feature no longer exists");
+    std::string name = f->name;
+    checkpoint();
+    // Features built from the deleted one go with it: edge features that target it, and extrudes,
+    // revolves, sweeps and lofts that use a deleted sketch (repeated so chains are followed).
+    std::set<std::string> gone{sid};
+    auto uses = [&](const fpcad::Feature& x) {
+      for (const char* k : {"target", "sketch", "path"})
+        if (x.params.contains(k) && x.params[k].is_string() && gone.count(x.params[k].get<std::string>())) return true;
+      if (x.params.contains("sketches") && x.params["sketches"].is_array())
+        for (auto& e : x.params["sketches"])
+          if (e.is_string() && gone.count(e.get<std::string>())) return true;
+      return false;
+    };
+    for (bool grew = true; grew;) {
+      grew = false;
+      for (auto& x : feats)
+        if (!gone.count(x.id) && uses(x)) { gone.insert(x.id); grew = true; }
+    }
+    size_t extra = gone.size() - 1;
+    model_->document().erase(gone);
+    model_->rebuild();
+    return result(true, name + " deleted" + (extra ? " with " + std::to_string(extra) + " feature" + (extra > 1 ? "s" : "") + " built on it" : ""));
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  size_t extra = gone.size() - 1;
-  model_->document().erase(gone);
-  model_->rebuild();
-  return result(true, name + " deleted" + (extra ? " with " + std::to_string(extra) + " feature" + (extra > 1 ? "s" : "") + " built on it" : ""));
 }
 
 int CadPart::get_rollback() const { return model_->document().rollback; }
@@ -590,46 +608,52 @@ Dictionary CadPart::export_sketch_flat(const Dictionary& sketch, const String& p
 }
 
 Dictionary CadPart::export_face_flat(const Dictionary& hit, const String& path) const {
-  Dictionary d;
-  d["ok"] = false;
-  std::string name;
-  auto plane = model_->planeFromHit(dictToHit(hit), &name);
-  if (!plane) {
-    d["message"] = "Aim at a flat face";
-    return d;
-  }
-  fpcad::PickHit h = dictToHit(hit);
-  std::vector<std::vector<std::array<double, 2>>> polys;
-  for (auto& c : model_->projectFace(h.body, h.face, *plane)) {
-    std::vector<std::array<double, 2>> poly;
-    if (c.kind == "circle" && !c.pts.empty()) {
-      for (int i = 0; i <= 96; ++i) {
-        double a = 2 * Math_PI * i / 96;
-        poly.push_back({c.pts[0][0] + c.r * std::cos(a), c.pts[0][1] + c.r * std::sin(a)});
-      }
-    } else if (c.kind == "arc" && c.pts.size() == 3) {
-      // Centre, start, end: the arc runs anticlockwise from start to end.
-      auto& o = c.pts[0];
-      double r = std::hypot(c.pts[1][0] - o[0], c.pts[1][1] - o[1]);
-      double a0 = std::atan2(c.pts[1][1] - o[1], c.pts[1][0] - o[0]);
-      double a1 = std::atan2(c.pts[2][1] - o[1], c.pts[2][0] - o[0]);
-      while (a1 <= a0 + 1e-12) a1 += 2 * Math_PI;
-      int n = std::max(4, int((a1 - a0) / (2 * Math_PI) * 96));
-      for (int i = 0; i <= n; ++i) {
-        double a = a0 + (a1 - a0) * i / n;
-        poly.push_back({o[0] + r * std::cos(a), o[1] + r * std::sin(a)});
-      }
-    } else {
-      poly.assign(c.pts.begin(), c.pts.end());
-      if (c.closed && !poly.empty()) poly.push_back(poly.front());
+  try {
+    Dictionary d;
+    d["ok"] = false;
+    std::string name;
+    auto plane = model_->planeFromHit(dictToHit(hit), &name);
+    if (!plane) {
+      d["message"] = "Aim at a flat face";
+      return d;
     }
-    polys.push_back(std::move(poly));
+    fpcad::PickHit h = dictToHit(hit);
+    std::vector<std::vector<std::array<double, 2>>> polys;
+    for (auto& c : model_->projectFace(h.body, h.face, *plane)) {
+      std::vector<std::array<double, 2>> poly;
+      if (c.kind == "circle" && !c.pts.empty()) {
+        for (int i = 0; i <= 96; ++i) {
+          double a = 2 * Math_PI * i / 96;
+          poly.push_back({c.pts[0][0] + c.r * std::cos(a), c.pts[0][1] + c.r * std::sin(a)});
+        }
+      } else if (c.kind == "arc" && c.pts.size() == 3) {
+        // Centre, start, end: the arc runs anticlockwise from start to end.
+        auto& o = c.pts[0];
+        double r = std::hypot(c.pts[1][0] - o[0], c.pts[1][1] - o[1]);
+        double a0 = std::atan2(c.pts[1][1] - o[1], c.pts[1][0] - o[0]);
+        double a1 = std::atan2(c.pts[2][1] - o[1], c.pts[2][0] - o[0]);
+        while (a1 <= a0 + 1e-12) a1 += 2 * Math_PI;
+        int n = std::max(4, int((a1 - a0) / (2 * Math_PI) * 96));
+        for (int i = 0; i <= n; ++i) {
+          double a = a0 + (a1 - a0) * i / n;
+          poly.push_back({o[0] + r * std::cos(a), o[1] + r * std::sin(a)});
+        }
+      } else {
+        poly.assign(c.pts.begin(), c.pts.end());
+        if (c.closed && !poly.empty()) poly.push_back(poly.front());
+      }
+      polys.push_back(std::move(poly));
+    }
+    if (polys.empty()) {
+      d["message"] = "That face has no outline to export";
+      return d;
+    }
+    return writeSheet(fpcad::flatView(polys, model_->document().name + " · " + name, model_->document().units), path);
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  if (polys.empty()) {
-    d["message"] = "That face has no outline to export";
-    return d;
-  }
-  return writeSheet(fpcad::flatView(polys, model_->document().name + " · " + name, model_->document().units), path);
 }
 
 String CadPart::save_drawing(const String& path, const String& part_path, const Dictionary& options) const {
@@ -681,19 +705,25 @@ void CadPart::set_section(const Dictionary& plane) {
 bool CadPart::has_section() const { return model_->hasSection(); }
 
 Dictionary CadPart::face_measure(const Dictionary& hit) const {
-  fpcad::PickHit h = dictToHit(hit);
-  auto m = model_->faceMeasure(h.body, h.face);
-  Dictionary d;
-  d["ok"] = m.ok;
-  if (!m.ok) return d;
-  d["area"] = m.area;
-  d["kind"] = str(m.kind);
-  d["radius"] = m.radius;
-  d["radius2"] = m.radius2;
-  d["normal"] = toGodot(m.normal);
-  d["axis"] = toGodot(m.axis);
-  d["centre"] = toGodot(m.centre);
-  return d;
+  try {
+    fpcad::PickHit h = dictToHit(hit);
+    auto m = model_->faceMeasure(h.body, h.face);
+    Dictionary d;
+    d["ok"] = m.ok;
+    if (!m.ok) return d;
+    d["area"] = m.area;
+    d["kind"] = str(m.kind);
+    d["radius"] = m.radius;
+    d["radius2"] = m.radius2;
+    d["normal"] = toGodot(m.normal);
+    d["axis"] = toGodot(m.axis);
+    d["centre"] = toGodot(m.centre);
+    return d;
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
 }
 
 Array CadPart::interference() const {
@@ -930,9 +960,15 @@ Dictionary CadPart::standard_plane(const String& name) const {
 }
 
 Dictionary CadPart::plane_from_hit(const Dictionary& hit) const {
-  std::string name;
-  auto p = model_->planeFromHit(dictToHit(hit), &name);
-  return p ? namedPlane(*p, name) : Dictionary();
+  try {
+    std::string name;
+    auto p = model_->planeFromHit(dictToHit(hit), &name);
+    return p ? namedPlane(*p, name) : Dictionary();
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
 }
 
 Dictionary CadPart::plane_basis(const Dictionary& plane) const {
@@ -951,12 +987,26 @@ Dictionary CadPart::plane_basis(const Dictionary& plane) const {
 }
 
 Vector3 CadPart::plane_point(const Dictionary& plane, const Vector2& uv) const {
-  return toGodot(planeOf(plane).toWorld(uv.x, uv.y));
+  try {
+    return toGodot(planeOf(plane).toWorld(uv.x, uv.y));
+  } catch (const std::exception& e) {
+    (void)e;
+    return Vector3();
+  } catch (...) {
+    return Vector3();
+  }
 }
 
 Vector2 CadPart::plane_uv(const Dictionary& plane, const Vector3& world) const {
-  auto uv = planeOf(plane).toPlane(toCad(world));
-  return Vector2(float(uv[0]), float(uv[1]));
+  try {
+    auto uv = planeOf(plane).toPlane(toCad(world));
+    return Vector2(float(uv[0]), float(uv[1]));
+  } catch (const std::exception& e) {
+    (void)e;
+    return Vector2();
+  } catch (...) {
+    return Vector2();
+  }
 }
 
 Dictionary CadPart::solve_sketch(const Dictionary& sketch) const {
@@ -1063,12 +1113,19 @@ Dictionary CadPart::reference_plane(const String& id) const {
 }
 
 PackedVector3Array CadPart::straight_edge_near(const Dictionary& hit, double tolerance) const {
-  PackedVector3Array out;
-  if (auto e = model_->straightEdgeNear(dictToHit(hit), tolerance)) {
-    out.push_back(toGodot((*e)[0]));
-    out.push_back(toGodot((*e)[1]));
+  try {
+    PackedVector3Array out;
+    if (auto e = model_->straightEdgeNear(dictToHit(hit), tolerance)) {
+      out.push_back(toGodot((*e)[0]));
+      out.push_back(toGodot((*e)[1]));
+    }
+    return out;
+  } catch (const std::exception& e) {
+    (void)e;
+    return PackedVector3Array();
+  } catch (...) {
+    return PackedVector3Array();
   }
-  return out;
 }
 
 bool CadPart::is_cylinder(const Dictionary& hit) const { return model_->isCylinder(dictToHit(hit)); }
@@ -1086,18 +1143,24 @@ Dictionary CadPart::bounding_box() const {
 }
 
 Dictionary CadPart::face_ref(const Dictionary& hit) const {
-  fpcad::PickHit h = dictToHit(hit);
-  Dictionary d;
-  d["probe"] = cad_point(toGodot(h.point));
-  Array n;
-  n.push_back(h.normal[0]);
-  n.push_back(h.normal[1]);
-  n.push_back(h.normal[2]);
-  d["normal"] = n;
-  d["feature"] = str(h.featureId);
-  std::string role = model_->faceRole(h.body, h.face);
-  if (!role.empty()) d["role"] = str(role);
-  return d;
+  try {
+    fpcad::PickHit h = dictToHit(hit);
+    Dictionary d;
+    d["probe"] = cad_point(toGodot(h.point));
+    Array n;
+    n.push_back(h.normal[0]);
+    n.push_back(h.normal[1]);
+    n.push_back(h.normal[2]);
+    d["normal"] = n;
+    d["feature"] = str(h.featureId);
+    std::string role = model_->faceRole(h.body, h.face);
+    if (!role.empty()) d["role"] = str(role);
+    return d;
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
 }
 
 // The edge nearest a point (Godot space), for fillet / chamfer picking: its middle in CAD
@@ -1146,24 +1209,37 @@ Dictionary CadPart::convert_face(const Dictionary& sketch, int body, int face, c
 }
 
 String CadPart::add_sketch(const Dictionary& sketch) {
-  fpcad::Feature f;
-  f.type = "sketch";
-  f.params = variantToJson(sketch);
-  checkpoint();
-  fpcad::PartDocument backup = model_->document();
-  std::string id = model_->document().insert(f).id;
-  Dictionary r = commitOrRevert(backup, "sketch added");
-  return bool(r["ok"]) ? str(id) : String();
+  try {
+    fpcad::Feature f;
+    f.type = "sketch";
+    f.params = variantToJson(sketch);
+    checkpoint();
+    fpcad::PartDocument backup = model_->document();
+    std::string id = model_->document().insert(f).id;
+    Dictionary r = commitOrRevert(backup, "sketch added");
+    return bool(r["ok"]) ? str(id) : String();
+  } catch (const std::exception& e) {
+    (void)e;
+    return String();
+  } catch (...) {
+    return String();
+  }
 }
 
 Dictionary CadPart::set_sketch(const String& id, const Dictionary& sketch) {
-  fpcad::Feature* f = model_->document().find(str(id));
-  if (!f || f->type != "sketch") return result(false, "that sketch no longer exists");
-  checkpoint();
-  fpcad::PartDocument backup = model_->document();
-  std::string name = f->name;
-  f->params = variantToJson(sketch);
-  return commitOrRevert(backup, name + " updated");
+  try {
+    fpcad::Feature* f = model_->document().find(str(id));
+    if (!f || f->type != "sketch") return result(false, "that sketch no longer exists");
+    checkpoint();
+    fpcad::PartDocument backup = model_->document();
+    std::string name = f->name;
+    f->params = variantToJson(sketch);
+    return commitOrRevert(backup, name + " updated");
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
 }
 
 Dictionary CadPart::get_sketch(const String& id) const {

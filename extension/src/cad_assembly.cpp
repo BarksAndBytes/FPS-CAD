@@ -390,42 +390,48 @@ Dictionary CadAssembly::face_measure(const Dictionary& hit) const {
 }
 
 Dictionary CadAssembly::add_mate(const String& type, const Dictionary& a, const Dictionary& b, const Dictionary& params) {
-  if (a.is_empty() || b.is_empty()) return result(false, "pick a face on each of two components");
-  if (a.get("component", "") == b.get("component", "")) return result(false, "a mate joins two different components");
-  checkpoint();
-  fpcad::Mate m;
-  m.type = str(type);
-  m.refs = fpcad::Json::array({variantToJson(a), variantToJson(b)});
-  m.params = variantToJson(params);
-  if (!m.params.is_object()) m.params = fpcad::Json::object();
-  if (m.type == "lock") {
-    // Keep B where it is now relative to A.
-    fpcad::Placement pa, pb;
-    for (auto& c : model_->document().components) {
-      if (c.id == str(String(a["component"]))) pa = c.placement;
-      if (c.id == str(String(b["component"]))) pb = c.placement;
+  try {
+    if (a.is_empty() || b.is_empty()) return result(false, "pick a face on each of two components");
+    if (a.get("component", "") == b.get("component", "")) return result(false, "a mate joins two different components");
+    checkpoint();
+    fpcad::Mate m;
+    m.type = str(type);
+    m.refs = fpcad::Json::array({variantToJson(a), variantToJson(b)});
+    m.params = variantToJson(params);
+    if (!m.params.is_object()) m.params = fpcad::Json::object();
+    if (m.type == "lock") {
+      // Keep B where it is now relative to A.
+      fpcad::Placement pa, pb;
+      for (auto& c : model_->document().components) {
+        if (c.id == str(String(a["component"]))) pa = c.placement;
+        if (c.id == str(String(b["component"]))) pb = c.placement;
+      }
+      fpcad::Placement inv;
+      inv.q = {-pa.q[0], -pa.q[1], -pa.q[2], pa.q[3]};
+      fpcad::Vec3 it = fpcad::transformPoint(inv, pa.t);
+      inv.t = {-it[0], -it[1], -it[2]};
+      fpcad::Placement rel = fpcad::compose(inv, pb);
+      m.params["t"] = {rel.t[0], rel.t[1], rel.t[2]};
+      m.params["q"] = {rel.q[0], rel.q[1], rel.q[2], rel.q[3]};
     }
-    fpcad::Placement inv;
-    inv.q = {-pa.q[0], -pa.q[1], -pa.q[2], pa.q[3]};
-    fpcad::Vec3 it = fpcad::transformPoint(inv, pa.t);
-    inv.t = {-it[0], -it[1], -it[2]};
-    fpcad::Placement rel = fpcad::compose(inv, pb);
-    m.params["t"] = {rel.t[0], rel.t[1], rel.t[2]};
-    m.params["q"] = {rel.q[0], rel.q[1], rel.q[2], rel.q[3]};
+    std::string id = m.id;
+    model_->document().mates.push_back(m);
+    auto rep = model_->solveMates();
+    bool failed = std::find(rep.failing.begin(), rep.failing.end(), id) != rep.failing.end();
+    if (failed) {
+      fpcad::AssemblyDocument before = undo_.back();
+      undo_.pop_back();
+      reload(before);
+      return result(false, "that " + m.type + " mate cannot be met with the others (or those faces cannot take it)");
+    }
+    Dictionary d = result(true, m.type + " mate added · " + rep.message);
+    d["id"] = str(id);
+    return d;
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  std::string id = m.id;
-  model_->document().mates.push_back(m);
-  auto rep = model_->solveMates();
-  bool failed = std::find(rep.failing.begin(), rep.failing.end(), id) != rep.failing.end();
-  if (failed) {
-    fpcad::AssemblyDocument before = undo_.back();
-    undo_.pop_back();
-    reload(before);
-    return result(false, "that " + m.type + " mate cannot be met with the others (or those faces cannot take it)");
-  }
-  Dictionary d = result(true, m.type + " mate added · " + rep.message);
-  d["id"] = str(id);
-  return d;
 }
 
 Dictionary CadAssembly::delete_mate(const String& id) {
@@ -442,25 +448,32 @@ Dictionary CadAssembly::delete_mate(const String& id) {
 }
 
 Array CadAssembly::mates() const {
-  Array out;
-  const auto& rep = model_->mateReport();
-  std::map<std::string, std::string> names;
-  for (auto& c : model_->document().components) names[c.id] = c.name;
-  for (auto& m : model_->document().mates) {
-    Dictionary d;
-    d["id"] = str(m.id);
-    d["type"] = str(m.type);
-    std::string a = m.refs.size() > 0 ? m.refs[0].value("component", std::string()) : "";
-    std::string b = m.refs.size() > 1 ? m.refs[1].value("component", std::string()) : "";
-    d["a"] = str(names.count(a) ? names[a] : "?");
-    d["b"] = str(names.count(b) ? names[b] : "?");
-    d["ok"] = std::find(rep.failing.begin(), rep.failing.end(), m.id) == rep.failing.end();
-    d["suppressed"] = m.suppressed;
-    if (m.params.contains("distance")) d["value"] = m.params["distance"].get<double>();
-    if (m.params.contains("angle")) d["value"] = m.params["angle"].get<double>();
-    out.push_back(d);
+  try {
+    Array out;
+    const auto& rep = model_->mateReport();
+    std::map<std::string, std::string> names;
+    for (auto& c : model_->document().components) names[c.id] = c.name;
+    for (auto& m : model_->document().mates) {
+      Dictionary d;
+      d["id"] = str(m.id);
+      d["type"] = str(m.type);
+      std::string a = m.refs.size() > 0 ? m.refs[0].value("component", std::string()) : "";
+      std::string b = m.refs.size() > 1 ? m.refs[1].value("component", std::string()) : "";
+      d["a"] = str(names.count(a) ? names[a] : "?");
+      d["b"] = str(names.count(b) ? names[b] : "?");
+      d["ok"] = std::find(rep.failing.begin(), rep.failing.end(), m.id) == rep.failing.end();
+      d["suppressed"] = m.suppressed;
+      if (m.params.contains("distance")) d["value"] = m.params["distance"].get<double>();
+      if (m.params.contains("angle")) d["value"] = m.params["angle"].get<double>();
+      out.push_back(d);
+    }
+    return out;
+  } catch (const std::exception& e) {
+    (void)e;
+    return Array();
+  } catch (...) {
+    return Array();
   }
-  return out;
 }
 
 Dictionary CadAssembly::mate_status() const {

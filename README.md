@@ -4,13 +4,14 @@ Parametric CAD you play in first person. Walk around your model, change your own
 and pick tools from a weapon wheel. Built for an Xbox controller on Windows PC and Android, with
 keyboard and mouse as an equal on PC. Everything runs locally: no accounts, servers or network.
 
-Parts and assemblies keep their full editable history in native files (`.fpprt`, `.fpasm`) and
-export to STEP, IGES, STL and 3MF.
+Parts and assemblies keep their full editable history in native files (`.fpprt`, `.fpasm`,
+`.fpdrw` for drawings) and export to STEP, IGES, STL and 3MF; drawings export to PDF and DXF.
 
-> Status: **Phase 1 — the CAD workflow.** Pick a plane or a flat face, sketch with relations and
-> dimensions, then extrude, revolve, sweep or loft, all in the part's history. Mates solving and
-> drawings come in later phases. See [docs/PHASE0.md](docs/PHASE0.md) and
-> [docs/SKETCHING.md](docs/SKETCHING.md).
+> Status: **1.0.** Parts (sketch, extrude, revolve, sweep, loft, fillet, chamfer, hole, shell,
+> draft, patterns, mirror, body tools), an editable history with a rollback bar, measuring and a
+> walkable section view, assemblies with solved mates, and drawings exported as PDF and DXF.
+> Start with the [user guide](docs/GUIDE.md); the details are in [docs/SPEC.md](docs/SPEC.md)
+> and [docs/SKETCHING.md](docs/SKETCHING.md).
 
 ## What is here
 
@@ -22,7 +23,7 @@ export to STEP, IGES, STL and 3MF.
 | `extension/` | Godot 4 GDExtension exposing the core as `CadPart` and `CadAssembly` |
 | `godot/` | The game: first-person player, self-scaling, tool wheel, HUD, touch controls |
 | `prototypes/web-v1/` | The original browser prototype |
-| `docs/` | Engineering spec summary, build guide, Phase 0 checklist, comparison with professional CAD |
+| `docs/` | User guide, engineering spec summary, build guide, Phase 0 checklist, comparison with professional CAD |
 | `tools/` | Open CASCADE build and staging scripts |
 
 The full product spec is the shared doc **First-Person CAD — Product Spec**;
@@ -72,7 +73,7 @@ any way you like, in any orientation, and it passes when the geometry matches. P
 | A / B | Enter / Esc | Select / back in every menu |
 | Y | I, Tab | Inspect the target's parameters (model panel) |
 | View | F1 | Controls map (controller, keyboard and touch pages) |
-| Menu | Esc | Pause menu: controls, units (MMGS, CGS, MKS, IPS, FPS), material, save, File (new part, open, save as, import STEP, export), exit to title |
+| Menu | Esc | Pause menu: controls, units (MMGS, CGS, MKS, IPS, FPS), material, save, File (new part, new assembly, open, save as, import STEP, export, drawing PDF/DXF, save drawing), exit to title |
 | — | F | Fly through walls |
 | X | Enter | Finish the sketch |
 | Y (sketching) | I | Sketch view ↔ free look (sketches open square to the plane, X right, Y up) |
@@ -81,7 +82,7 @@ The tool wheel groups tools: **Select**, **Sketch**, **Solids** (Extrude, Revolv
 Loft), **Finish** (Fillet and Chamfer on picked edges, Hole: simple, counterbore, countersink
 or tapped, Shell, Draft), **Repeat** (Linear pattern, Circular pattern, Mirror), **Bodies**
 (Combine, Split, Delete body), **Assembly** (Insert part, Mate, Exploded view, Bill of materials), **Modify** (Push/Pull, Move, Delete), **Primitives** (Box, Cylinder, Sphere),
-**Reference** (Plane, Axis, Point, Coordinate system), **Measure** (Measure, Bounding box, Mass properties) and **Boards** (Properties board, Notes board, Video board, Drawing board, Arrange boards: whiteboards you set up in the room, carry, turn and resize; while carrying one the D-pad ← / → or mouse wheel turns it and ↑ / ↓ or = / − resizes it). Aiming at a group shows its tools branching out from it; let go (or press A) to open
+**Reference** (Plane, Axis, Point, Coordinate system), **Measure** (Measure: distance, face or edge, angle; Bounding box, Mass properties, Section view, Interference) and **Boards** (Properties board, Notes board, Video board, Drawing board, Arrange boards: whiteboards you set up in the room, carry, turn and resize; while carrying one the D-pad ← / → or mouse wheel turns it and ↑ / ↓ or = / − resizes it). Aiming at a group shows its tools branching out from it; let go (or press A) to open
 the branch, then aim and press A / RT to pick. B steps back. In sketch mode the wheel holds the sketch tools: Lines (line, rectangles, polygon, slot, point), Curves (circles, arcs, tangent arc, ellipse, spline), Modify (trim, extend, fillet, chamfer, offset, convert edges), Copy (move, copy, rotate, scale, mirror, patterns), Constrain, Text, Construction and Delete. Modify also has split. Messages (objectives, challenge cards, notices, the sketch status and the readout) are written on a whiteboard in the room rather than over the view; they come back on screen only while the board is out of sight. The full sketch and feature-panel controls are
 in [docs/SKETCHING.md](docs/SKETCHING.md) and on the controls map's fourth page.
 

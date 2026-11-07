@@ -376,6 +376,21 @@ what it uses…**.
   (`part.path` relative to the drawing, `part.fileId`) and the options. Opening it opens the part
   and sets up a drawing board in front of you.
 
+## 1.0: hardening and performance
+
+- Every extension method that reads data from the game (hits, sketches, planes, mate
+  references) catches errors and returns a failure instead of letting an exception end the app.
+- A part of a few hundred features' worth of geometry (a 144-hole pattern and a 40-boss row on a
+  plate) rebuilds in about a quarter of a second and meshes in about a third (Release, desktop);
+  `core/tests` keeps that as a test with a generous ceiling, so a pathological slowdown fails CI.
+- Patterns that add material fuse all their copies in one general fuse (run in parallel) before
+  the single boolean with the body.
+- Face roles for extrude sides use sampled profile edges rather than exact distance queries, so
+  sketches with many edges (text, perforations) cost milliseconds.
+- Drawing boards redraw at most every 0.4 s while the part changes quickly (hidden-line removal
+  is the slow step), and once more when the changes stop.
+- [GUIDE.md](GUIDE.md) is the user guide for the whole workflow.
+
 ## Native file layout (`.fpprt`)
 
 ```
@@ -386,6 +401,7 @@ geometry/body-N.brep     cached B-rep per body (rebuilt from history if missing 
 views/viewpoints.json    saved "stand here" positions and sizes
 views/boards.json        the whiteboards standing in the room
 imports/index.json       ids of imported shapes; imports/<id>.brep each shape (OCCT binary BRep)
+(manifest.json also holds `rollback`: the rollback bar's index, -1 when every feature is built)
 ```
 
 An `.fpasm` adds `assembly/components.json` (file references by relative path + fileId, or

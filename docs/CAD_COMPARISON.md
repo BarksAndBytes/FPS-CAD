@@ -513,7 +513,7 @@ release leaves the game usable on its own; earlier ones unblock later ones.
 1. DXF and PDF of a flat view: a sketch, a face, a projection.
 2. Standard views with model dimensions: the first `.fpdrw`.
 
-### 1.0 Harden and polish
+### 1.0 Harden and polish (done)
 Stability, performance on large parts, controls and docs; no new feature areas.
 
 ### After 1.0

@@ -1383,12 +1383,21 @@ struct PartModel::Impl {
       for (auto& t : moves) bb.Add(c, BRepBuilderAPI_Transform(tool, t, true).Shape());
       TopoDS_Shape all = c;
       if (moves.size() > 1 && src->op == BodyOp::Add) {
-        // Overlapping copies fuse into one tool first, so the body gets a single clean boolean.
-        TopExp_Explorer ex(c, TopAbs_SOLID);
-        if (ex.More()) {
-          TopoDS_Shape acc = ex.Current();
-          for (ex.Next(); ex.More(); ex.Next()) acc = BRepAlgoAPI_Fuse(acc, ex.Current()).Shape();
-          all = acc;
+        // Overlapping copies fuse into one tool first (one general fuse of them all), so the body
+        // gets a single clean boolean.
+        TopTools_ListOfShape args, tools;
+        bool first = true;
+        for (TopExp_Explorer ex(c, TopAbs_SOLID); ex.More(); ex.Next()) {
+          (first ? args : tools).Append(ex.Current());
+          first = false;
+        }
+        if (!tools.IsEmpty()) {
+          BRepAlgoAPI_Fuse fuse;
+          fuse.SetArguments(args);
+          fuse.SetTools(tools);
+          fuse.SetRunParallel(true);
+          fuse.Build();
+          if (fuse.IsDone() && !fuse.HasErrors()) all = fuse.Shape();
         }
       }
       applyBoolean(*src, all, self);
@@ -1620,7 +1629,37 @@ struct PartModel::Impl {
   // A face's role within the feature that made it: "start" / "end" caps and "side<k>" (the k-th
   // profile edge) for an extrude from a sketch; for other shapes the axis a flat face looks
   // along ("p+z") or the kind of curved face ("cyl"). Empty when there is nothing stable to say.
-  std::string faceRole(const Feature& f, const TopoDS_Face& face, const std::vector<TopoDS_Edge>* profileEdges,
+  // Each profile edge as a few points, for finding the edge nearest a point quickly.
+  static std::vector<std::vector<gp_Pnt>> edgeSamples(const std::vector<TopoDS_Edge>& edges) {
+    std::vector<std::vector<gp_Pnt>> out;
+    for (auto& e : edges) {
+      std::vector<gp_Pnt> pts;
+      try {
+        BRepAdaptor_Curve c(e);
+        double a = c.FirstParameter(), b = c.LastParameter();
+        for (int i = 0; i <= 16; ++i) pts.push_back(c.Value(a + (b - a) * i / 16.0));
+      } catch (const Standard_Failure&) {
+      }
+      out.push_back(std::move(pts));
+    }
+    return out;
+  }
+
+  // Distance from p to the polyline through pts.
+  static double polylineDistance(const gp_Pnt& p, const std::vector<gp_Pnt>& pts) {
+    double best = 1e300;
+    for (size_t i = 1; i < pts.size(); ++i) {
+      gp_Vec ab(pts[i - 1], pts[i]), ap(pts[i - 1], p);
+      double L = ab.SquareMagnitude();
+      double t = L > 1e-30 ? std::clamp(ap.Dot(ab) / L, 0.0, 1.0) : 0.0;
+      gp_Pnt q = pts[i - 1].Translated(ab * t);
+      best = std::min(best, q.Distance(p));
+    }
+    if (pts.size() == 1) best = pts[0].Distance(p);
+    return best;
+  }
+
+  std::string faceRole(const Feature& f, const TopoDS_Face& face, const std::vector<std::vector<gp_Pnt>>* profileEdges,
                        const gp_Ax3* sketchAx, const gp_Dir* dir) const {
     BRepAdaptor_Surface sa(face);
     double u0, u1, v0, v1;
@@ -1634,13 +1673,12 @@ struct PartModel::Impl {
       if (std::abs(den) < 1e-12) return {};
       double t = gp_Vec(sketchAx->Location(), c).Dot(N) / den;
       gp_Pnt q = c.Translated(-d * t);
-      TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(q).Vertex();
       double best = 1e300;
       int k = -1;
       for (size_t i = 0; i < profileEdges->size(); ++i) {
-        BRepExtrema_DistShapeShape dist(v, (*profileEdges)[i]);
-        if (dist.IsDone() && dist.Value() < best) {
-          best = dist.Value();
+        double dd = polylineDistance(q, (*profileEdges)[i]);
+        if (dd < best) {
+          best = dd;
           k = static_cast<int>(i);
         }
       }
@@ -1666,6 +1704,7 @@ struct PartModel::Impl {
   FaceTags roleTags(const Feature& f, const TopoDS_Shape& tool, int self) {
     FaceTags t;
     std::vector<TopoDS_Edge> edges;
+    std::vector<std::vector<gp_Pnt>> samples;
     gp_Ax3 ax;
     gp_Dir dir;
     bool sketched = false;
@@ -1677,6 +1716,7 @@ struct PartModel::Impl {
         for (auto& pf : profileOf(st))
           for (TopExp_Explorer e(pf, TopAbs_EDGE); e.More(); e.Next()) edges.push_back(TopoDS::Edge(e.Current()));
         sketched = !edges.empty();
+        samples = edgeSamples(edges);
       } catch (const std::exception&) {
         sketched = false;
       }
@@ -1685,7 +1725,7 @@ struct PartModel::Impl {
       if (t.IsBound(e.Current())) continue;
       std::string r;
       try {
-        r = faceRole(f, TopoDS::Face(e.Current()), sketched ? &edges : nullptr, sketched ? &ax : nullptr, sketched ? &dir : nullptr);
+        r = faceRole(f, TopoDS::Face(e.Current()), sketched ? &samples : nullptr, sketched ? &ax : nullptr, sketched ? &dir : nullptr);
       } catch (const Standard_Failure&) {
         r.clear();
       }
