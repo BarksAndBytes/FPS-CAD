@@ -9,6 +9,7 @@ signal sketch_requested(plane: Dictionary, plane_name: String, edit_id: String)
 signal feature_requested(type: String, sketch_id: String, op: String)
 signal reference_requested(type: String, params: Dictionary)  # main.gd opens the panel when it has sizes
 signal board_tool(id: String, primary: bool)  # main.gd hands it to boards.gd
+signal picked_feature_requested(type: String, base: Dictionary, op: String)  # fillet, chamfer, hole, shell
 
 ## How the tool wheel groups the tools: single tools and groups on the inner ring, a group's
 ## tools branching out from it (tool_wheel.gd). Entries are tool ids or [group name, description,
@@ -19,6 +20,7 @@ const WHEEL := [
 	"select",
 	"sketch",
 	["Solids", "Turn a sketch into a solid: extrude, revolve, sweep, loft", ["extrude", "revolve", "sweep", "loft"]],
+	["Finish", "Round, bevel, drill and hollow: fillet, chamfer, hole, shell", ["fillet", "chamfer", "hole", "shell"]],
 	["Modify", "Change what is there: push/pull faces, move, delete", ["push", "move", "delete"]],
 	["Primitives", "Place ready-made shapes", ["box", "cylinder", "sphere"]],
 	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
@@ -34,6 +36,10 @@ const TOOLS := [
 	{id = "revolve", name = "Revolve", pri = "revolve the sketch", alt = "revolve as a cut", opt = []},
 	{id = "sweep", name = "Sweep", pri = "sweep the sketch along a path", alt = "sweep as a cut", opt = []},
 	{id = "loft", name = "Loft", pri = "loft the sketch to another", alt = "loft as a cut", opt = []},
+	{id = "fillet", name = "Fillet", pri = "pick / unpick the edge you aim at", alt = "round the picked edges", opt = []},
+	{id = "chamfer", name = "Chamfer", pri = "pick / unpick the edge you aim at", alt = "bevel the picked edges", opt = []},
+	{id = "hole", name = "Hole", pri = "place a hole (snapped)", alt = "place it exactly where you aim", opt = []},
+	{id = "shell", name = "Shell", pri = "pick / unpick a face to leave open", alt = "hollow the part", opt = []},
 	{id = "push", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
 	{id = "measure", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
 	{id = "delete", name = "Delete", pri = "delete target", alt = "undo", opt = []},
@@ -55,11 +61,12 @@ const TOOLS := [
 	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "choose its video: a link, a downloaded video or a file", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
-const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
+const PART_ONLY := ["fillet", "chamfer", "hole", "shell", "push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
 	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_arrange"]
 const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_arrange"]
 const REF_TOOLS := ["ref_plane", "ref_axis", "ref_point", "ref_csys"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
+const PICK_TOOLS := ["fillet", "chamfer", "hole", "shell"]
 const OPS := {"add": "add", "cut": "cut", "new body": "new-body"}
 const STANDARD_PLANES := {"Top plane": "top", "Front plane": "front", "Right plane": "right"}
 
@@ -85,6 +92,8 @@ var _show_bbox := false
 var _show_mass := false
 var _bbox_cache := {}
 var _com_cache: Variant = null
+var _picks: Array = []        # fillet/chamfer: edge_near results; shell: {ref, body, face}
+var _hover_edge := {}
 
 
 func tool() -> Dictionary:
@@ -134,6 +143,7 @@ func reset() -> void:
 	_measure_a = null
 	_measure_b = null
 	_ref_picks = []
+	_picks = []
 	_show_bbox = false
 	_show_mass = false
 	_place_dims = {}
@@ -152,6 +162,9 @@ func set_tool(i: int) -> void:
 	_push_hit = {}
 	_hold_time = -1.0
 	_ref_picks = []
+	_picks = []
+	_hover_edge = {}
+	view.show_picks([], [])
 	view.highlight_reference("")
 	view.show_ghost("", Vector3.ZERO, {})
 	view.show_plane({}, 0.0)
@@ -347,6 +360,8 @@ func _act(primary: bool, repeat: bool) -> void:
 					return
 				changed.emit()
 				_grab = {id = copy, plane_y = hit.point.y, last = hit.point}
+		"fillet", "chamfer", "hole", "shell":
+			_act_pick(primary, hit, on_feature)
 		"ref_plane", "ref_axis", "ref_point", "ref_csys":
 			_act_reference(primary, hit)
 		"board_props", "board_notes", "board_video", "board_arrange":
@@ -400,6 +415,96 @@ func _act(primary: bool, repeat: bool) -> void:
 				if target == selected:
 					selected = ""
 				changed.emit()
+
+
+## The finishing tools: pick edges or faces with the primary action, then make the feature from
+## them with the secondary one (the hole is placed straight away).
+func _act_pick(primary: bool, hit: Dictionary, on_feature: bool) -> void:
+	var id: String = tool().id
+	match id:
+		"fillet", "chamfer":
+			if primary:
+				var e := _edge_at(hit)
+				if e.is_empty():
+					hud.toast("Aim at an edge of the part")
+					return
+				var i := _pick_index(e)
+				if i >= 0:
+					_picks.remove_at(i)
+				else:
+					_picks.append(e)
+				hud.toast("%d edge%s picked · %s to %s them" % [_picks.size(), "" if _picks.size() == 1 else "s",
+					Actions.prompt(&"secondary"), "round" if id == "fillet" else "bevel"])
+			else:
+				if _picks.is_empty():
+					var e := _edge_at(hit)
+					if e.is_empty():
+						hud.toast("Pick edges first: aim at one and press %s" % Actions.prompt(&"primary"))
+						return
+					_picks.append(e)
+				var probes := []
+				for e in _picks:
+					probes.append(e.probe)
+				_picks = []
+				view.show_picks([], [])
+				picked_feature_requested.emit(id, {picks = probes}, "")
+		"hole":
+			if not on_feature:
+				hud.toast("Aim at a face of the part")
+				return
+			var ref: Dictionary = doc.face_ref(hit)
+			var p: Vector3 = hit.point
+			if primary:
+				p = snap_on_face(p, hit.normal, player.snap_step())
+			picked_feature_requested.emit("hole", {point = doc.cad_point(p), normal = ref.normal}, "cut")
+		"shell":
+			if primary:
+				if not on_feature:
+					hud.toast("Aim at a face of the part")
+					return
+				for i in _picks.size():
+					if _picks[i].body == hit.body and _picks[i].face == hit.face:
+						_picks.remove_at(i)
+						hud.toast("%d face%s open" % [_picks.size(), "" if _picks.size() == 1 else "s"])
+						return
+				_picks.append({ref = doc.face_ref(hit), body = hit.body, face = hit.face})
+				hud.toast("%d face%s open · %s to hollow the part" % [_picks.size(), "" if _picks.size() == 1 else "s", Actions.prompt(&"secondary")])
+			else:
+				var refs := []
+				for f in _picks:
+					refs.append(f.ref)
+				_picks = []
+				view.show_picks([], [])
+				picked_feature_requested.emit("shell", {faces = refs}, "")
+
+
+## Snaps a point on a face to the grid in the face's own directions (not along its normal).
+static func snap_on_face(p: Vector3, n: Vector3, s: float) -> Vector3:
+	var out := p
+	if absf(n.x) < 0.9:
+		out.x = snappedf(p.x, s)
+	if absf(n.y) < 0.9:
+		out.y = snappedf(p.y, s)
+	if absf(n.z) < 0.9:
+		out.z = snappedf(p.z, s)
+	return out
+
+
+## The model edge nearest the crosshair, within a reach that grows with the player.
+func _edge_at(hit: Dictionary) -> Dictionary:
+	if hit.is_empty() or hit.get("ground", false) or is_assembly:
+		return {}
+	var e: Dictionary = doc.edge_near(hit.point, 0.06 * player.size)
+	return e if e.get("ok", false) else {}
+
+
+func _pick_index(e: Dictionary) -> int:
+	var a: Array = e.probe
+	for i in _picks.size():
+		var b: Array = _picks[i].probe
+		if Vector3(a[0], a[1], a[2]).distance_to(Vector3(b[0], b[1], b[2])) < 1e-6:
+			return i
+	return -1
 
 
 ## The plane a new sketch goes on: the aimed flat face, the ground (Top plane), or the standard
@@ -794,6 +899,9 @@ func _update_preview(hit: Dictionary) -> void:
 			view.show_measure(_measure_a, _measure_b, sp, s_size())
 	if id != "measure":
 		view.show_measure(_measure_a, _measure_b, null, s_size())
+	if id in PICK_TOOLS and not is_assembly:
+		label = _pick_preview(id, hit, on_feature, label)
+		face_plane = on_feature and id in ["hole", "shell"]
 	if not (id in REF_TOOLS):
 		view.highlight_reference("")
 	if id == "sketch" and not is_assembly and option() == "aimed face":
@@ -830,6 +938,34 @@ static func mass_summary(m: Dictionary, units: String, cx: String, cy: String, c
 	return "Volume %s · area %s · mass %s · centre of mass X %s Y %s Z %s" % [
 		Units.volume_text(float(m.volume), units), Units.area_text(float(m.area), units),
 		Units.mass_text(float(m.mass), mass_unit), cx, cy, cz]
+
+
+## Draws the picked edges and faces and the edge under the crosshair; returns the aim label.
+func _pick_preview(id: String, hit: Dictionary, on_feature: bool, label: String) -> String:
+	var edges := []
+	var faces := []
+	var hover := PackedVector3Array()
+	match id:
+		"fillet", "chamfer":
+			for e in _picks:
+				edges.append(e.points)
+			var e := _edge_at(hit)
+			if not e.is_empty():
+				hover = e.points
+				var r := float(e.get("radius", 0.0))
+				label = "Edge · %s%s" % [hud.length(float(e.length)), (" · R %s" % hud.length(r)) if r > 0.0 else ""]
+				if _pick_index(e) >= 0:
+					label += " · picked"
+		"shell":
+			for f in _picks:
+				faces.append([f.body, f.face])
+			if on_feature:
+				label = "Face · %d open" % _picks.size()
+		"hole":
+			if on_feature:
+				label = "Hole here"
+	view.show_picks(edges, faces, hover)
+	return label
 
 
 func _sketch_name(id: String) -> String:

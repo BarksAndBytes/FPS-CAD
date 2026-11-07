@@ -61,6 +61,11 @@
 #include <set>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
@@ -916,17 +921,42 @@ struct PartModel::Impl {
     const SketchState& st = sketchRef(p, "sketch");
     TopoDS_Shape prof = compoundOf(profileOf(st));
     std::string dirMode = p.value("direction", std::string("normal"));
+    std::string end = p.value("end", std::string("blind"));
     bool symmetric = dirMode == "symmetric";
     gp_Vec dir(extrudeDir(st, p));
-    double depth = p.value("end", std::string("blind")) == "through_all" ? throughAllLength(st) : positive(p, "depth");
+    bool upTo = end == "up_to_face";
+    double depth = end == "through_all" || upTo ? throughAllLength(st) : positive(p, "depth");
+    // Two directions: depth forward and depth2 the other way.
+    double back = dirMode == "two" ? positive(p, "depth2") : 0.0;
     double offset = p.contains("offset") ? get(p, "offset") : 0.0;
-    double shift = offset - (symmetric ? depth / 2 : 0.0);
+    double shift = offset - (symmetric ? depth / 2 : 0.0) - back;
     if (std::abs(shift) > 1e-15) {
       gp_Trsf t;
       t.SetTranslation(dir * shift);
       prof = BRepBuilderAPI_Transform(prof, t, true).Shape();
     }
-    return BRepPrimAPI_MakePrism(prof, dir * depth).Shape();
+    TopoDS_Shape prism = BRepPrimAPI_MakePrism(prof, dir * (depth + back)).Shape();
+    if (!upTo) return prism;
+    // Up to face: run through everything, then keep what lies on the sketch's side of the face's
+    // plane. Needs a flat face.
+    if (!p.contains("face")) throw FeatureError("aim at the face to extrude up to");
+    const Json& face = p.at("face");
+    int b;
+    TopoDS_Face fc;
+    gp_Pnt at;
+    gp_Dir n;
+    if (!findFace(gp_Pnt(xyz(face.at("probe"))), gp_Dir(xyz(face.at("normal"))), face.value("feature", std::string()), b, fc, at, n))
+      throw FeatureError("the face to extrude up to is gone");
+    BRepAdaptor_Surface surf(fc);
+    if (surf.GetType() != GeomAbs_Plane) throw FeatureError("up to face needs a flat face");
+    gp_Pln pln = surf.Plane();
+    gp_Pnt inside = sketchAxes(st.sketch.plane).Location();
+    if (pln.Distance(inside) < 1e-9) throw FeatureError("the face is in the sketch's own plane");
+    TopoDS_Face big = BRepBuilderAPI_MakeFace(pln).Face();
+    TopoDS_Shape half = BRepPrimAPI_MakeHalfSpace(big, inside).Solid();
+    BRepAlgoAPI_Common keep(prism, half);
+    if (!keep.IsDone() || keep.HasErrors() || !hasSolid(keep.Shape())) throw FeatureError("the extrude doesn't reach that face");
+    return keep.Shape();
   }
 
   TopoDS_Shape sketchRevolve(const Feature& f) const {
@@ -1020,6 +1050,7 @@ struct PartModel::Impl {
 
   TopoDS_Shape toolShape(const Feature& f) const {
     if (f.type == "import") return importShape(f);
+    if (f.type == "hole") return holeTool(f);
     if (f.type == "extrude" && f.params.contains("sketch")) return sketchExtrude(f);
     if (f.type == "revolve") return sketchRevolve(f);
     if (f.type == "sweep") return sketchSweep(f);
@@ -1099,7 +1130,134 @@ struct PartModel::Impl {
     return out;
   }
 
+  // The size of everything built so far: a scale for tolerances and "through" lengths.
+  double modelSpan() const {
+    Bnd_Box box;
+    for (auto& b : bodies) BRepBndLib::Add(b, box);
+    if (box.IsVoid()) return 1.0;
+    double x0, y0, z0, x1, y1, z1;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    return std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
+  }
+
+  // The edge of any body nearest p: picks are stored as a point on the edge (its middle).
+  bool findEdge(const gp_Pnt& p, int& body, TopoDS_Edge& edge, double& dist) const {
+    dist = 1e300;
+    TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(p).Vertex();
+    for (size_t b = 0; b < bodies.size(); ++b) {
+      TopTools_IndexedMapOfShape edges;
+      TopExp::MapShapes(bodies[b], TopAbs_EDGE, edges);
+      for (int i = 1; i <= edges.Extent(); ++i) {
+        const TopoDS_Edge& e = TopoDS::Edge(edges(i));
+        if (BRep_Tool::Degenerated(e)) continue;
+        BRepExtrema_DistShapeShape d(v, e);
+        if (!d.IsDone() || d.NbSolution() == 0) continue;
+        if (d.Value() < dist) {
+          dist = d.Value();
+          edge = e;
+          body = static_cast<int>(b);
+        }
+      }
+    }
+    return !edge.IsNull();
+  }
+
+  void applyPickedEdges(const Feature& f, int self) {
+    bool fillet = f.type == "fillet";
+    double size = positive(f.params, fillet ? "r" : "d");
+    double tol = std::max(1e-6, 0.02 * modelSpan());
+    std::map<int, std::vector<TopoDS_Edge>> byBody;
+    for (auto& pk : f.params.at("picks")) {
+      int b;
+      TopoDS_Edge e;
+      double d;
+      if (!findEdge(gp_Pnt(xyz(pk)), b, e, d) || d > tol) throw FeatureError("an edge you picked is no longer there");
+      byBody[b].push_back(e);
+    }
+    if (byBody.empty()) throw FeatureError("pick at least one edge");
+    for (auto& [b, edges] : byBody) {
+      TopoDS_Shape result;
+      if (fillet) {
+        BRepFilletAPI_MakeFillet mk(bodies[b]);
+        for (auto& e : edges) mk.Add(size, e);
+        mk.Build();
+        if (!mk.IsDone()) throw FeatureError("fillet failed: the radius may be too large for these edges");
+        result = mk.Shape();
+        tags[b] = remap(mk, tags[b], result, self);
+      } else {
+        BRepFilletAPI_MakeChamfer mk(bodies[b]);
+        for (auto& e : edges) mk.Add(size, e);
+        mk.Build();
+        if (!mk.IsDone()) throw FeatureError("chamfer failed: the distance may be too large for these edges");
+        result = mk.Shape();
+        tags[b] = remap(mk, tags[b], result, self);
+      }
+      bodies[b] = result;
+    }
+  }
+
+  // A hole's cutting tool: a drilled cylinder, with a counterbore or countersink at the top, going
+  // into the material from point against the face's outward normal.
+  TopoDS_Shape holeTool(const Feature& f) const {
+    const Json& p = f.params;
+    gp_Pnt at(xyz(p.at("point")));
+    gp_Dir out(xyz(p.at("normal")));
+    gp_Dir in = out.Reversed();
+    double d = positive(p, "d");
+    std::string kind = p.value("kind", std::string("simple"));
+    bool through = p.value("end", std::string("blind")) == "through_all";
+    double depth = through ? 2.0 * modelSpan() + 1.0 : positive(p, "depth");
+    double lead = std::max(1e-6, d * 0.02);  // start a little above the face so the cut is clean
+    gp_Pnt start = at.Translated(gp_Vec(out) * lead);
+    gp_Ax2 ax(start, in);
+    TopoDS_Shape tool = BRepPrimAPI_MakeCylinder(ax, d / 2, depth + lead).Shape();
+    if (kind == "counterbore") {
+      double cd = positive(p, "cbore_d"), ch = positive(p, "cbore_depth");
+      if (cd <= d) throw FeatureError("the counterbore must be wider than the hole");
+      tool = BRepAlgoAPI_Fuse(tool, BRepPrimAPI_MakeCylinder(ax, cd / 2, ch + lead).Shape()).Shape();
+    } else if (kind == "countersink") {
+      double cd = positive(p, "csink_d");
+      double angle = p.contains("csink_angle") ? get(p, "csink_angle", Quantity::Angle) : 90.0 * kPi / 180.0;
+      if (cd <= d) throw FeatureError("the countersink must be wider than the hole");
+      if (!(angle > 0.1 && angle < kPi - 0.1)) throw FeatureError("the countersink angle must be between 6 and 174 degrees");
+      double h = (cd - d) / 2 / std::tan(angle / 2);
+      double r0 = cd / 2 + lead * std::tan(angle / 2);  // the cone, widened to start above the face
+      tool = BRepAlgoAPI_Fuse(tool, BRepPrimAPI_MakeCone(ax, r0, d / 2, h + lead).Shape()).Shape();
+    }
+    return tool;
+  }
+
+  // Shell: hollows the body holding the picked faces to wall thickness t, leaving those faces
+  // open; with no faces, hollows it closed.
+  void applyShell(const Feature& f, int self) {
+    double t = positive(f.params, "t");
+    const Json& faces = f.params.value("faces", Json::array());
+    int body = -1;
+    TopTools_ListOfShape open;
+    for (auto& fr : faces) {
+      int b;
+      TopoDS_Face fc;
+      gp_Pnt at;
+      gp_Dir n;
+      if (!findFace(gp_Pnt(xyz(fr.at("probe"))), gp_Dir(xyz(fr.at("normal"))), fr.value("feature", std::string()), b, fc, at, n))
+        throw FeatureError("a face you picked is no longer there");
+      if (body >= 0 && b != body) throw FeatureError("the open faces must all be on one body");
+      body = b;
+      open.Append(fc);
+    }
+    if (bodies.empty()) throw FeatureError("there is no body to shell");
+    if (body < 0) body = std::clamp(f.body, 0, static_cast<int>(bodies.size()) - 1);
+    BRepOffsetAPI_MakeThickSolid mk;
+    mk.MakeThickSolidByJoin(bodies[body], open, -t, 1e-6);
+    mk.Build();
+    if (!mk.IsDone() || !hasSolid(mk.Shape())) throw FeatureError("shell failed: the wall may be too thick for the part");
+    TopoDS_Shape result = mk.Shape();
+    tags[body] = remap(mk, tags[body], result, self);
+    bodies[body] = result;
+  }
+
   void applyEdgeFeature(const Feature& f, int self) {
+    if (f.params.contains("picks")) return applyPickedEdges(f, self);
     std::string target = f.params.value("target", std::string());
     if (target.empty()) throw FeatureError("choose a target feature");
     const Feature* tf = doc.find(target);
@@ -1203,6 +1361,7 @@ struct PartModel::Impl {
         else if (f.type == "face_offset") applyFaceOffset(f, self);
         else if (f.type == "plane" || f.type == "axis" || f.type == "point" || f.type == "csys") applyReference(f);
         else if (f.type == "fillet" || f.type == "chamfer") applyEdgeFeature(f, self);
+        else if (f.type == "shell") applyShell(f, self);
         else applyBoolean(f, toolShape(f), self);
       } catch (const Standard_Failure& e) {
         st.ok = false;
@@ -1605,6 +1764,28 @@ std::optional<BoundingBox> PartModel::boundingBox() const {
   BoundingBox out;
   b.Get(out.min[0], out.min[1], out.min[2], out.max[0], out.max[1], out.max[2]);
   return out;
+}
+
+std::optional<PartModel::EdgeInfo> PartModel::edgeNear(const Vec3& point, double maxDistance) const {
+  int b;
+  TopoDS_Edge e;
+  double dist;
+  if (!d_->findEdge(gp_Pnt(point[0], point[1], point[2]), b, e, dist) || dist > maxDistance) return std::nullopt;
+  EdgeInfo info;
+  info.body = b;
+  BRepAdaptor_Curve c(e);
+  double u0 = c.FirstParameter(), u1 = c.LastParameter();
+  info.length = GCPnts_AbscissaPoint::Length(c);
+  GCPnts_AbscissaPoint half(c, info.length / 2, u0);
+  gp_Pnt m = c.Value(half.IsDone() ? half.Parameter() : (u0 + u1) / 2);
+  info.mid = {m.X(), m.Y(), m.Z()};
+  const int n = c.GetType() == GeomAbs_Line ? 2 : 33;
+  for (int i = 0; i < n; ++i) {
+    gp_Pnt q = c.Value(u0 + (u1 - u0) * i / (n - 1));
+    info.points.push_back({q.X(), q.Y(), q.Z()});
+  }
+  if (c.GetType() == GeomAbs_Circle) info.radius = c.Circle().Radius();
+  return info;
 }
 
 MassProperties PartModel::massProperties() const {

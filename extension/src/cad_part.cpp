@@ -812,6 +812,25 @@ Dictionary CadPart::face_ref(const Dictionary& hit) const {
   return d;
 }
 
+// The edge nearest a point (Godot space), for fillet / chamfer picking: its middle in CAD
+// coordinates (what a pick stores), points along it (Godot space) for drawing, length, radius.
+Dictionary CadPart::edge_near(const Vector3& point, double tolerance) const {
+  Dictionary d;
+  auto e = model_->edgeNear(toCad(point), tolerance);
+  d["ok"] = e.has_value();
+  if (!e) return d;
+  Array mid;
+  for (double v : e->mid) mid.push_back(v);
+  d["probe"] = mid;
+  PackedVector3Array pts;
+  for (auto& q : e->points) pts.push_back(toGodot(q));
+  d["points"] = pts;
+  d["length"] = e->length;
+  d["radius"] = e->radius;
+  d["body"] = e->body;
+  return d;
+}
+
 Array CadPart::cad_point(const Vector3& p) const {
   fpcad::Vec3 c = toCad(p);
   Array a;
@@ -1038,6 +1057,7 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_density"), &CadPart::get_density);
   ClassDB::bind_method(D_METHOD("get_mass_units"), &CadPart::get_mass_units);
   ClassDB::bind_method(D_METHOD("import_step", "path"), &CadPart::import_step);
+  ClassDB::bind_method(D_METHOD("edge_near", "point", "tolerance"), &CadPart::edge_near);
   ClassDB::bind_method(D_METHOD("set_part_name", "name"), &CadPart::set_part_name);
   ClassDB::bind_method(D_METHOD("native_library_dir"), &CadPart::native_library_dir);
   ClassDB::bind_method(D_METHOD("material_library"), &CadPart::material_library);

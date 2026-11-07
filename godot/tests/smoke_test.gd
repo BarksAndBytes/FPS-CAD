@@ -1095,6 +1095,131 @@ func _references(main: Node) -> void:
 	await _part_settings(main)
 	await _video_board(main)
 	await _files(main)
+	await _finish(main)
+
+
+## 0.4: fillet and chamfer on picked edges, holes of each kind, shell, extrude end conditions.
+func _finish(main: Node) -> void:
+	main._start_mode("new")
+	await _frames(2)
+	main.player.set_size_now(1.0)
+	main.doc.add_primitive("box", Vector3(0, 0, 0), {w = 1.0, d = 1.0, h = 0.5}, "add")
+	main._on_model_changed()
+	var tools: Node = main.tools
+	var groups: Array = tools.wheel_tree().map(func(n): return n.name)
+	_check("Finish" in groups, "the tool wheel has a Finish group")
+	var vol := func() -> float: return float(main.doc.mass_properties().volume)
+	# Fillet: pick the top edge at +X, then round it.
+	tools.set_tool_id("fillet")
+	tools.aim = main.doc.pick(Vector3(0.49, 5, 0.0), Vector3(0, -1, 0), 20.0)
+	tools._act(true, false)
+	_check(tools._picks.size() == 1, "Fillet picks the edge aimed at")
+	tools._act(true, false)
+	_check(tools._picks.is_empty(), "picking it again unpicks it")
+	tools._act(true, false)
+	tools._act(false, false)
+	await _frames(2)
+	_check(main.dialog.visible and main.dialog.type == "fillet", "the secondary action opens the fillet panel")
+	main.dialog.set_value("r", 0.05)
+	_check(main.dialog.ok, "the fillet previews live (%s)" % main.dialog.message)
+	main.dialog.accept()
+	var v1: float = vol.call()
+	_check(absf(v1 - (0.5 - (1.0 - PI / 4.0) * 0.0025)) < 1e-6, "the fillet rounds that one edge (%f)" % v1)
+	# Chamfer the opposite top edge.
+	tools.set_tool_id("chamfer")
+	tools.aim = main.doc.pick(Vector3(-0.49, 5, 0.0), Vector3(0, -1, 0), 20.0)
+	tools._act(false, false)  # straight from the aimed edge
+	await _frames(2)
+	main.dialog.set_value("d", 0.04)
+	main.dialog.accept()
+	var v2: float = vol.call()
+	_check(absf(v2 - (v1 - 0.5 * 0.0016)) < 1e-6, "the chamfer bevels the edge aimed at (%f)" % v2)
+	# Holes in the top face.
+	tools.set_tool_id("hole")
+	tools.aim = main.doc.pick(Vector3(0.11, 5, 0.19), Vector3(0, -1, 0), 20.0)
+	tools._act(true, false)
+	await _frames(2)
+	_check(main.dialog.visible and main.dialog.type == "hole", "Hole opens its panel")
+	main.dialog.set_value("d", 0.1)
+	main.dialog.set_value("end", "blind")
+	main.dialog.set_value("depth", 0.2)
+	_check(main.dialog.fields.any(func(f): return f.key == "depth"), "a blind hole shows its depth")
+	main.dialog.accept()
+	var v3: float = vol.call()
+	_check(absf(v3 - (v2 - PI * 0.0025 * 0.2)) < 1e-5, "a blind hole cuts its cylinder (%f)" % v3)
+	var hole: Dictionary = main.doc.get_features()[-1]
+	var pt: Array = hole.params.point
+	var snap: float = main.player.snap_step()
+	_check(absf(float(pt[0]) - snappedf(0.11, snap)) < 1e-9 and absf(float(pt[1]) + snappedf(0.19, snap)) < 1e-9,
+		"the snapped hole sits on the grid (%s)" % str(pt))
+	tools.aim = main.doc.pick(Vector3(-0.2, 5, -0.2), Vector3(0, -1, 0), 20.0)
+	tools._act(true, false)
+	await _frames(2)
+	main.dialog.set_value("kind", "tapped")
+	var FD = load("res://scripts/feature_dialog.gd")
+	var drill := {}
+	for t in FD.THREADS_METRIC + FD.THREADS_INCH:
+		drill[t[0]] = t[1]
+	var thread: String = main.dialog.values.get("thread", "")
+	_check(main.dialog.fields.any(func(f): return f.key == "thread") and absf(float(main.dialog.values.d) - float(drill.get(thread, -1.0))) < 1e-9,
+		"a tapped hole picks a thread and drills its tap size (%s in %s)" % [thread, main.hud.units])
+	main.dialog.set_value("kind", "counterbore")
+	_check(main.dialog.fields.any(func(f): return f.key == "cbore_d") and main.dialog.ok, "a counterbore shows its bore sizes")
+	main.dialog.set_value("kind", "countersink")
+	_check(main.dialog.fields.any(func(f): return f.key == "csink_angle") and main.dialog.ok, "a countersink shows its sink sizes")
+	main.dialog.accept()
+	_check(vol.call() < v3, "the countersunk hole goes through")
+	# Shell a fresh box open at the top.
+	main._start_mode("new")
+	await _frames(2)
+	main.player.set_size_now(1.0)
+	main.doc.add_primitive("box", Vector3(0, 0, 0), {w = 1.0, d = 1.0, h = 0.5}, "add")
+	main._on_model_changed()
+	tools.set_tool_id("shell")
+	tools.aim = main.doc.pick(Vector3(0.1, 5, 0.1), Vector3(0, -1, 0), 20.0)
+	tools._act(true, false)
+	_check(tools._picks.size() == 1, "Shell picks the face to leave open")
+	tools._act(false, false)
+	await _frames(2)
+	main.dialog.set_value("t", 0.05)
+	main.dialog.accept()
+	var inner := 0.9 * 0.9 * 0.45
+	_check(absf(vol.call() - (0.5 - inner)) < 1e-6, "Shell hollows the box open at the top (%f)" % vol.call())
+	# Extrude both ways and up to a face, through the panel.
+	main._start_mode("new")
+	await _frames(2)
+	main.doc.add_primitive("box", Vector3(0, 0, 0), {w = 1.0, d = 1.0, h = 0.5}, "add")
+	main._on_model_changed()
+	main.player.set_size_now(1.0)
+	tools.set_tool_id("sketch")
+	tools.options["sketch"] = 1  # Top plane
+	tools._act(true, false)
+	await _frames(2)
+	main.player.set_size_now(1.0)
+	main.sketcher.set_tool_id("rect")
+	main.sketcher.click_at(Vector2(0.75, 0.75))
+	main.sketcher.click_at(Vector2(1.0, 1.0))
+	main.sketcher.finish()
+	await _frames(2)
+	var base: float = vol.call()
+	tools.set_tool_id("extrude")
+	tools._act(true, false)
+	await _frames(2)
+	_check(main.dialog.visible and main.dialog.type == "extrude", "Extrude opens its panel (%s)" % str(main.doc.get_features().map(func(f): return f.type)))
+	main.dialog.set_value("depth", 0.1)
+	main.dialog.set_value("direction", "two")
+	_check(main.dialog.fields.any(func(f): return f.key == "depth2"), "two directions shows a second depth")
+	main.dialog.set_value("depth2", 0.2)
+	_check(absf(vol.call() - (base + 0.0625 * 0.3)) < 1e-6, "the extrude goes 100 mm one way and 200 mm the other (%f)" % vol.call())
+	main.dialog.set_value("direction", "normal")
+	tools.aim = main.doc.pick(Vector3(0.2, 5, 0.2), Vector3(0, -1, 0), 20.0)  # the box's top face
+	main.dialog.set_value("end", "up_to_face")
+	_check(main.dialog.ok and not main.dialog.fields.any(func(f): return f.key == "depth"),
+		"Up to face takes the aimed face and drops the depth (%s)" % main.dialog.message)
+	_check(absf(vol.call() - (base + 0.0625 * 0.5)) < 1e-6, "the extrude stops at the box's top (%f)" % vol.call())
+	main.dialog.set_value("end", "through_all")
+	_check(main.dialog.ok, "Through all builds")
+	main.dialog.accept()
 
 
 ## 0.3: Save, Save as, the Open browser, opening a file, STEP import, New part in other units.

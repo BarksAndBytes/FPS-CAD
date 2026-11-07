@@ -112,6 +112,7 @@ func _ready() -> void:
 	tools.sketch_requested.connect(_on_sketch_requested)
 	tools.feature_requested.connect(_on_feature_requested)
 	tools.reference_requested.connect(_on_reference_requested)
+	tools.picked_feature_requested.connect(_on_picked_feature_requested)
 	sketcher = Sketcher.new()
 	sketcher.game = self
 	add_child(sketcher)
@@ -599,6 +600,19 @@ func _on_reference_requested(type: String, params: Dictionary) -> void:
 			_show_tool()
 	else:
 		tools.insert_reference(type, params)
+
+
+func _on_picked_feature_requested(type: String, base: Dictionary, op: String) -> void:
+	if dialog.open_feature(type, base, op):
+		_show_tool()
+
+
+## A reference to the model face under the crosshair (for "up to face"), or {} when none.
+func aimed_face_ref() -> Dictionary:
+	var hit: Dictionary = tools.aim
+	if tools.is_assembly or hit.is_empty() or hit.get("ground", false) or String(hit.get("feature_id", "")) == "":
+		return {}
+	return doc.face_ref(hit)
 
 
 func _on_feature_requested(type: String, sketch_id: String, op: String) -> void:

@@ -1013,6 +1013,93 @@ int main() {
     CHECK(std::abs(m.massProperties().mass - m.massProperties().volume * 7870) < 1e-9);
   });
 
+  run("0.4: picked-edge fillet and chamfer, holes, shell, up-to-face and two-way extrudes", [&] {
+    // A 100 x 60 x 40 mm block on the ground, centred on the origin.
+    auto block = [] {
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.06}, {"h", 0.04}}));
+      return d;
+    };
+    const double V = 0.1 * 0.06 * 0.04;
+    // The top front edge (along X) by a point near it.
+    PartModel probe(block());
+    probe.rebuild();
+    auto e = probe.edgeNear({0.01, -0.03, 0.0401}, 0.005);
+    CHECK(e && std::abs(e->length - 0.1) < 1e-9 && std::abs(e->mid[1] + 0.03) < 1e-9 && std::abs(e->mid[2] - 0.04) < 1e-9);
+    auto arcProbe = probe.edgeNear({1, 1, 1}, 0.005);
+    CHECK(!arcProbe);  // nothing that far away
+    Json pick = Json::array({Json::array({e->mid[0], e->mid[1], e->mid[2]})});
+    {
+      PartDocument d = block();
+      d.add(feature("fillet", {{"picks", pick}, {"r", 0.005}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 0.005 * 0.005 * (1 - kPiT / 4) * 0.1, 1e-10);
+      // The fillet's quarter circle on the block's end face reports its radius.
+      auto arc = m.edgeNear({0.05, -0.03 + 0.005 - 0.005 * std::cos(0.7), 0.04 - 0.005 + 0.005 * std::sin(0.7)}, 0.001);
+      CHECK(arc && std::abs(arc->radius - 0.005) < 1e-9);
+    }
+    {
+      PartDocument d = block();
+      d.add(feature("chamfer", {{"picks", pick}, {"d", 0.004}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 0.004 * 0.004 / 2 * 0.1, 1e-10);
+    }
+    {
+      PartDocument d = block();
+      d.add(feature("chamfer", {{"picks", Json::array({Json::array({5, 5, 5})})}, {"d", 0.004}}));
+      PartModel m(d);
+      CHECK(!m.rebuild().ok);  // a pick far from every edge fails clearly
+    }
+    auto hole = [&](Json p) {
+      PartDocument d = block();
+      p["point"] = Json::array({0.0, 0.0, 0.04});
+      p["normal"] = Json::array({0.0, 0.0, 1.0});
+      d.add(feature("hole", p, BodyOp::Cut));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      return m.massProperties().volume;
+    };
+    double r = 0.005;
+    CHECK_NEAR(hole({{"d", 0.01}, {"depth", 0.02}}), V - kPiT * r * r * 0.02, 1e-10);
+    CHECK_NEAR(hole({{"d", 0.01}, {"end", "through_all"}}), V - kPiT * r * r * 0.04, 1e-10);
+    CHECK_NEAR(hole({{"d", 0.01}, {"depth", 0.02}, {"kind", "counterbore"}, {"cbore_d", 0.016}, {"cbore_depth", 0.005}}),
+               V - kPiT * r * r * 0.02 - kPiT * (0.008 * 0.008 - r * r) * 0.005, 1e-10);
+    // A 90° countersink from 16 mm down to 10 mm: a 3 mm deep frustum around the hole.
+    double h = 0.003;
+    double frustum = kPiT * h / 3 * (0.008 * 0.008 + 0.008 * r + r * r) - kPiT * r * r * h;
+    CHECK_NEAR(hole({{"d", 0.01}, {"depth", 0.02}, {"kind", "countersink"}, {"csink_d", 0.016}, {"csink_angle", kPiT / 2}}),
+               V - kPiT * r * r * 0.02 - frustum, 1e-9);
+    {
+      PartDocument d = block();
+      d.add(feature("shell", {{"t", 0.002}, {"faces", Json::array({{{"probe", {0.0, 0.0, 0.04}}, {"normal", {0.0, 0.0, 1.0}}}})}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 0.096 * 0.056 * 0.038, 1e-9);  // open at the top
+    }
+    {
+      // A 20 mm square sketched on the ground beside the block, extruded up to the block's top.
+      PartDocument d = block();
+      Json sk = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+      sk["points"] = Json::array({{{"id", "a"}, {"x", 0.1}, {"y", 0.0}}, {{"id", "b"}, {"x", 0.12}, {"y", 0.0}},
+                                  {{"id", "c"}, {"x", 0.12}, {"y", 0.02}}, {{"id", "dd"}, {"x", 0.1}, {"y", 0.02}}});
+      sk["entities"] = Json::array({{{"id", "l1"}, {"kind", "line"}, {"pts", {"a", "b"}}}, {{"id", "l2"}, {"kind", "line"}, {"pts", {"b", "c"}}},
+                                    {{"id", "l3"}, {"kind", "line"}, {"pts", {"c", "dd"}}}, {{"id", "l4"}, {"kind", "line"}, {"pts", {"dd", "a"}}}});
+      std::string sid = d.add(feature("sketch", sk)).id;
+      d.add(feature("extrude", {{"sketch", sid}, {"end", "up_to_face"}, {"depth", 0.01},
+                                {"face", {{"probe", {0.0, 0.0, 0.04}}, {"normal", {0.0, 0.0, 1.0}}}}}, BodyOp::NewBody));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V + 0.02 * 0.02 * 0.04, 1e-10);
+      d.features.back().params = {{"sketch", sid}, {"direction", "two"}, {"depth", 0.03}, {"depth2", 0.01}};
+      PartModel two(d);
+      CHECK(two.rebuild().ok);
+      CHECK_NEAR(two.massProperties().volume, V + 0.02 * 0.02 * 0.04, 1e-10);
+      CHECK(std::abs(two.boundingBox()->min[2] + 0.01) < 1e-9);  // 10 mm below the sketch, 30 above
+    }
+  });
+
   run("STEP import brings a part back as a solid that saves with the part", [&] {
     PartModel src(PartDocument::deskSample());
     src.rebuild();

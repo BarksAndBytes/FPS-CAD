@@ -153,6 +153,17 @@ public:
 
   MassProperties massProperties() const;
 
+  // The edge nearest a point (within maxDistance): its middle (how fillet / chamfer picks refer to
+  // it), points along it for drawing, its length and, for a circle or arc, its radius.
+  struct EdgeInfo {
+    int body = -1;
+    Vec3 mid{};
+    std::vector<Vec3> points;
+    double length = 0;
+    double radius = 0;
+  };
+  std::optional<EdgeInfo> edgeNear(const Vec3& point, double maxDistance) const;
+
   // Corner points of one face (for measure snapping), metres.
   std::vector<Vec3> faceVertices(int body, int face) const;
 

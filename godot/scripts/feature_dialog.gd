@@ -12,7 +12,16 @@ signal closed(ok: bool, feature_id: String)
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const Units := preload("res://scripts/units.gd")
 const TITLES := {extrude = "EXTRUDE", revolve = "REVOLVE", sweep = "SWEEP", loft = "LOFT", plane = "PLANE",
-	axis = "AXIS", point = "POINT"}
+	axis = "AXIS", point = "POINT", fillet = "FILLET", chamfer = "CHAMFER", hole = "HOLE", shell = "SHELL"}
+## Features built from things picked in the model (edges, faces, a point) plus sizes set here.
+const PICKED_TYPES := ["fillet", "chamfer", "hole", "shell"]
+## Fields that show or hide others when they change.
+const SHAPING_KEYS := ["kind", "end", "direction", "thread"]
+## Tapped holes: thread and its tap drill (metres), metric coarse and Unified.
+const THREADS_METRIC := [["M2", 0.0016], ["M2.5", 0.00205], ["M3", 0.0025], ["M4", 0.0033], ["M5", 0.0042],
+	["M6", 0.005], ["M8", 0.0068], ["M10", 0.0085], ["M12", 0.0102], ["M16", 0.014]]
+const THREADS_INCH := [["#4-40", 0.00226], ["#6-32", 0.00271], ["#8-32", 0.00345], ["#10-24", 0.0038], ["#10-32", 0.00404],
+	["1/4-20", 0.00511], ["5/16-18", 0.00653], ["3/8-16", 0.00794], ["1/2-13", 0.01072]]
 const REFERENCE_TYPES := ["plane", "axis", "point", "csys"]
 const OPS := [["add", "Add material"], ["cut", "Cut away"], ["new-body", "New body"]]
 
@@ -84,6 +93,8 @@ func open_new(t: String, sketch: String, op: String) -> bool:
 	type = t
 	editing = false
 	sketch_id = sketch
+	base_params = {}
+	values = {}
 	if not _setup_fields():
 		return false
 	values.op = op
@@ -92,6 +103,28 @@ func open_new(t: String, sketch: String, op: String) -> bool:
 	if String(r.get("id", "")) == "":
 		game.doc.abandon()
 		game.hud.toast(r.get("message", "Could not add the feature"))
+		return false
+	feature_id = r.id
+	_open(r)
+	return true
+
+
+## Adds a feature built from picks (base: edges, faces or a point, as the core stores them) and
+## opens the panel on its sizes: fillet, chamfer, hole, shell.
+func open_feature(t: String, base: Dictionary, op: String) -> bool:
+	type = t
+	editing = false
+	sketch_id = ""
+	base_params = base.duplicate(true)
+	values = {}
+	if not _setup_fields():
+		return false
+	values.op = op
+	game.doc.checkpoint()
+	var r: Dictionary = game.doc.insert_feature(type, op, _params())
+	if String(r.get("id", "")) == "":
+		game.doc.abandon()
+		game.hud.toast(r.get("message", "Could not add the %s" % type))
 		return false
 	feature_id = r.id
 	_open(r)
@@ -111,6 +144,7 @@ func open_reference(t: String, params: Dictionary) -> bool:
 	editing = false
 	sketch_id = ""
 	base_params = params.duplicate(true)
+	values = {}
 	if not _setup_fields():
 		return false
 	for k in values:
@@ -133,8 +167,18 @@ func open_edit(f: Dictionary) -> bool:
 	editing = true
 	feature_id = f.id
 	var p: Dictionary = f.params
+	if type in PICKED_TYPES:
+		base_params = p.duplicate(true)
+		values = p.duplicate(true)
+		if not _setup_fields():
+			return false
+		values.op = f.op
+		game.doc.checkpoint()
+		_open(game.doc.update_feature(feature_id, values.op, _params()))
+		return true
 	if type in REFERENCE_TYPES:
 		base_params = p.duplicate(true)
+		values = {}
 		if not _setup_fields():
 			game.hud.toast("%s has no sizes to change: delete it and make it again" % f.name)
 			return false
@@ -145,11 +189,15 @@ func open_edit(f: Dictionary) -> bool:
 		_open(game.doc.update_feature(feature_id, "", _params()))
 		return true
 	sketch_id = p.get("sketch", "")
+	base_params = {}
+	values = {}
+	if p.has("face"):
+		base_params.face = p.face
 	if type == "loft" and p.get("sketches", []).size() > 0:
 		sketch_id = p.sketches[0]
 	if not _setup_fields():
 		return false
-	for k in ["depth", "direction", "end", "angle", "axis", "path"]:
+	for k in ["depth", "depth2", "direction", "end", "angle", "axis", "path"]:
 		if p.has(k) and values.has(k):
 			values[k] = p[k]
 	if type == "loft" and p.get("sketches", []).size() > 1:
@@ -174,18 +222,21 @@ func _open(r: Dictionary) -> void:
 ## Field definitions and defaults for the current type. False (with a toast) when the feature
 ## cannot be made, such as a sweep with no path sketch.
 func _setup_fields() -> bool:
-	values = {}
 	fields = []
 	var others := _other_sketches()
 	match type:
 		"extrude":
-			fields = [
-				{key = "depth", label = "Depth", kind = "length"},
-				{key = "direction", label = "Direction", kind = "choice",
-					choices = [["normal", "Out of the plane"], ["reverse", "Into the plane"], ["symmetric", "Both sides"]]},
-				{key = "end", label = "End", kind = "choice", choices = [["blind", "Blind (depth)"], ["through_all", "Through all"]]},
-			]
-			values = {depth = _default_depth(), direction = "normal", end = "blind"}
+			_defaults({depth = _default_depth(), depth2 = _default_depth(), direction = "normal", end = "blind"})
+			fields = []
+			if values.end == "blind":
+				fields.append({key = "depth", label = "Depth", kind = "length"})
+			fields.append({key = "end", label = "End", kind = "choice",
+				choices = [["blind", "Blind (depth)"], ["through_all", "Through all"], ["up_to_face", "Up to the face aimed at"]]})
+			fields.append({key = "direction", label = "Direction", kind = "choice",
+				choices = [["normal", "Out of the plane"], ["reverse", "Into the plane"], ["symmetric", "Both sides"],
+					["two", "Both sides, two depths"]]})
+			if values.direction == "two":
+				fields.append({key = "depth2", label = "Depth 2", kind = "length"})
 		"revolve":
 			var axes := [["x", "Sketch X axis"], ["y", "Sketch Y axis"]]
 			var preferred := "y"
@@ -223,6 +274,37 @@ func _setup_fields() -> bool:
 					values = {angle = base_params.get("angle", PI / 4.0)}
 				_:
 					return false
+		"fillet":
+			_defaults({r = game.player.snap_step()})
+			fields = [{key = "r", label = "Radius", kind = "length"}]
+		"chamfer":
+			_defaults({d = game.player.snap_step()})
+			fields = [{key = "d", label = "Distance", kind = "length"}]
+		"shell":
+			_defaults({t = game.player.snap_step()})
+			fields = [{key = "t", label = "Wall", kind = "length"}]
+		"hole":
+			var inch: bool = game.hud.units in ["in", "ft"]
+			var threads: Array = THREADS_INCH if inch else THREADS_METRIC
+			var d0 := 0.25 * 0.0254 if inch else 0.006
+			_defaults({kind = "simple", d = d0, end = "through_all", depth = d0 * 2.0, cbore_d = d0 * 1.8, cbore_depth = d0,
+				csink_d = d0 * 2.0, csink_angle = PI / 2.0, thread = threads[5][0]})
+			fields = [{key = "kind", label = "Type", kind = "choice",
+				choices = [["simple", "Simple"], ["counterbore", "Counterbore"], ["countersink", "Countersink"], ["tapped", "Tapped"]]}]
+			if values.kind == "tapped":
+				fields.append({key = "thread", label = "Thread", kind = "choice", choices = threads.map(func(t): return [t[0], t[0]])})
+				for t in threads:
+					if t[0] == values.thread:
+						values.d = t[1]
+			else:
+				fields.append({key = "d", label = "Diameter", kind = "length"})
+			fields.append({key = "end", label = "End", kind = "choice", choices = [["through_all", "Through all"], ["blind", "Blind (depth)"]]})
+			if values.end == "blind":
+				fields.append({key = "depth", label = "Depth", kind = "length"})
+			if values.kind == "counterbore":
+				fields += [{key = "cbore_d", label = "Bore Ø", kind = "length"}, {key = "cbore_depth", label = "Bore depth", kind = "length"}]
+			elif values.kind == "countersink":
+				fields += [{key = "csink_d", label = "Sink Ø", kind = "length"}, {key = "csink_angle", label = "Sink angle", kind = "angle"}]
 		"point":
 			if String(base_params.get("kind", "xyz")) != "xyz":
 				return false
@@ -231,12 +313,23 @@ func _setup_fields() -> bool:
 			values = {x = base_params.get("x", 0.0), y = base_params.get("y", 0.0), z = base_params.get("z", 0.0)}
 		_:
 			return false
-	if type in REFERENCE_TYPES:
+	if type in REFERENCE_TYPES or type in ["fillet", "chamfer", "shell"]:
 		values.op = ""
 		return true
+	if type == "hole":
+		values.op = "cut"
+		return true
 	fields.append({key = "op", label = "Result", kind = "choice", choices = OPS})
-	values.op = "add"
+	if not values.has("op"):
+		values.op = "add"
 	return true
+
+
+## Sets defaults for keys not yet set (so the panel keeps what was chosen when fields change).
+func _defaults(d: Dictionary) -> void:
+	for k in d:
+		if not values.has(k):
+			values[k] = d[k]
 
 
 ## [id, name] of every sketch except the profile, unused ones last so they are the default.
@@ -272,7 +365,23 @@ func _default_depth() -> float:
 func _params() -> Dictionary:
 	match type:
 		"extrude":
-			return {sketch = sketch_id, depth = values.depth, direction = values.direction, end = values.end}
+			var e := {sketch = sketch_id, depth = values.depth, direction = values.direction, end = values.end}
+			if values.direction == "two":
+				e.depth2 = values.depth2
+			if values.end == "up_to_face" and base_params.has("face"):
+				e.face = base_params.face
+			return e
+		"fillet", "chamfer", "shell", "hole":
+			var p := base_params.duplicate(true)
+			for k in values:
+				if k != "op":
+					p[k] = values[k]
+			if type == "hole":
+				if values.kind != "tapped":
+					p.erase("thread")
+				if values.end != "blind":
+					p.erase("depth")
+			return p
 		"revolve":
 			return {sketch = sketch_id, angle = values.angle, axis = values.axis, direction = values.direction}
 		"sweep":
@@ -296,6 +405,16 @@ func set_value(key: String, value: Variant) -> void:
 
 
 func _apply() -> void:
+	if type == "extrude" and values.get("end", "") == "up_to_face" and not base_params.has("face"):
+		var ref: Dictionary = game.aimed_face_ref()
+		if ref.is_empty():
+			values.end = "blind"
+			game.hud.toast("Aim at a flat face of the model first, then choose Up to the face aimed at")
+		else:
+			base_params.face = ref
+	if type in ["extrude", "hole"]:
+		_setup_fields()  # the fields follow the choices (a blind end shows Depth, a counterbore its sizes)
+		focus = mini(focus, fields.size() - 1)
 	_show(game.doc.update_feature(feature_id, values.op, _params()))
 	game.on_model_changed()
 
@@ -347,7 +466,7 @@ func _row(i: int) -> Control:
 	value.text = _value_text(f)
 	value.focus_mode = Control.FOCUS_NONE
 	value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	value.disabled = f.key == "depth" and values.get("end", "") == "through_all"
+	value.disabled = false
 	value.pressed.connect(func():
 		focus = i
 		if f.kind == "choice":

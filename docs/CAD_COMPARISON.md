@@ -26,7 +26,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Area | Typical professional depth | FPS-CAD today | Coverage |
 | --- | --- | --- | --- |
 | Sketching | ~60 entity, edit and constraint tools | 15 drawing tools (incl. polygon, slot, ellipse, spline, text), trim/extend/split/fillet/chamfer/offset/linked convert, live move, copy/rotate/scale/mirror, live patterns, smart dimensions, 12 relations, snap inference | High |
-| Part features | ~40 sketched and applied features | Extrude, revolve, sweep, loft, push/pull, primitives; fillet/chamfer in the core | Low–medium |
+| Part features | ~40 sketched and applied features | Extrude (end conditions), revolve, sweep, loft, push/pull, primitives, fillet, chamfer, hole, shell | Medium |
 | Patterns and mirror | Linear, circular, curve, sketch, table, fill; mirror | None | None |
 | Reference geometry | Planes, axes, points, coordinate systems | Offset / angled / 3-point / mid planes, edge / cylinder / 2-point / 2-plane axes, points, coordinate systems; all follow the model | High |
 | Parameters | Equations, global variables, configurations, design tables | Variables and expressions | Medium |
@@ -161,8 +161,8 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | --- | --- | --- | --- |
 | Extrude: blind, symmetric, reverse | All three | ✓ | |
 | Extrude: through all | All three | ✓ | |
-| Extrude: up to next / to face / to vertex / offset from surface | All three | ✗ | |
-| Extrude: two directions, draft, thin feature | All three | ✗ | |
+| Extrude: up to next / to face / to vertex / offset from surface | All three | ◐ | Up to a flat face (0.4) |
+| Extrude: two directions, draft, thin feature | All three | ◐ | Two directions with two depths (0.4); no draft or thin |
 | Extrude result: join, cut, new body | All three | ✓ | |
 | Extrude result: intersect | All three | ◐ | Intersect exists in the core |
 | Revolve: angle, axis from sketch, direction | All three | ✓ | |
@@ -183,12 +183,12 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 
 | Feature | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
-| Fillet: constant radius | All three | ◐ | In the core (all or vertical edges); no edge-picking tool |
+| Fillet: constant radius | All three | ✓ | Finish → Fillet: pick edges in the room (0.4) |
 | Fillet: variable, face, full round, setback | All three | ✗ | |
-| Chamfer: distance, distance-distance, angle | All three | ◐ | Constant distance in the core; no UI |
-| Hole wizard: simple, counterbore, countersink, tapped | Hole Wizard / Hole / Hole | ✗ | High value for mechanical parts |
+| Chamfer: distance, distance-distance, angle | All three | ◐ | Equal distance on picked edges (0.4); no two-distance or angle |
+| Hole wizard: simple, counterbore, countersink, tapped | Hole Wizard / Hole / Hole | ✓ | Finish → Hole (0.4); metric coarse and Unified tap sizes |
 | Threads (cosmetic and modelled) | All three | ✗ | |
-| Shell | All three | ✗ | High value |
+| Shell | All three | ✓ | Finish → Shell, faces left open picked in the room (0.4) |
 | Draft | All three; Fusion fixed-plane mode (Oct 2026) | ✗ | |
 | Dome, flex, deform, scale | SW; Fusion scale; Inventor | ✗ | |
 | Split body / split face | All three | ✗ | |
@@ -473,13 +473,13 @@ CASCADE already reads STEP.
 Agreed November 2026, after a whole-product review of what is critical to a CAD workflow. Each
 release leaves the game usable on its own; earlier ones unblock later ones.
 
-### 0.3 Work on real files
+### 0.3 Work on real files (done)
 1. Save As with a chosen name; rename a part.
 2. An Open browser of every saved part: recent first, delete, duplicate.
 3. New part from the pause menu, choosing units and material.
 4. STEP import as a solid to build on.
 
-### 0.4 Finish the part
+### 0.4 Finish the part (done)
 1. Fillet and chamfer on picked edges, as an in-game tool.
 2. Extrude end conditions: through all, up to face, two directions.
 3. Hole tool: simple, counterbore, countersink, tapped (with a thread note).

@@ -233,6 +233,28 @@ and adds an `import` feature: the shape is stored inside the part file (`imports
 ground centred on the origin, is the first body or a new body, moves with the Move tool (its
 `x y z`), undoes, and invalidates the cached geometry when it changes.
 
+## Finishing the part (0.4)
+
+The wheel's **Finish** group holds Fillet, Chamfer, Hole and Shell. They work on what the player
+aims at in the room, then open the feature panel on the sizes with a live preview:
+
+- **Fillet / Chamfer**: the primary action picks or unpicks the edge nearest the crosshair (the
+  reach grows with the player; the picked edges are drawn in the accent colour, the edge under
+  the crosshair with its length and radius). The secondary action rounds or bevels the picked
+  edges, or the edge aimed at when none are picked. The feature stores each edge as a point on it
+  (`picks`, the edge's midpoint) and finds the nearest edge again on rebuild, within 2 % of the
+  model's size, so the pick follows edits that move the edge a little.
+- **Hole**: the primary action places a hole on the aimed face with its centre snapped to the
+  grid in the face's own directions; the secondary action places it exactly at the crosshair.
+  Types: simple, counterbore (bore Ø and depth), countersink (sink Ø and angle) and tapped
+  (thread from a metric coarse or Unified table, drilled at its tap size). Ends: through all or
+  blind with a depth. Stored as `point`, `normal`, `d`, `kind`, `end` and the type's sizes.
+- **Shell**: the primary action picks faces to leave open, the secondary hollows the part with
+  the wall thickness inwards (`faces` are face references, `t` the wall).
+- **Extrude end conditions**: Blind (depth), Through all, and Up to the face aimed at (a flat
+  face, stored as a face reference: the solid is trimmed by that face's plane). Directions: out
+  of the plane, into it, both sides equally, or both sides with two depths (`depth2`).
+
 ## Native file layout (`.fpprt`)
 
 ```

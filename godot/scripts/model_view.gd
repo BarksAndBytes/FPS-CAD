@@ -36,6 +36,8 @@ var _component_nodes := {}  # component index -> [mesh instance, edge instance, 
 var _mesh_size := -1.0
 
 var _highlight := MeshInstance3D.new()
+var _pick_lines := MeshInstance3D.new()   # edges picked for a fillet or chamfer, and the one aimed at
+var _pick_faces := MeshInstance3D.new()   # faces picked for a shell
 var _ghost := MeshInstance3D.new()
 var room: Node3D  # room.gd
 var _marker_a := MeshInstance3D.new()
@@ -123,6 +125,12 @@ func _ready() -> void:
 	add_child(room)
 
 	_highlight.material_override = _hl_mat
+	_pick_lines.material_override = FatLines.material(COLOR_ACCENT, 5.0, true)
+	_pick_lines.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_pick_lines)
+	_pick_faces.material_override = _overlay_mat
+	_pick_faces.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_pick_faces)
 	_ghost.material_override = _ghost_mat
 	for n in [_highlight, _ghost, _marker_a, _marker_b, _marker_snap, _measure_line]:
 		n.visible = false
@@ -502,6 +510,50 @@ func highlight(body: int, feature_id: String, face: int, size: float) -> void:
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	_highlight.mesh = m
 	_highlight.visible = true
+
+
+## Picks in progress: edges (polylines, Godot space) and faces ([body, face]) already chosen, and
+## the edge under the crosshair (hover, may be empty). Nothing hides them all.
+func show_picks(edges: Array, faces: Array, hover := PackedVector3Array()) -> void:
+	var segs := PackedVector3Array()
+	for poly in edges + [hover]:
+		var pts: PackedVector3Array = poly
+		for i in range(pts.size() - 1):
+			segs.append(pts[i])
+			segs.append(pts[i + 1])
+	_pick_lines.visible = segs.size() >= 2
+	if _pick_lines.visible:
+		_pick_lines.mesh = FatLines.mesh(segs)
+	var tris := PackedVector3Array()
+	for bf in faces:
+		tris.append_array(_face_triangles(int(bf[0]), int(bf[1]), 0.003 * _mesh_size if _mesh_size > 0.0 else 0.003))
+	_pick_faces.visible = not tris.is_empty()
+	if _pick_faces.visible:
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = tris
+		var m := ArrayMesh.new()
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		_pick_faces.mesh = m
+
+
+## The triangles of one face of a body, lifted along their normals by lift.
+func _face_triangles(body: int, face: int, lift: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if is_assembly or body < 0 or body >= _arrays.size() or _arrays[body].is_empty():
+		return out
+	var arr: Array = _arrays[body]
+	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+	var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+	var tri_faces: PackedInt32Array = _tri_faces[body]
+	for t in tri_faces.size():
+		if tri_faces[t] != face:
+			continue
+		for k in 3:
+			var vi := idx[t * 3 + k]
+			out.append(verts[vi] + normals[vi] * lift)
+	return out
 
 
 func clear_highlight() -> void:
