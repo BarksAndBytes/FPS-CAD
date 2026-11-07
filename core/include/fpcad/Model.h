@@ -24,6 +24,7 @@ struct FeatureStatus {
   std::string featureId;
   bool ok = true;
   std::string message;
+  bool rolledBack = false;  // below the rollback bar: not built
 };
 
 struct RebuildReport {
@@ -130,6 +131,34 @@ public:
   const RebuildReport& lastReport() const;
 
   int bodyCount() const;
+  // Section view: {point, normal} cuts every body for display, walking and picking (the side
+  // the normal points to is taken away); nullopt shows the whole part. The model is unchanged.
+  void setSection(const std::optional<std::pair<Vec3, Vec3>>& plane);
+  bool hasSection() const;
+
+  // Measuring a face: its area, surface kind, and for round faces the radius and axis.
+  struct FaceMeasure {
+    bool ok = false;
+    double area = 0;
+    std::string kind;
+    double radius = 0;   // cylinders, spheres, tori (minor radius: see radius2), cones at mid
+    double radius2 = 0;  // torus major radius
+    Vec3 normal{};       // flat faces: outward normal
+    Vec3 axis{};         // round faces: axis direction
+    Vec3 centre{};       // round faces: a point on the axis; flat faces: the face's centre
+  };
+  FaceMeasure faceMeasure(int body, int face) const;
+
+  // Overlapping bodies: each pair whose solids share volume, with that volume and its centre.
+  struct Interference {
+    int a = -1, b = -1;
+    double volume = 0;
+    Vec3 centre{};
+  };
+  std::vector<Interference> interference() const;
+  // The role of face (index in body) within the feature that made it ("end", "side2", "p+z"),
+  // stored in face references so they find the same face after upstream edits. Empty if none.
+  std::string faceRole(int body, int face) const;
   const TopoDS_Shape& body(int index) const;
 
   // Display mesh for one body. linearDeflection in metres; scale it with the player's size.

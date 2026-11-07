@@ -198,7 +198,7 @@ Dictionary CadPart::import_step(const String& path) {
   f.op = model_->bodyCount() == 0 ? fpcad::BodyOp::Add : fpcad::BodyOp::NewBody;
   f.params = {{"shape", id}, {"file", file},
               {"x", -(im.min[0] + im.max[0]) / 2}, {"y", -(im.min[1] + im.max[1]) / 2}, {"z", -im.min[2]}};
-  std::string fid = doc.add(f).id;
+  std::string fid = doc.insert(f).id;
   fpcad::RebuildReport r = model_->rebuild();
   bool ok = true;
   for (auto& st : r.features)
@@ -434,7 +434,7 @@ String CadPart::add_primitive(const String& type, const Vector3& base, const Dic
   }
   checkpoint();
   fpcad::PartDocument backup = model_->document();
-  std::string id = model_->document().add(f).id;
+  std::string id = model_->document().insert(f).id;
   Dictionary r = commitOrRevert(backup, "placed");
   return bool(r["ok"]) ? str(id) : String();
 }
@@ -490,10 +490,69 @@ Dictionary CadPart::delete_feature(const String& id) {
       if (!gone.count(x.id) && uses(x)) { gone.insert(x.id); grew = true; }
   }
   size_t extra = gone.size() - 1;
-  feats.erase(std::remove_if(feats.begin(), feats.end(), [&](const fpcad::Feature& x) { return gone.count(x.id) > 0; }),
-              feats.end());
+  model_->document().erase(gone);
   model_->rebuild();
   return result(true, name + " deleted" + (extra ? " with " + std::to_string(extra) + " feature" + (extra > 1 ? "s" : "") + " built on it" : ""));
+}
+
+int CadPart::get_rollback() const { return model_->document().rollback; }
+
+Dictionary CadPart::set_rollback(int index) {
+  auto& doc = model_->document();
+  int n = static_cast<int>(doc.features.size());
+  int bar = index < 0 || index >= n ? -1 : index;
+  if (bar == doc.rollback) return result(true, "");
+  checkpoint();
+  doc.rollback = bar;
+  model_->rebuild();
+  return result(true, bar < 0 ? "Rolled forward: every feature is built"
+                              : "Rolled back to before " + doc.features[static_cast<size_t>(bar)].name + ": new features go here");
+}
+
+Dictionary CadPart::reorder_feature(const String& id, int index) {
+  auto& doc = model_->document();
+  std::string sid = str(id);
+  int from = doc.indexOf(sid);
+  if (from < 0) return result(false, "that feature no longer exists");
+  if (index < 0 || index >= static_cast<int>(doc.features.size())) return result(false, "it cannot move further");
+  if (index == from) return result(true, "");
+  std::map<std::string, bool> before;
+  for (auto& st : model_->lastReport().features) before[st.featureId] = st.ok;
+  fpcad::PartDocument backup = doc;
+  std::string name = doc.features[static_cast<size_t>(from)].name;
+  doc.moveTo(sid, static_cast<size_t>(index));
+  fpcad::RebuildReport r = model_->rebuild();
+  for (auto& st : r.features) {
+    if (st.ok || !before[st.featureId]) continue;
+    const fpcad::Feature* broken = doc.find(st.featureId);
+    std::string why = (broken ? broken->name : std::string("a feature")) + " would fail: " + st.message;
+    doc = backup;
+    model_->rebuild();
+    return result(false, "Moving " + name + " there breaks the model. " + why);
+  }
+  undo_.push_back(backup);
+  if (undo_.size() > kUndoLimit) undo_.pop_front();
+  redo_.clear();
+  return result(true, name + " moved");
+}
+
+Dictionary CadPart::set_suppressed(const String& id, bool suppressed) {
+  fpcad::Feature* f = model_->document().find(str(id));
+  if (!f) return result(false, "that feature no longer exists");
+  if (f->suppressed == suppressed) return result(true, "");
+  checkpoint();
+  f->suppressed = suppressed;
+  std::string name = f->name;
+  fpcad::RebuildReport r = model_->rebuild();
+  std::string later;
+  for (auto& st : r.features)
+    if (!st.ok) {
+      const fpcad::Feature* g = model_->document().find(st.featureId);
+      later = (g ? g->name : std::string("a feature")) + " fails: " + st.message;
+      break;
+    }
+  Dictionary d = result(true, name + (suppressed ? " suppressed" : " back on") + (later.empty() ? "" : " · " + later));
+  return d;
 }
 
 String CadPart::duplicate_feature(const String& id, const Vector3& offset) {
@@ -504,7 +563,7 @@ String CadPart::duplicate_feature(const String& id, const Vector3& offset) {
   copy.name.clear();
   checkpoint();
   fpcad::PartDocument backup = model_->document();
-  std::string nid = model_->document().add(copy).id;
+  std::string nid = model_->document().insert(copy).id;
   model_->rebuild();
   Dictionary moved = move_feature(str(nid), offset);
   if (!bool(moved["ok"])) {
@@ -585,8 +644,13 @@ Array CadPart::get_features() const {
     d["params"] = jsonToVariant(f.params);
     d["ok"] = true;
     d["message"] = String();
+    d["rolled_back"] = false;
     for (auto& st : rep.features)
-      if (st.featureId == f.id) { d["ok"] = st.ok; d["message"] = str(st.message); }
+      if (st.featureId == f.id) {
+        d["ok"] = st.ok;
+        d["message"] = str(st.message);
+        d["rolled_back"] = st.rolledBack;
+      }
     out.push_back(d);
   }
   return out;
@@ -809,6 +873,8 @@ Dictionary CadPart::face_ref(const Dictionary& hit) const {
   n.push_back(h.normal[2]);
   d["normal"] = n;
   d["feature"] = str(h.featureId);
+  std::string role = model_->faceRole(h.body, h.face);
+  if (!role.empty()) d["role"] = str(role);
   return d;
 }
 
@@ -863,7 +929,7 @@ String CadPart::add_sketch(const Dictionary& sketch) {
   f.params = variantToJson(sketch);
   checkpoint();
   fpcad::PartDocument backup = model_->document();
-  std::string id = model_->document().add(f).id;
+  std::string id = model_->document().insert(f).id;
   Dictionary r = commitOrRevert(backup, "sketch added");
   return bool(r["ok"]) ? str(id) : String();
 }
@@ -952,7 +1018,7 @@ Dictionary CadPart::insert_feature(const String& type, const String& op, const D
     return result(false, e.what());
   }
   f.params = variantToJson(params);
-  std::string id = model_->document().add(f).id;
+  std::string id = model_->document().insert(f).id;
   Dictionary d = featureResult(*model_, id);
   if (const fpcad::Feature* added = model_->document().find(id)) d["name"] = str(added->name);
   return d;
@@ -1078,6 +1144,10 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("add_primitive", "type", "base", "dims", "op"), &CadPart::add_primitive);
   ClassDB::bind_method(D_METHOD("move_feature", "id", "delta"), &CadPart::move_feature);
   ClassDB::bind_method(D_METHOD("delete_feature", "id"), &CadPart::delete_feature);
+  ClassDB::bind_method(D_METHOD("get_rollback"), &CadPart::get_rollback);
+  ClassDB::bind_method(D_METHOD("set_rollback", "index"), &CadPart::set_rollback);
+  ClassDB::bind_method(D_METHOD("reorder_feature", "id", "index"), &CadPart::reorder_feature);
+  ClassDB::bind_method(D_METHOD("set_suppressed", "id", "suppressed"), &CadPart::set_suppressed);
   ClassDB::bind_method(D_METHOD("duplicate_feature", "id", "offset"), &CadPart::duplicate_feature);
   ClassDB::bind_method(D_METHOD("feature_dims", "id"), &CadPart::feature_dims);
   ClassDB::bind_method(D_METHOD("set_param", "id", "key", "value"), &CadPart::set_param);

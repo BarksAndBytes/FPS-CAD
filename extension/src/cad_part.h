@@ -61,6 +61,12 @@ public:
                               const godot::String& op);
   godot::Dictionary move_feature(const godot::String& id, const godot::Vector3& delta);
   godot::Dictionary delete_feature(const godot::String& id);
+  // 0.6: the history. The rollback bar (index of the first feature not built; -1 at the end),
+  // moving a feature (refused when it would break a feature that builds now), suppressing.
+  int get_rollback() const;
+  godot::Dictionary set_rollback(int index);
+  godot::Dictionary reorder_feature(const godot::String& id, int index);
+  godot::Dictionary set_suppressed(const godot::String& id, bool suppressed);
   godot::String duplicate_feature(const godot::String& id, const godot::Vector3& offset);
   godot::Dictionary feature_dims(const godot::String& id) const;
   godot::Dictionary set_param(const godot::String& id, const godot::String& key, const godot::Variant& value);

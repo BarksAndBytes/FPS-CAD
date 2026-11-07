@@ -1100,6 +1100,129 @@ int main() {
     }
   });
 
+  run("0.7: section view, face measurements, interference, driven dimensions, free geometry", [&] {
+    PartDocument d;
+    d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 1.0}, {"d", 1.0}, {"h", 1.0}}));
+    d.add(feature("cylinder", {{"x", 0.5}, {"y", 0}, {"z", 0}, {"r", 0.2}, {"h", 0.5}}, BodyOp::NewBody));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    // Interference: the cylinder's half inside the box.
+    auto ix = m.interference();
+    CHECK(ix.size() == 1);
+    if (!ix.empty()) CHECK_NEAR(ix[0].volume, kPiT * 0.04 * 0.5 / 2, 1e-9);
+    // Face measurements.
+    auto top = m.pick({-0.3, 0.0, 5}, {0, 0, -1});
+    CHECK(top.has_value());
+    auto fm = m.faceMeasure(top->body, top->face);
+    CHECK(fm.ok && fm.kind == "plane" && std::abs(fm.area - 1.0) < 1e-9 && std::abs(fm.normal[2] - 1) < 1e-12);
+    auto side = m.pick({5, 0, 0.25}, {-1, 0, 0});
+    CHECK(side.has_value());
+    auto cm = m.faceMeasure(side->body, side->face);
+    CHECK(cm.kind == "cylinder" && std::abs(cm.radius - 0.2) < 1e-12 && std::abs(std::abs(cm.axis[2]) - 1) < 1e-12);
+    // Section at half height: from above, the cut face is hit (no feature), and it is meshed.
+    size_t faces0 = m.mesh(0, 0.01, 0.5).faces.size();
+    m.setSection(std::make_pair(Vec3{0, 0, 0.6}, Vec3{0, 0, 1}));
+    CHECK(m.hasSection());
+    auto cut = m.pick({-0.3, 0.0, 5}, {0, 0, -1});
+    CHECK(cut && std::abs(cut->point[2] - 0.6) < 1e-9 && cut->face == -1 && cut->featureId.empty());
+    BodyMesh bm = m.mesh(0, 0.01, 0.5);
+    CHECK(bm.faces.size() == faces0 + 1 && bm.faces.back().kind == "section");
+    bool capTris = false;
+    for (int t : bm.triangleFace) capTris = capTris || t == static_cast<int>(faces0);
+    CHECK(capTris);
+    auto through = m.pick({5, 0.3, 0.3}, {-1, 0, 0});  // a side face below the cut keeps its feature
+    CHECK(through && through->face >= 0 && !through->featureId.empty());
+    CHECK(m.rebuild().ok && m.hasSection());  // the section stays through rebuilds
+    m.setSection(std::nullopt);
+    auto back = m.pick({-0.3, 0.0, 5}, {0, 0, -1});
+    CHECK(back && std::abs(back->point[2] - 1.0) < 1e-9);
+    // Driven dimension: reads the size, does not drive it; free geometry is reported.
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    Sketch s = Sketch::fromJson(rectSketch(standardPlane("top"), 0, 0, 0.3, 0.2));
+    SolveResult full = solveSketch(s, noVars);
+    CHECK(full.ok && full.dof == 0 && full.freePoints.empty());
+    s.constraints.push_back({"dd", "distance", {"rb", "rd"}, Json(), true});
+    SolveResult withDriven = solveSketch(s, noVars);
+    CHECK(withDriven.ok && withDriven.dof == 0);
+    CHECK_NEAR(s.constraints.back().value.get<double>(), std::hypot(0.3, 0.2), 1e-9);
+    Json round = s.toJson();
+    CHECK(round["constraints"].back().value("driven", false));
+    Sketch loose = Sketch::fromJson(rectSketch(standardPlane("top"), 0, 0, 0.3, 0.2));
+    loose.constraints.erase(std::remove_if(loose.constraints.begin(), loose.constraints.end(),
+                                           [](const SketchConstraint& c) { return c.id == "rw"; }),
+                            loose.constraints.end());
+    SolveResult lr = solveSketch(loose, noVars);
+    CHECK(lr.dof == 1);
+    CHECK(lr.freePoints == std::vector<std::string>({"rb", "rc"}));  // the right side can slide
+  });
+
+  run("0.6: rollback bar, insert at the bar, reorder, suppress, faces found again by role", [&] {
+    PartDocument d;
+    std::string a = d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}})).id;
+    std::string b = d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0.1}, {"w", 0.05}, {"d", 0.05}, {"h", 0.05}})).id;
+    std::string c = d.add(feature("cylinder", {{"x", 0}, {"y", 0}, {"z", 0}, {"r", 0.01}, {"h", 1.0}}, BodyOp::Cut)).id;
+    {
+      PartModel m(d);
+      m.document().rollback = 1;
+      auto r = m.rebuild();
+      CHECK(r.ok && r.features.size() == 3 && r.features[1].rolledBack && r.features[2].rolledBack);
+      CHECK_NEAR(m.massProperties().volume, 0.001, 1e-12);  // only the first box is built
+      // New features go in at the bar, and the bar moves down past them.
+      std::string e = m.document().insert(feature("sphere", {{"x", 0.3}, {"y", 0}, {"z", 0}, {"r", 0.01}}, BodyOp::NewBody)).id;
+      CHECK(m.document().indexOf(e) == 1 && m.document().rollback == 2);
+      // Moving the cut above the bar builds it; the bar stays in front of the second box.
+      CHECK(m.document().moveTo(c, 1));
+      CHECK(m.document().indexOf(c) == 1 && m.document().rollback == 3 && m.document().features[3].id == b);
+      m.document().erase({e});
+      CHECK(m.document().rollback == 2 && m.document().features[2].id == b);
+      m.document().rollback = -1;
+      CHECK(m.rebuild().ok);
+    }
+    {
+      PartModel m(d);
+      m.document().find(b)->suppressed = true;
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, 0.001 - kPiT * 1e-4 * 0.1, 1e-12);
+    }
+    {
+      // Two rectangles extruded together: the +X face of the left one is pushed out. When the left
+      // one moves far to the left, the face is still the left one's (found by its role), not the
+      // right one's, which is now nearer the old spot.
+      Json ska = rectSketch(standardPlane("top"), 0.2, 0, 0.1, 0.2, "a");
+      Json skb = rectSketch(standardPlane("top"), 0.6, 0, 0.1, 0.5, "b");
+      for (const char* k : {"points", "entities", "constraints"})
+        for (auto& e : skb[k]) ska[k].push_back(e);
+      PartDocument t;
+      std::string sid = t.add(feature("sketch", ska)).id;
+      std::string ex = t.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}})).id;
+      PartModel m(t);
+      CHECK(m.rebuild().ok);
+      double base = m.massProperties().volume;
+      CHECK_NEAR(base, 0.1 * 0.2 * 0.1 + 0.1 * 0.5 * 0.1, 1e-12);
+      auto hit = m.pick({0.45, 0.1, 0.05}, {-1, 0, 0});
+      CHECK(hit.has_value());
+      if (!hit) return;
+      std::string role = m.faceRole(hit->body, hit->face);
+      CHECK(role.rfind("side", 0) == 0);
+      CHECK(m.faceRole(hit->body, m.pick({0.25, 0.1, 5}, {0, 0, -1})->face) == "end");
+      Json push = {{"probe", hit->point}, {"normal", hit->normal}, {"feature", ex}, {"role", role}, {"distance", 0.05}};
+      m.document().add(feature("face_offset", push));
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, base + 0.05 * 0.2 * 0.1, 1e-12);
+      for (auto& pt : m.document().features[0].params["points"]) {
+        std::string id = pt["id"];
+        if (id[0] == 'a') pt["x"] = pt["x"].get<double>() - 0.7;
+      }
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, base + 0.05 * 0.2 * 0.1, 1e-12);
+      // Without the role, the nearest face with that normal would be taken: the wrong one.
+      m.document().features.back().params.erase("role");
+      m.document().features.back().params["probe"] = hit->point;
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, base + 0.05 * 0.5 * 0.1, 1e-12);
+    }
+  });
+
   run("0.5: linear and circular patterns, mirror, draft, body tools", [&] {
     // A 200 x 200 x 20 mm plate with a 10 mm hole near one corner.
     auto plate = [] {

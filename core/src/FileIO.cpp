@@ -128,7 +128,7 @@ Json checkManifest(ZipReader& z, const std::string& path, const char* kind) {
 std::string partHistory(const PartDocument& d) {
   std::string imported;
   for (auto& [id, data] : d.imports) imported += id + ":" + hashOf(data) + ";";
-  return d.featuresJson().dump() + d.variablesJson().dump() + d.units + imported;
+  return d.featuresJson().dump() + d.variablesJson().dump() + d.units + imported + "|rollback:" + std::to_string(d.rollback);
 }
 
 Json viewpointsJson(const PartDocument& d) {
@@ -157,6 +157,7 @@ void savePart(const std::string& path, const PartDocument& doc, const PartModel*
     m["material"] = doc.material;
     if (!doc.massUnits.empty()) m["massUnits"] = doc.massUnits;
     m["density"] = doc.density;
+    m["rollback"] = doc.rollback;
     m["historyHash"] = hashOf(partHistory(doc));
     int bodies = 0;
     if (model && partHistory(model->document()) == partHistory(doc)) {
@@ -192,6 +193,7 @@ PartDocument loadPart(const std::string& path) {
   d.material = m.value("material", d.material);
   d.massUnits = m.value("massUnits", std::string());
   d.density = m.value("density", d.density);
+  d.rollback = m.value("rollback", -1);
   try {
     d.loadFeatures(z.json("history/features.json"));
     d.loadVariables(z.has("history/variables.json") ? z.json("history/variables.json") : Json::array());

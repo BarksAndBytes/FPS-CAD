@@ -1097,6 +1097,7 @@ func _references(main: Node) -> void:
 	await _files(main)
 	await _finish(main)
 	await _repeat(main)
+	await _history(main)
 
 
 ## 0.4: fillet and chamfer on picked edges, holes of each kind, shell, extrude end conditions.
@@ -1350,6 +1351,75 @@ func _repeat(main: Node) -> void:
 	_check(main.doc.body_count() == 1 and absf(vol.call() - 0.25) < 1e-6, "Delete body removes the half aimed at")
 	tools._act(false, false)
 	_check(main.doc.body_count() == 2, "and the secondary action undoes it")
+
+
+## 0.6: the rollback bar, moving and suppressing features, re-picking a failed feature's edges.
+func _history(main: Node) -> void:
+	main._start_mode("new")
+	main.player.set_size_now(1.0)
+	await _frames(2)
+	var doc: RefCounted = main.doc
+	var vol := func() -> float: return float(doc.mass_properties().volume)
+	var f1: String = doc.add_primitive("box", Vector3(0, 0, 0), {w = 1.0, d = 1.0, h = 0.5}, "add")
+	var f2: String = doc.add_primitive("box", Vector3(0, 0.5, 0), {w = 0.4, d = 0.4, h = 0.4}, "add")
+	var f3: String = doc.add_primitive("cylinder", Vector3(0.3, 0, 0.3), {r = 0.05, h = 2.0}, "cut")
+	main._on_model_changed()
+	var full: float = vol.call()
+	main.hud.set_panel(true)
+	main.hud.show_feature(f2)
+	await _frames(2)
+	var texts: Array = main.hud._params.find_children("*", "Button", true, false).map(func(b): return b.text)
+	_check("Roll back to here" in texts and "Suppress" in texts and "▲ Move up" in texts, "the model panel offers the history controls (%s)" % ", ".join(texts))
+	main._on_hud_request("roll_here", f1)
+	_check(doc.get_rollback() == 1 and absf(vol.call() - 0.5) < 1e-9, "Roll back to here builds only the first box")
+	_check(doc.get_features()[2].rolled_back, "the features below the bar show as rolled back")
+	await _frames(2)
+	var tree: Array = main.hud._tree.find_children("*", "Button", true, false).map(func(b): return b.text)
+	_check(tree.any(func(t): return "rollback bar" in t), "the tree shows the rollback bar")
+	var sphere: String = doc.add_primitive("sphere", Vector3(3, 0, 0), {r = 0.1}, "new-body")
+	_check(doc.get_features()[1].id == sphere and doc.get_rollback() == 2, "a new feature goes in at the bar")
+	main._on_hud_request("roll_forward", null)
+	_check(doc.get_rollback() == -1 and doc.body_count() == 2, "Roll forward builds everything again")
+	doc.undo()
+	doc.undo()
+	doc.undo()
+	main._on_model_changed()
+	_check(doc.get_features().size() == 3 and absf(vol.call() - full) < 1e-9, "undo takes the bar and the sphere away (%d features)" % doc.get_features().size())
+	# Moving: the cut moves above the second box; a pattern cannot move above what it repeats.
+	main._on_hud_request("move_feature_up", f3)
+	_check(doc.get_features()[1].id == f3 and absf(vol.call() - full) < 1e-9, "Move up reorders the cut; the result is the same")
+	var pat: Dictionary = doc.insert_feature("pattern", "", {features = [f2], kind = "linear", dir = "x", count = 2, spacing = -0.5})
+	main._on_model_changed()
+	_check(pat.ok, "a pattern of the second box (%s)" % pat.get("message", ""))
+	var r: Dictionary = doc.reorder_feature(pat.id, 1)
+	_check(not r.ok and doc.get_features()[3].id == pat.id, "moving the pattern above what it repeats is refused: %s" % r.message)
+	# Suppress the second box: it and its pattern copy go.
+	var with_pattern: float = vol.call()
+	main._on_hud_request("toggle_suppress", f2)
+	_check(vol.call() < with_pattern - 0.05, "Suppress takes the box out (%f)" % vol.call())
+	main._on_hud_request("toggle_suppress", f2)
+	_check(absf(vol.call() - with_pattern) < 1e-9, "and Unsuppress brings it back")
+	# A fillet whose edge is gone: re-pick it in the room.
+	var bad: Dictionary = doc.insert_feature("fillet", "", {picks = [[5.0, 5.0, 5.0]], r = 0.02})
+	main._on_model_changed()
+	_check(not bad.ok, "a fillet with a lost edge fails")
+	main.hud.show_feature(bad.id)
+	await _frames(2)
+	texts = main.hud._params.find_children("*", "Button", true, false).map(func(b): return b.text)
+	_check(texts.any(func(t): return String(t).begins_with("Re-pick")), "a failed feature offers Re-pick")
+	main._on_hud_request("repick", bad.id)
+	var tools: Node = main.tools
+	_check(tools.tool().id == "fillet" and not tools.repair.is_empty(), "Re-pick switches to the fillet tool")
+	tools.aim = doc.pick(Vector3(0.49, 5, 0.1), Vector3(0, -1, 0), 20.0)
+	tools._act(true, false)
+	tools._act(false, false)
+	await _frames(2)
+	var fixed := false
+	for f in doc.get_features():
+		if f.id == bad.id:
+			fixed = f.ok
+	_check(fixed and tools.repair.is_empty() and not main.dialog.visible, "picking a new edge fixes the fillet")
+	main.hud.set_panel(false)
 
 
 ## 0.3: Save, Save as, the Open browser, opening a file, STEP import, New part in other units.

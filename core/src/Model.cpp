@@ -412,6 +412,56 @@ struct PartModel::Impl {
   std::vector<ShapeIndex> faceIndex;   // per body: stable face numbering for meshes and picks
   std::map<std::string, double> vars;
   mutable std::vector<std::unique_ptr<IntCurvesFace_ShapeIntersector>> pickers;
+  // Section view: each body cut by the section plane (what is shown, walked on and picked) and,
+  // per body, which original face each of the cut shape's faces came from (-1: the cut face).
+  std::optional<gp_Pln> section;
+  std::vector<TopoDS_Shape> sectBodies;
+  std::vector<ShapeIndex> sectFaces;
+  std::vector<std::vector<int>> sectOrig;
+
+  void buildSection() {
+    sectBodies.clear();
+    sectFaces.clear();
+    sectOrig.clear();
+    pickers.clear();
+    if (!section) return;
+    gp_Pnt o = section->Location();
+    gp_Vec n(section->Axis().Direction());
+    TopoDS_Face big = BRepBuilderAPI_MakeFace(*section).Face();
+    TopoDS_Shape keep = BRepPrimAPI_MakeHalfSpace(big, o.Translated(-n)).Solid();
+    for (size_t b = 0; b < bodies.size(); ++b) {
+      TopoDS_Shape cut;
+      NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher> from;
+      try {
+        BRepAlgoAPI_Common op(bodies[b], keep);
+        if (op.IsDone() && !op.HasErrors()) {
+          cut = op.Shape();
+          const ShapeIndex& faces = faceIndex[b];
+          for (int fi = 1; fi <= faces.Extent(); ++fi) {
+            const TopoDS_Shape& f = faces(fi);
+            if (op.IsDeleted(f)) continue;
+            const auto& mods = op.Modified(f);
+            if (mods.IsEmpty()) from.Bind(f, fi - 1);
+            else
+              for (const auto& m : mods) if (!from.IsBound(m)) from.Bind(m, fi - 1);
+          }
+        }
+      } catch (const Standard_Failure&) {
+        cut.Nullify();
+      }
+      ShapeIndex idx;
+      std::vector<int> orig;
+      if (!cut.IsNull()) {
+        TopExp::MapShapes(cut, TopAbs_FACE, idx);
+        for (int i = 1; i <= idx.Extent(); ++i) orig.push_back(from.IsBound(idx(i)) ? from.Find(idx(i)) : -1);
+      }
+      sectBodies.push_back(cut);
+      sectFaces.push_back(idx);
+      sectOrig.push_back(orig);
+    }
+  }
+
+  bool sectioned(size_t b) const { return section && b < sectBodies.size(); }
 
   double unit() const { return unitScale(doc.units); }
 
@@ -530,7 +580,30 @@ struct PartModel::Impl {
   // A face found again after the model changed: the one nearest probe whose outward normal there
   // is close to want, preferring faces made by feature owner. Returns false when none matches.
   bool findFace(const gp_Pnt& probe, const gp_Dir& want, const std::string& owner, int& body,
-                TopoDS_Face& found, gp_Pnt& at, gp_Dir& n) const {
+                TopoDS_Face& found, gp_Pnt& at, gp_Dir& n, const std::string& role = {}) const {
+    if (!owner.empty() && !role.empty()) {
+      // The same face of the same feature, wherever it went: nearest to the probe among the
+      // faces carrying that role (a face a later feature split in two keeps the role on both).
+      std::string want_tag = owner + "#" + role;
+      double bestRole = 1e300;
+      for (size_t b = 0; b < bodies.size(); ++b)
+        for (TopExp_Explorer ex(bodies[b], TopAbs_FACE); ex.More(); ex.Next()) {
+          const TopoDS_Face& f = TopoDS::Face(ex.Current());
+          if (tagOf(static_cast<int>(b), f) != want_tag) continue;
+          gp_Pnt q;
+          gp_Dir fn;
+          if (!nearestOnFace(f, probe, q, fn)) continue;
+          double d = q.Distance(probe);
+          if (d < bestRole) {
+            bestRole = d;
+            found = f;
+            at = q;
+            n = fn;
+            body = static_cast<int>(b);
+          }
+        }
+      if (!found.IsNull()) return true;
+    }
     double best = 1e300;
     bool bestOwned = false;
     for (size_t b = 0; b < bodies.size(); ++b) {
@@ -552,6 +625,17 @@ struct PartModel::Impl {
       }
     }
     return !found.IsNull();
+  }
+
+  // A face reference {probe, normal, feature, role} found again; the reference is updated to
+  // where it was found.
+  bool findFaceRef(Json& ref, int& body, TopoDS_Face& found, gp_Pnt& at, gp_Dir& n) const {
+    if (!findFace(gp_Pnt(xyz(ref.at("probe"))), gp_Dir(xyz(ref.at("normal"))), ref.value("feature", std::string()), body,
+                  found, at, n, ref.value("role", std::string())))
+      return false;
+    ref["probe"] = {at.X(), at.Y(), at.Z()};
+    ref["normal"] = {n.X(), n.Y(), n.Z()};
+    return true;
   }
 
   // ---------- reference geometry ----------
@@ -589,7 +673,7 @@ struct PartModel::Impl {
     TopoDS_Face f;
     gp_Pnt at;
     gp_Dir n;
-    if (!findFace(gp_Pnt(xyz(face.at("probe"))), gp_Dir(xyz(face.at("normal"))), face.value("feature", std::string()), b, f, at, n))
+    if (!findFaceRef(face, b, f, at, n))
       throw FeatureError("the face it is based on is no longer there");
     BRepAdaptor_Surface sa(f);
     if (sa.GetType() != GeomAbs_Plane) throw FeatureError("the face it is based on is not flat");
@@ -664,7 +748,7 @@ struct PartModel::Impl {
       TopoDS_Face f;
       gp_Pnt at;
       gp_Dir n;
-      if (!findFace(gp_Pnt(xyz(c.at("probe"))), gp_Dir(xyz(c.at("normal"))), c.value("feature", std::string()), b, f, at, n))
+      if (!findFaceRef(c, b, f, at, n))
         throw FeatureError("the round face it is based on is no longer there");
       BRepAdaptor_Surface sa(f);
       if (sa.GetType() != GeomAbs_Cylinder) throw FeatureError("the face it is based on is not a cylinder");
@@ -793,7 +877,7 @@ struct PartModel::Impl {
         TopoDS_Face fc;
         gp_Pnt at;
         gp_Dir n;
-        if (!findFace(gp_Pnt(xyz(face.at("probe"))), gp_Dir(xyz(face.at("normal"))), face.value("feature", std::string()), b, fc, at, n))
+        if (!findFaceRef(face, b, fc, at, n))
           throw FeatureError("the face it is based on is no longer there");
         face["probe"] = {at.X(), at.Y(), at.Z()};
         GProp_GProps sp;
@@ -832,7 +916,7 @@ struct PartModel::Impl {
     TopoDS_Face face;
     gp_Pnt at;
     gp_Dir n;
-    if (!findFace(probe, want, f.params.value("feature", std::string()), b, face, at, n))
+    if (!findFace(probe, want, f.params.value("feature", std::string()), b, face, at, n, f.params.value("role", std::string())))
       throw FeatureError("the face it pushes is no longer there");
     f.params["probe"] = {at.X(), at.Y(), at.Z()};
     f.params["normal"] = {n.X(), n.Y(), n.Z()};
@@ -942,12 +1026,12 @@ struct PartModel::Impl {
     // Up to face: run through everything, then keep what lies on the sketch's side of the face's
     // plane. Needs a flat face.
     if (!p.contains("face")) throw FeatureError("aim at the face to extrude up to");
-    const Json& face = p.at("face");
+    Json face = p.at("face");
     int b;
     TopoDS_Face fc;
     gp_Pnt at;
     gp_Dir n;
-    if (!findFace(gp_Pnt(xyz(face.at("probe"))), gp_Dir(xyz(face.at("normal"))), face.value("feature", std::string()), b, fc, at, n))
+    if (!findFaceRef(face, b, fc, at, n))
       throw FeatureError("the face to extrude up to is gone");
     BRepAdaptor_Surface surf(fc);
     if (surf.GetType() != GeomAbs_Plane) throw FeatureError("up to face needs a flat face");
@@ -1093,11 +1177,11 @@ struct PartModel::Impl {
 
   // Edges of the faces that the target feature owns in this body, filtered by a selector.
   std::vector<TopoDS_Edge> targetEdges(int b, const std::string& target, const std::string& selector) const {
-    int owner = -1;
-    for (size_t i = 0; i < owners.size(); ++i) if (owners[i] == target) owner = static_cast<int>(i);
     std::vector<TopoDS_Face> faces;
-    for (FaceTags::Iterator it(tags[b]); it.More(); it.Next())
-      if (it.Value() == owner) faces.push_back(TopoDS::Face(it.Key()));
+    for (FaceTags::Iterator it(tags[b]); it.More(); it.Next()) {
+      const std::string& t = owners[it.Value()];
+      if (t.substr(0, t.find('#')) == target) faces.push_back(TopoDS::Face(it.Key()));
+    }
     if (faces.empty()) return {};
     double zmin = 1e300, zmax = -1e300;
     for (auto& f : faces)
@@ -1231,9 +1315,10 @@ struct PartModel::Impl {
 
   // Shell: hollows the body holding the picked faces to wall thickness t, leaving those faces
   // open; with no faces, hollows it closed.
-  void applyShell(const Feature& f, int self) {
+  void applyShell(Feature& f, int self) {
     double t = positive(f.params, "t");
-    const Json& faces = f.params.value("faces", Json::array());
+    if (!f.params.contains("faces")) f.params["faces"] = Json::array();
+    Json& faces = f.params["faces"];
     int body = -1;
     TopTools_ListOfShape open;
     for (auto& fr : faces) {
@@ -1241,7 +1326,7 @@ struct PartModel::Impl {
       TopoDS_Face fc;
       gp_Pnt at;
       gp_Dir n;
-      if (!findFace(gp_Pnt(xyz(fr.at("probe"))), gp_Dir(xyz(fr.at("normal"))), fr.value("feature", std::string()), b, fc, at, n))
+      if (!findFaceRef(fr, b, fc, at, n))
         throw FeatureError("a face you picked is no longer there");
       if (body >= 0 && b != body) throw FeatureError("the open faces must all be on one body");
       body = b;
@@ -1390,7 +1475,7 @@ struct PartModel::Impl {
     TopoDS_Face f;
     gp_Pnt at;
     gp_Dir n;
-    if (!findFace(gp_Pnt(xyz(r.at("probe"))), gp_Dir(xyz(r.at("normal"))), r.value("feature", std::string()), b, f, at, n))
+    if (!findFaceRef(r, b, f, at, n))
       throw FeatureError("a body it uses is no longer there");
     r["probe"] = {at.X(), at.Y(), at.Z()};
     r["normal"] = {n.X(), n.Y(), n.Z()};
@@ -1413,7 +1498,7 @@ struct PartModel::Impl {
       TopoDS_Face face;
       gp_Pnt at;
       gp_Dir n;
-      if (!findFace(gp_Pnt(xyz(fr.at("probe"))), gp_Dir(xyz(fr.at("normal"))), fr.value("feature", std::string()), b, face, at, n))
+      if (!findFaceRef(fr, b, face, at, n))
         throw FeatureError("a face to draft is no longer there");
       if (body >= 0 && b != body) throw FeatureError("the faces to draft must be on one body");
       body = b;
@@ -1532,9 +1617,85 @@ struct PartModel::Impl {
     if (!any) throw FeatureError("no edges of '" + tf->name + "' match '" + sel + "'");
   }
 
+  // A face's role within the feature that made it: "start" / "end" caps and "side<k>" (the k-th
+  // profile edge) for an extrude from a sketch; for other shapes the axis a flat face looks
+  // along ("p+z") or the kind of curved face ("cyl"). Empty when there is nothing stable to say.
+  std::string faceRole(const Feature& f, const TopoDS_Face& face, const std::vector<TopoDS_Edge>* profileEdges,
+                       const gp_Ax3* sketchAx, const gp_Dir* dir) const {
+    BRepAdaptor_Surface sa(face);
+    double u0, u1, v0, v1;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    gp_Dir nn = outwardNormal(face, (u0 + u1) / 2, (v0 + v1) / 2);
+    if (profileEdges && sketchAx && dir) {
+      if (sa.GetType() == GeomAbs_Plane && std::abs(nn.Dot(*dir)) > 0.999) return nn.Dot(*dir) < 0 ? "start" : "end";
+      gp_Pnt c = sa.Value((u0 + u1) / 2, (v0 + v1) / 2);
+      gp_Vec N(sketchAx->Direction()), d(*dir);
+      double den = d.Dot(N);
+      if (std::abs(den) < 1e-12) return {};
+      double t = gp_Vec(sketchAx->Location(), c).Dot(N) / den;
+      gp_Pnt q = c.Translated(-d * t);
+      TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(q).Vertex();
+      double best = 1e300;
+      int k = -1;
+      for (size_t i = 0; i < profileEdges->size(); ++i) {
+        BRepExtrema_DistShapeShape dist(v, (*profileEdges)[i]);
+        if (dist.IsDone() && dist.Value() < best) {
+          best = dist.Value();
+          k = static_cast<int>(i);
+        }
+      }
+      return k < 0 ? std::string() : "side" + std::to_string(k);
+    }
+    (void)f;
+    switch (sa.GetType()) {
+      case GeomAbs_Plane: {
+        const char* axes[] = {"x", "y", "z"};
+        double c[] = {nn.X(), nn.Y(), nn.Z()};
+        for (int i = 0; i < 3; ++i)
+          if (std::abs(c[i]) > 0.9999) return std::string("p") + (c[i] > 0 ? "+" : "-") + axes[i];
+        return {};
+      }
+      case GeomAbs_Cylinder: return "cyl";
+      case GeomAbs_Cone: return "cone";
+      case GeomAbs_Sphere: return "sphere";
+      default: return {};
+    }
+  }
+
+  // Tags a new tool shape's faces with its feature and each face's role.
+  FaceTags roleTags(const Feature& f, const TopoDS_Shape& tool, int self) {
+    FaceTags t;
+    std::vector<TopoDS_Edge> edges;
+    gp_Ax3 ax;
+    gp_Dir dir;
+    bool sketched = false;
+    if (f.type == "extrude" && f.params.contains("sketch")) {
+      try {
+        const SketchState& st = sketchRef(f.params, "sketch");
+        ax = sketchAxes(st.sketch.plane);
+        dir = extrudeDir(st, f.params);
+        for (auto& pf : profileOf(st))
+          for (TopExp_Explorer e(pf, TopAbs_EDGE); e.More(); e.Next()) edges.push_back(TopoDS::Edge(e.Current()));
+        sketched = !edges.empty();
+      } catch (const std::exception&) {
+        sketched = false;
+      }
+    }
+    for (TopExp_Explorer e(tool, TopAbs_FACE); e.More(); e.Next()) {
+      if (t.IsBound(e.Current())) continue;
+      std::string r;
+      try {
+        r = faceRole(f, TopoDS::Face(e.Current()), sketched ? &edges : nullptr, sketched ? &ax : nullptr, sketched ? &dir : nullptr);
+      } catch (const Standard_Failure&) {
+        r.clear();
+      }
+      t.Bind(e.Current(), r.empty() ? self : ownerIndex(f.id + "#" + r));
+    }
+    return t;
+  }
+
   void applyBoolean(const Feature& f, const TopoDS_Shape& tool, int self) {
-    FaceTags toolTags;
-    tagAll(tool, self, toolTags);
+    FaceTags toolTags = roleTags(f, tool, self);
     auto merged = [&](const FaceTags& a) {
       FaceTags m = a;
       for (FaceTags::Iterator it(toolTags); it.More(); it.Next()) m.Bind(it.Key(), it.Value());
@@ -1589,8 +1750,15 @@ struct PartModel::Impl {
     sketches.clear();
     refs.clear();
     evaluateVariables(r);
-    for (auto& f : doc.features) {
+    for (size_t fi = 0; fi < doc.features.size(); ++fi) {
+      Feature& f = doc.features[fi];
       FeatureStatus st{f.id, true, {}};
+      if (doc.rollback >= 0 && static_cast<int>(fi) >= doc.rollback) {
+        st.message = "below the rollback bar";
+        st.rolledBack = true;
+        r.features.push_back(st);
+        continue;
+      }
       if (f.suppressed) {
         st.message = "suppressed";
         r.features.push_back(st);
@@ -1620,14 +1788,26 @@ struct PartModel::Impl {
     }
     faceIndex.assign(bodies.size(), ShapeIndex());
     for (size_t b = 0; b < bodies.size(); ++b) TopExp::MapShapes(bodies[b], TopAbs_FACE, faceIndex[b]);
+    buildSection();
     r.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     report = r;
     return r;
   }
 
-  std::string ownerOf(int b, const TopoDS_Shape& face) const {
+  // Tags are "featureId" or "featureId#role"; the role names the face within its feature (an
+  // extrude's end caps and sides, a box's six faces) so references survive upstream edits.
+  std::string tagOf(int b, const TopoDS_Shape& face) const {
     if (b < 0 || b >= static_cast<int>(tags.size()) || !tags[b].IsBound(face)) return {};
     return owners[tags[b].Find(face)];
+  }
+  std::string ownerOf(int b, const TopoDS_Shape& face) const {
+    std::string t = tagOf(b, face);
+    return t.substr(0, t.find('#'));
+  }
+  std::string roleOf(int b, const TopoDS_Shape& face) const {
+    std::string t = tagOf(b, face);
+    size_t h = t.find('#');
+    return h == std::string::npos ? std::string() : t.substr(h + 1);
   }
 };
 
@@ -1643,6 +1823,99 @@ PartDocument& PartModel::document() { return d_->doc; }
 RebuildReport PartModel::rebuild() { return d_->rebuild(); }
 const RebuildReport& PartModel::lastReport() const { return d_->report; }
 int PartModel::bodyCount() const { return static_cast<int>(d_->bodies.size()); }
+
+void PartModel::setSection(const std::optional<std::pair<Vec3, Vec3>>& plane) {
+  if (plane) {
+    gp_Vec n(plane->second[0], plane->second[1], plane->second[2]);
+    if (n.Magnitude() < 1e-12) return;
+    d_->section = gp_Pln(gp_Pnt(plane->first[0], plane->first[1], plane->first[2]), gp_Dir(n));
+  } else {
+    d_->section.reset();
+  }
+  d_->buildSection();
+}
+
+bool PartModel::hasSection() const { return d_->section.has_value(); }
+
+PartModel::FaceMeasure PartModel::faceMeasure(int b, int fi) const {
+  FaceMeasure m;
+  if (b < 0 || b >= bodyCount() || fi < 0 || fi >= d_->faceIndex[static_cast<size_t>(b)].Extent()) return m;
+  TopoDS_Face face = TopoDS::Face(d_->faceIndex[static_cast<size_t>(b)](fi + 1));
+  GProp_GProps g;
+  BRepGProp::SurfaceProperties(face, g);
+  m.area = g.Mass();
+  gp_Pnt c = g.CentreOfMass();
+  m.centre = {c.X(), c.Y(), c.Z()};
+  BRepAdaptor_Surface sa(face);
+  m.kind = surfaceKind(face);
+  auto put = [](Vec3& v, const gp_XYZ& x) { v = {x.X(), x.Y(), x.Z()}; };
+  switch (sa.GetType()) {
+    case GeomAbs_Plane: {
+      double u0, u1, v0, v1;
+      BRepTools::UVBounds(face, u0, u1, v0, v1);
+      put(m.normal, outwardNormal(face, (u0 + u1) / 2, (v0 + v1) / 2).XYZ());
+      break;
+    }
+    case GeomAbs_Cylinder:
+      m.radius = sa.Cylinder().Radius();
+      put(m.axis, sa.Cylinder().Axis().Direction().XYZ());
+      put(m.centre, sa.Cylinder().Location().XYZ());
+      break;
+    case GeomAbs_Sphere:
+      m.radius = sa.Sphere().Radius();
+      put(m.centre, sa.Sphere().Location().XYZ());
+      break;
+    case GeomAbs_Torus:
+      m.radius = sa.Torus().MinorRadius();
+      m.radius2 = sa.Torus().MajorRadius();
+      put(m.axis, sa.Torus().Axis().Direction().XYZ());
+      put(m.centre, sa.Torus().Location().XYZ());
+      break;
+    case GeomAbs_Cone: {
+      put(m.axis, sa.Cone().Axis().Direction().XYZ());
+      put(m.centre, sa.Cone().Location().XYZ());
+      double u0, u1, v0, v1;
+      BRepTools::UVBounds(face, u0, u1, v0, v1);
+      gp_Pnt mid = sa.Value((u0 + u1) / 2, (v0 + v1) / 2);
+      m.radius = gp_Lin(sa.Cone().Axis()).Distance(mid);
+      break;
+    }
+    default:
+      break;
+  }
+  m.ok = true;
+  return m;
+}
+
+std::vector<PartModel::Interference> PartModel::interference() const {
+  std::vector<Interference> out;
+  const auto& bs = d_->bodies;
+  std::vector<Bnd_Box> boxes(bs.size());
+  for (size_t i = 0; i < bs.size(); ++i) BRepBndLib::Add(bs[i], boxes[i]);
+  for (size_t i = 0; i < bs.size(); ++i)
+    for (size_t j = i + 1; j < bs.size(); ++j) {
+      if (boxes[i].IsOut(boxes[j])) continue;
+      BRepAlgoAPI_Common op(bs[i], bs[j]);
+      if (!op.IsDone() || op.HasErrors()) continue;
+      GProp_GProps g;
+      BRepGProp::VolumeProperties(op.Shape(), g);
+      if (g.Mass() < 1e-15) continue;
+      Interference x;
+      x.a = static_cast<int>(i);
+      x.b = static_cast<int>(j);
+      x.volume = g.Mass();
+      gp_Pnt c = g.CentreOfMass();
+      x.centre = {c.X(), c.Y(), c.Z()};
+      out.push_back(x);
+    }
+  return out;
+}
+
+std::string PartModel::faceRole(int body, int face) const {
+  if (body < 0 || body >= static_cast<int>(d_->faceIndex.size())) return {};
+  if (face < 0 || face >= d_->faceIndex[static_cast<size_t>(body)].Extent()) return {};
+  return d_->roleOf(body, d_->faceIndex[static_cast<size_t>(body)](face + 1));
+}
 const TopoDS_Shape& PartModel::body(int i) const { return d_->bodies.at(static_cast<size_t>(i)); }
 const std::map<std::string, double>& PartModel::variables() const { return d_->vars; }
 
@@ -1657,10 +1930,11 @@ double PartModel::param(const Feature& f, const std::string& key, double fallbac
 
 BodyMesh PartModel::mesh(int b, double defl, double ang) const {
   BodyMesh out;
-  const TopoDS_Shape& shape = body(b);
-  BRepMesh_IncrementalMesh mesher(shape, defl, false, ang, true);
-  const ShapeIndex& faces = d_->faceIndex.at(static_cast<size_t>(b));
-  out.faces.resize(static_cast<size_t>(faces.Extent()));
+  const size_t sb = static_cast<size_t>(b);
+  const bool cut = d_->sectioned(sb);
+  const ShapeIndex& faces = d_->faceIndex.at(sb);
+  // The original faces keep their indices; in a section view the cut face is one more, last.
+  out.faces.resize(static_cast<size_t>(faces.Extent()) + (cut ? 1 : 0));
   for (int fi = 1; fi <= faces.Extent(); ++fi) {
     TopoDS_Face face = TopoDS::Face(faces(fi));
     FaceInfo& info = out.faces[static_cast<size_t>(fi - 1)];
@@ -1670,6 +1944,24 @@ BodyMesh PartModel::mesh(int b, double defl, double ang) const {
     BRepTools::UVBounds(face, u0, u1, v0, v1);
     gp_Dir n = outwardNormal(face, 0.5 * (u0 + u1), 0.5 * (v0 + v1));
     info.normal = {n.X(), n.Y(), n.Z()};
+  }
+  if (cut) {
+    FaceInfo& cap = out.faces.back();
+    cap.kind = "section";
+    gp_Dir n = d_->section->Axis().Direction();
+    cap.normal = {n.X(), n.Y(), n.Z()};
+  }
+  const TopoDS_Shape& shape = cut ? d_->sectBodies[sb] : body(b);
+  if (shape.IsNull()) return out;
+  BRepMesh_IncrementalMesh mesher(shape, defl, false, ang, true);
+  const ShapeIndex& shown = cut ? d_->sectFaces[sb] : faces;
+  for (int si = 1; si <= shown.Extent(); ++si) {
+    TopoDS_Face face = TopoDS::Face(shown(si));
+    int fi = si;
+    if (cut) {
+      int o = d_->sectOrig[sb][static_cast<size_t>(si - 1)];
+      fi = o < 0 ? faces.Extent() + 1 : o + 1;
+    }
 
     TopLoc_Location loc;
     occ::handle<Poly_Triangulation> tri = BRep_Tool::Triangulation(face, loc);
@@ -1716,10 +2008,12 @@ std::optional<PickHit> PartModel::pick(const Vec3& o, const Vec3& dir, double ma
   d_->pickers.resize(d_->bodies.size());
   std::optional<PickHit> best;
   for (size_t b = 0; b < d_->bodies.size(); ++b) {
+    const bool cut = d_->sectioned(b);
+    if (cut && d_->sectBodies[b].IsNull()) continue;
     auto& pk = d_->pickers[b];
     if (!pk) {
       pk = std::make_unique<IntCurvesFace_ShapeIntersector>();
-      pk->Load(d_->bodies[b], 1e-7);
+      pk->Load(cut ? d_->sectBodies[b] : d_->bodies[b], 1e-7);
     }
     pk->PerformNearest(line, 0, maxDistance);
     if (!pk->IsDone() || pk->NbPnt() < 1) continue;
@@ -1730,8 +2024,14 @@ std::optional<PickHit> PartModel::pick(const Vec3& o, const Vec3& dir, double ma
     gp_Dir n = outwardNormal(face, pk->UParameter(1), pk->VParameter(1));
     PickHit h;
     h.body = static_cast<int>(b);
-    h.face = d_->faceIndex[b].FindIndex(face) - 1;
-    h.featureId = d_->ownerOf(static_cast<int>(b), face);
+    if (cut) {
+      int si = d_->sectFaces[b].FindIndex(face);
+      h.face = si > 0 ? d_->sectOrig[b][static_cast<size_t>(si - 1)] : -1;
+      if (h.face >= 0) h.featureId = d_->ownerOf(static_cast<int>(b), d_->faceIndex[b](h.face + 1));
+    } else {
+      h.face = d_->faceIndex[b].FindIndex(face) - 1;
+      h.featureId = d_->ownerOf(static_cast<int>(b), face);
+    }
     h.point = {p.X(), p.Y(), p.Z()};
     h.normal = {n.X(), n.Y(), n.Z()};
     h.distance = w;
@@ -2105,7 +2405,9 @@ bool PartModel::offsetFace(const PickHit& hit, double delta, std::string* messag
     g.name = d_->doc.uniqueName("Push/Pull");
     g.params = {{"probe", {at.X(), at.Y(), at.Z()}}, {"normal", {n.X(), n.Y(), n.Z()}},
                 {"feature", hit.featureId}, {"distance", delta}};
-    name = d_->doc.add(g).name;
+    std::string role = faceRole(hit.body, hit.face);
+    if (!role.empty()) g.params["role"] = role;
+    name = d_->doc.insert(g).name;
   }
   RebuildReport r = rebuild();
   if (wasOk && !r.ok) {

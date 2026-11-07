@@ -348,11 +348,14 @@ func refresh_panel() -> void:
 			err.add_theme_color_override("font_color", Color("e0775f"))
 			_params.add_child(err)
 		var params: Dictionary = current.params
+		_history_buttons(current, features)
 		if current.type == "sketch":
 			_sketch_summary(current)
 		elif (current.type in ["extrude", "revolve", "sweep", "loft"] and (params.has("sketch") or params.has("sketches"))) \
 				or (current.type == "plane" and params.get("kind", "") in ["offset", "angle"]) \
-				or (current.type == "point" and params.get("kind", "") == "xyz"):
+				or (current.type == "point" and params.get("kind", "") == "xyz") \
+				or current.type in ["fillet", "chamfer", "hole", "shell", "pattern", "mirror", "draft"] \
+				or (current.type == "body" and params.get("kind", "") != "delete"):
 			var edit := Button.new()
 			edit.text = "Edit %s" % current.name
 			var fid: String = current.id
@@ -366,9 +369,26 @@ func refresh_panel() -> void:
 		del.pressed.connect(func(): request.emit("delete_feature", current.id))
 		_params.add_child(del)
 	var first: Control = null
-	for f in features:
+	var bar: int = doc.get_rollback() if doc.has_method("get_rollback") else -1
+	for fi in features.size():
+		var f: Dictionary = features[fi]
+		if fi == bar:
+			var rb := Button.new()
+			rb.text = "━━  rollback bar  ·  roll forward  ━━"
+			rb.add_theme_color_override("font_color", Color("ff8a3d"))
+			rb.pressed.connect(func(): request.emit("roll_forward", null))
+			_tree.add_child(rb)
 		var b := Button.new()
-		b.text = ("●  " if f.id == _feature_id else "    ") + f.name + ("" if f.ok else "  ⚠")
+		var state := ""
+		if f.get("rolled_back", false):
+			state = "  (rolled back)"
+		elif f.get("suppressed", false):
+			state = "  (suppressed)"
+		elif not f.ok:
+			state = "  ⚠"
+		b.text = ("●  " if f.id == _feature_id else "    ") + f.name + state
+		if f.get("rolled_back", false) or f.get("suppressed", false):
+			b.add_theme_color_override("font_color", MUTED)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		var fid: String = f.id
 		b.pressed.connect(func():
@@ -395,6 +415,50 @@ func refresh_panel() -> void:
 	var focus: Control = _params.get_child(_params.get_child_count() - 1) if _params.get_child_count() > 1 else first
 	if focus != null and Actions.last_device == "controller":
 		focus.call_deferred("grab_focus")
+
+
+## Types whose references can be picked again in the room when they no longer resolve.
+const REPICK_TYPES := ["fillet", "chamfer", "shell", "draft", "hole", "pattern", "mirror", "body", "face_offset", "extrude", "plane"]
+
+
+## Move up / down, suppress, roll back to here, and (for a failed feature) re-pick.
+func _history_buttons(current: Dictionary, features: Array) -> void:
+	var fid: String = current.id
+	var at := 0
+	for i in features.size():
+		if features[i].id == fid:
+			at = i
+	var row := HBoxContainer.new()
+	var up := Button.new()
+	up.text = "▲ Move up"
+	up.disabled = at == 0
+	up.pressed.connect(func(): request.emit("move_feature_up", fid))
+	row.add_child(up)
+	var down := Button.new()
+	down.text = "▼ Move down"
+	down.disabled = at == features.size() - 1
+	down.pressed.connect(func(): request.emit("move_feature_down", fid))
+	row.add_child(down)
+	_params.add_child(row)
+	var row2 := HBoxContainer.new()
+	var sup := Button.new()
+	sup.text = "Unsuppress" if current.get("suppressed", false) else "Suppress"
+	sup.pressed.connect(func(): request.emit("toggle_suppress", fid))
+	row2.add_child(sup)
+	var roll := Button.new()
+	roll.text = "Roll back to here"
+	roll.tooltip_text = "Build up to this feature; new features go after it"
+	roll.disabled = at == features.size() - 1 and doc.get_rollback() < 0
+	roll.pressed.connect(func(): request.emit("roll_here", fid))
+	row2.add_child(roll)
+	_params.add_child(row2)
+	if not current.ok and not current.get("rolled_back", false) and current.type in REPICK_TYPES \
+			and (current.type != "extrude" or current.params.get("end", "") == "up_to_face") \
+			and (current.type != "plane" or current.params.get("base", null) is Dictionary):
+		var fix := Button.new()
+		fix.text = "Re-pick what %s uses…" % current.name
+		fix.pressed.connect(func(): request.emit("repick", fid))
+		_params.add_child(fix)
 
 
 func _sketch_summary(f: Dictionary) -> void:

@@ -226,13 +226,13 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
 | Feature tree with history | FeatureManager / Timeline / Browser | ✓ | Model panel; edit sketch, edit feature |
-| Rollback, reorder, insert mid-history | All three | ✗ | Features are appended at the end |
-| Suppress / unsuppress | All three | ◐ | Stored and honoured by the core; no UI |
+| Rollback, reorder, insert mid-history | All three | ✓ | Rollback bar in the model panel; new features go in at the bar; moves that break a feature are refused (0.6) |
+| Suppress / unsuppress | All three | ✓ | Model panel (0.6) |
 | Edit a feature's definition | All three | ✓ | Feature panel with live preview |
 | Global variables and equations | Equations / Parameters / Parameters | ✓ | With units |
 | Text parameters | Fusion (Oct 2026), iLogic | ✗ | |
 | Configurations / design tables | Configurations, Design Tables / Configurations / Model States, iParts | ✗ | |
-| Failure diagnosis | FeatureXpert / warnings / Design Doctor | ◐ | Failed features are named with a reason when a file rebuilds; edits that would break the model are refused |
+| Failure diagnosis | FeatureXpert / warnings / Design Doctor | ◐ | Failed features marked ⚠ with the reason; Re-pick picks their edges or faces again in the room (0.6); edits that would break the model are refused |
 | Undo / redo | All three | ✓ | Model and sketch level |
 | Cancel a long computation | SW 2026: Esc during fillets and patterns | ✗ | |
 
@@ -491,7 +491,7 @@ release leaves the game usable on its own; earlier ones unblock later ones.
 3. Draft.
 4. Body tools: combine, subtract, split, delete.
 
-### 0.6 Control the history
+### 0.6 Control the history (done)
 1. Rollback bar: insert a feature mid-history.
 2. Reorder; suppress and unsuppress.
 3. Failed features marked, with a "re-pick the face" fix.

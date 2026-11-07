@@ -121,7 +121,25 @@ public:
       }
       for (auto& id : e.pts) need(id);
     }
-    for (auto& c : s_.constraints) addConstraint(c);
+    for (auto& c : s_.constraints) {
+      if (!c.driven) {
+        addConstraint(c);
+        continue;
+      }
+      // A driven dimension measures: its residual against a target of zero is the size itself.
+      SketchConstraint probe = c;
+      probe.value = 0.0;
+      measuring_ = true;
+      measured_ = nullptr;
+      try {
+        addConstraint(probe);
+      } catch (...) {
+        measuring_ = false;
+        throw;
+      }
+      measuring_ = false;
+      if (measured_) driven_.push_back({c.id, c.kind == "diameter" ? 2.0 : 1.0, measured_});
+    }
     for (auto& p : s_.patterns) addPattern(p);
   }
 
@@ -134,6 +152,8 @@ public:
     if (n == 0 || m == 0) {
       res.dof = n;
       write(X_);
+      measure(X_);
+      if (n > 0) freeGeometry(V(), 0, n, res);
       return res;
     }
     V X = X_;
@@ -199,9 +219,12 @@ public:
       }
     }
     write(X);
+    measure(X);
     res.residual = std::sqrt(cost / m);
     res.ok = res.residual < 1e-8;
-    res.dof = n - rankOf(jacobian(X), m, n);
+    V Jf = jacobian(X);
+    res.dof = n - rankOf(Jf, m, n);
+    if (res.dof > 0) freeGeometry(Jf, m, n, res);
     if (!res.ok) {
       for (int i = 0; i < m; ++i)
         if (std::abs(r[i]) > 1e-7 && !owner_[i].empty() &&
@@ -218,6 +241,67 @@ public:
 
 private:
   struct P { double x, y; };
+
+  struct Driven {
+    std::string id;
+    double scale;
+    std::function<double(const V&)> fn;
+  };
+  bool measuring_ = false;
+  std::function<double(const V&)> measured_;
+  std::vector<Driven> driven_;
+
+  // Writes each driven dimension's measured size into its value (SI: metres or radians).
+  void measure(const V& X) {
+    for (auto& d : driven_)
+      for (auto& c : s_.constraints)
+        if (c.id == d.id) c.value = std::abs(d.fn(X)) * d.scale;
+  }
+
+  // The unknowns the constraints leave free span the Jacobian's null space; a point is free when
+  // either of its coordinates has a component there.
+  void freeGeometry(const V& J, int m, int n, SolveResult& res) const {
+    // Row-reduce J; columns without a pivot are free directions.
+    V M = J;
+    double scale = 0;
+    for (double v : M) scale = std::max(scale, std::abs(v));
+    const double tol = 1e-9 * std::max(scale, 1.0) * std::max(m, n);
+    std::vector<int> pivCol;
+    int row = 0;
+    for (int c = 0; c < n && row < m; ++c) {
+      int piv = -1;
+      double best = tol;
+      for (int r = row; r < m; ++r)
+        if (std::abs(M[r * n + c]) > best) { best = std::abs(M[r * n + c]); piv = r; }
+      if (piv < 0) continue;
+      for (int k = 0; k < n; ++k) std::swap(M[row * n + k], M[piv * n + k]);
+      double d = M[row * n + c];
+      for (int k = 0; k < n; ++k) M[row * n + k] /= d;
+      for (int r = 0; r < m; ++r) {
+        if (r == row) continue;
+        double f = M[r * n + c];
+        if (f == 0) continue;
+        for (int k = 0; k < n; ++k) M[r * n + k] -= f * M[row * n + k];
+      }
+      pivCol.push_back(c);
+      ++row;
+    }
+    std::vector<bool> isPivot(static_cast<size_t>(n), false);
+    for (int c : pivCol) isPivot[static_cast<size_t>(c)] = true;
+    std::vector<bool> freeVar(static_cast<size_t>(n), false);
+    for (int f = 0; f < n; ++f) {
+      if (isPivot[static_cast<size_t>(f)]) continue;
+      freeVar[static_cast<size_t>(f)] = true;  // the null-space vector for column f moves f itself
+      for (size_t k = 0; k < pivCol.size(); ++k)
+        if (std::abs(M[static_cast<int>(k) * n + f]) > 1e-9) freeVar[static_cast<size_t>(pivCol[k])] = true;
+    }
+    for (auto& [id, i] : pidx_)
+      if (freeVar[static_cast<size_t>(i)] || freeVar[static_cast<size_t>(i + 1)]) res.freePoints.push_back(id);
+    for (auto& [id, i] : ridx_)
+      if (freeVar[static_cast<size_t>(i)]) res.freeEntities.push_back(id);
+    std::sort(res.freePoints.begin(), res.freePoints.end());
+    std::sort(res.freeEntities.begin(), res.freeEntities.end());
+  }
 
   // Const view, so lookups see the implicit origin "o".
   const Sketch& cs() const { return s_; }
@@ -286,6 +370,10 @@ private:
   }
 
   void add(const std::string& owner, std::function<double(const V&)> f) {
+    if (measuring_) {
+      if (!measured_) measured_ = std::move(f);
+      return;
+    }
     fns_.push_back(std::move(f));
     owner_.push_back(owner);
   }
@@ -722,6 +810,7 @@ Sketch Sketch::fromJson(const Json& j) {
     sc.kind = c.at("kind").get<std::string>();
     sc.refs = c.value("refs", std::vector<std::string>{});
     sc.value = c.value("value", Json());
+    sc.driven = c.value("driven", false);
     s.constraints.push_back(sc);
   }
   return s;
@@ -768,6 +857,7 @@ Json Sketch::toJson() const {
   for (auto& c : constraints) {
     Json o = {{"id", c.id}, {"kind", c.kind}, {"refs", c.refs}};
     if (!c.value.is_null()) o["value"] = c.value;
+    if (c.driven) o["driven"] = true;
     cons.push_back(o);
   }
   Json out = {{"plane", plane.toJson()}, {"planeName", planeName}, {"points", pts}, {"entities", ents},

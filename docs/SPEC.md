@@ -280,6 +280,32 @@ aims at in the room, then open the feature panel on the sizes with a live previe
   undoes. Bodies are remembered by a face on them, so the feature follows edits upstream.
 - The wheel's inner ring grows with the number of groups so its buttons never overlap.
 
+## Controlling the history (0.6)
+
+The model panel (View / Tab) is the feature tree. A picked feature shows **▲ Move up / ▼ Move
+down**, **Suppress / Unsuppress**, **Roll back to here** and, when the feature fails, **Re-pick
+what it uses…**.
+
+- **Rollback bar**: Roll back to here builds the part only up to that feature; the features
+  below the bar are listed as rolled back and greyed, and an orange bar row sits in the tree
+  (press it to roll forward). New features from any tool go in at the bar, which moves down past
+  them, so a feature can be inserted mid-history. The bar is saved with the part (`rollback` in
+  the manifest) and undoes like any edit.
+- **Reorder**: a move that would make a feature fail that builds now is refused with the reason
+  (for example a pattern moved above what it repeats); the bar stays in front of the same
+  rolled-back features.
+- **Suppress**: the feature is skipped in the rebuild; anything that then fails is named.
+- **Re-pick**: switches to the tool that made the feature (fillet, chamfer, shell, draft, hole,
+  patterns, mirror, body tools) with the feature as the target: picking again updates it instead
+  of making a new one. Push/pull, up-to-face extrudes and planes on a face use a Re-pick tool that
+  takes the face aimed at.
+- **Stronger face references**: every face a feature makes is tagged with its *role* in that
+  feature: an extrude's `start` and `end` caps and `side<k>` (the k-th profile edge), a flat
+  face's axis (`p+z`) or a curved face's kind (`cyl`) for other shapes. Face references store the
+  role; on rebuild the face with the same feature and role is taken first (nearest the old spot if
+  a later cut split it), and only then the old nearest-face-with-that-normal rule. A push/pull of
+  one of two parallel faces no longer jumps to the other when the sketch moves.
+
 ## Native file layout (`.fpprt`)
 
 ```

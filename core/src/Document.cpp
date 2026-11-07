@@ -78,6 +78,65 @@ Feature& PartDocument::add(Feature f) {
   return features.back();
 }
 
+int PartDocument::indexOf(const std::string& id) const {
+  for (size_t i = 0; i < features.size(); ++i)
+    if (features[i].id == id) return static_cast<int>(i);
+  return -1;
+}
+
+size_t PartDocument::insertionPoint() const {
+  if (rollback < 0 || rollback >= static_cast<int>(features.size())) return features.size();
+  return static_cast<size_t>(rollback);
+}
+
+Feature& PartDocument::insert(Feature f) {
+  size_t at = insertionPoint();
+  if (at == features.size()) return add(std::move(f));
+  Feature& added = add(std::move(f));  // fills id and name at the end, then moves into place
+  Feature moved = added;
+  features.pop_back();
+  features.insert(features.begin() + static_cast<long>(at), moved);
+  rollback = static_cast<int>(at) + 1;
+  return features[at];
+}
+
+bool PartDocument::moveTo(const std::string& id, size_t to) {
+  int from = indexOf(id);
+  if (from < 0 || to >= features.size()) return false;
+  // The bar stays in front of the same rolled-back features (the moved one aside).
+  std::set<std::string> below;
+  if (rollback >= 0)
+    for (size_t i = static_cast<size_t>(rollback); i < features.size(); ++i)
+      if (features[i].id != id) below.insert(features[i].id);
+  bool wasBelow = rollback >= 0 && from >= rollback;
+  Feature f = features[static_cast<size_t>(from)];
+  features.erase(features.begin() + from);
+  features.insert(features.begin() + static_cast<long>(to), f);
+  if (rollback < 0) return true;
+  rollback = -1;
+  for (size_t i = 0; i < features.size(); ++i)
+    if (below.count(features[i].id)) {
+      rollback = static_cast<int>(i);
+      break;
+    }
+  if (rollback < 0 && wasBelow && to == features.size() - 1) rollback = static_cast<int>(to);
+  return true;
+}
+
+void PartDocument::erase(const std::set<std::string>& ids) {
+  int bar = rollback;
+  std::vector<Feature> kept;
+  for (size_t i = 0; i < features.size(); ++i) {
+    if (ids.count(features[i].id)) {
+      if (bar >= 0 && static_cast<int>(i) < rollback) --bar;
+      continue;
+    }
+    kept.push_back(features[i]);
+  }
+  features = std::move(kept);
+  rollback = bar < 0 || bar >= static_cast<int>(features.size()) ? -1 : bar;
+}
+
 Json PartDocument::featuresJson() const {
   Json arr = Json::array();
   for (auto& f : features) {

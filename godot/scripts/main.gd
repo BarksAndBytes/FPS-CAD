@@ -603,8 +603,30 @@ func _on_reference_requested(type: String, params: Dictionary) -> void:
 
 
 func _on_picked_feature_requested(type: String, base: Dictionary, op: String) -> void:
+	if not tools.repair.is_empty():
+		_apply_repair(base)
+		return
 	if dialog.open_feature(type, base, op):
 		_show_tool()
+
+
+## A failed feature's references picked again in the room (Re-pick in the model panel).
+func _apply_repair(base: Dictionary) -> void:
+	var fid: String = tools.repair.id
+	var name: String = tools.repair.name
+	var params := base.duplicate(true)
+	for f in doc.get_features():
+		if f.id == fid and f.params.has("kind"):
+			params.erase("kind")  # the picking tool's default kind must not replace the feature's own
+	tools.repair = {}
+	doc.checkpoint()
+	var r: Dictionary = doc.update_feature(fid, "", params)
+	if r.get("ok", false):
+		hud.toast("%s fixed" % name)
+	else:
+		hud.toast("%s still fails: %s · %s undoes" % [name, r.get("message", ""), Actions.prompt(&"undo")])
+	tools.set_tool_id("select")
+	_on_model_changed()
 
 
 ## A reference to the model face under the crosshair (for "up to face"), or {} when none.
@@ -1334,6 +1356,34 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			get_tree().quit()
 		"select_feature":
 			tools.selected = arg
+		"move_feature_up", "move_feature_down":
+			var feats: Array = doc.get_features()
+			var at := -1
+			for i in feats.size():
+				if feats[i].id == arg:
+					at = i
+			var r: Dictionary = doc.reorder_feature(arg, at + (-1 if action == "move_feature_up" else 1))
+			hud.toast(r.message)
+			_on_model_changed()
+		"toggle_suppress":
+			for f in doc.get_features():
+				if f.id == arg:
+					hud.toast(doc.set_suppressed(arg, not f.get("suppressed", false)).message)
+			_on_model_changed()
+		"roll_here":
+			var feats: Array = doc.get_features()
+			for i in feats.size():
+				if feats[i].id == arg:
+					hud.toast(doc.set_rollback(i + 1).message)
+			_on_model_changed()
+		"roll_forward":
+			hud.toast(doc.set_rollback(-1).message)
+			_on_model_changed()
+		"repick":
+			for f in doc.get_features():
+				if f.id == arg:
+					hud.set_panel(false)
+					tools.start_repair(f)
 		"delete_feature":
 			var r: Dictionary = doc.delete_feature(arg)
 			hud.toast(r.message)

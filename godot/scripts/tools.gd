@@ -49,6 +49,7 @@ const TOOLS := [
 	{id = "combine", name = "Combine bodies", pri = "pick / unpick a body (the first is kept)", alt = "combine, subtract or intersect them", opt = []},
 	{id = "split", name = "Split body", pri = "pick the body to split", alt = "split it with the face or plane you aim at", opt = []},
 	{id = "delete_body", name = "Delete body", pri = "delete the body you aim at", alt = "undo", opt = []},
+	{id = "repick", name = "Re-pick", pri = "pick the face it should use", alt = "cancel", opt = []},
 	{id = "push", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
 	{id = "measure", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
 	{id = "delete", name = "Delete", pri = "delete target", alt = "undo", opt = []},
@@ -70,7 +71,7 @@ const TOOLS := [
 	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "choose its video: a link, a downloaded video or a file", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
-const PART_ONLY := ["fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
+const PART_ONLY := ["repick", "fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
 	"combine", "split", "delete_body", "push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
 	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_arrange"]
 const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_arrange"]
@@ -106,6 +107,7 @@ var _bbox_cache := {}
 var _com_cache: Variant = null
 var _picks: Array = []        # fillet/chamfer: edge_near results; shell: {ref, body, face}
 var _hover_edge := {}
+var repair := {}  # {id, name, type} while a failed feature's references are picked again
 
 
 func tool() -> Dictionary:
@@ -176,6 +178,7 @@ func set_tool(i: int) -> void:
 	_ref_picks = []
 	_picks = []
 	_hover_edge = {}
+	repair = {}
 	view.show_picks([], [])
 	view.highlight_reference("")
 	view.show_ghost("", Vector3.ZERO, {})
@@ -378,6 +381,8 @@ func _act(primary: bool, repeat: bool) -> void:
 			_act_repeat(primary, hit, on_feature)
 		"combine", "split", "delete_body":
 			_act_bodies(primary, hit, on_feature)
+		"repick":
+			_act_repick(primary, hit, on_feature)
 		"ref_plane", "ref_axis", "ref_point", "ref_csys":
 			_act_reference(primary, hit)
 		"board_props", "board_notes", "board_video", "board_arrange":
@@ -606,6 +611,61 @@ func _act_bodies(primary: bool, hit: Dictionary, on_feature: bool) -> void:
 	var target: Dictionary = _picks[0].ref
 	_picks = []
 	picked_feature_requested.emit("body", {kind = "combine", target = target, tools = tools_refs}, "")
+
+
+## Starts picking again what a failed feature uses: its own picking tool, or Re-pick for a face.
+func start_repair(f: Dictionary) -> void:
+	var t: String = f.type
+	var tool_for := {fillet = "fillet", chamfer = "chamfer", shell = "shell", draft = "draft", hole = "hole", mirror = "mirror"}
+	var id: String = tool_for.get(t, "repick")
+	if t == "pattern":
+		id = "circular_pattern" if f.params.get("kind", "") == "circular" else "linear_pattern"
+	elif t == "body":
+		id = "split" if f.params.get("kind", "") == "split" else "combine"
+	set_tool_id(id)
+	repair = {id = f.id, name = f.name, type = t}
+	var how := {
+		fillet = "pick its edges, then %s", chamfer = "pick its edges, then %s", shell = "pick the open faces, then %s",
+		draft = "pick the faces, then %s on the neutral face", hole = "aim where it goes and press %s",
+		pattern = "pick the features, then %s", mirror = "pick the features, then %s on the plane",
+		body = "pick the bodies, then %s"}
+	var verb: String = how.get(t, "aim at the face it should use and press %s")
+	hud.toast("Re-pick for %s: " % f.name + verb % Actions.prompt(&"secondary" if t not in ["hole"] and how.has(t) else &"primary"))
+
+
+func _act_repick(primary: bool, hit: Dictionary, on_feature: bool) -> void:
+	if not primary:
+		repair = {}
+		hud.toast("Re-pick cancelled")
+		set_tool_id("select")
+		return
+	if repair.is_empty():
+		hud.toast("Pick a failed feature in the model panel and press Re-pick")
+		return
+	if not on_feature:
+		hud.toast("Aim at a face of the part")
+		return
+	var ref: Dictionary = doc.face_ref(hit)
+	var base := {}
+	match String(repair.type):
+		"extrude":
+			if doc.plane_from_hit(hit).is_empty():
+				hud.toast("Up to face needs a flat face")
+				return
+			base = {face = ref, end = "up_to_face"}
+		"face_offset":
+			base = ref.duplicate()
+			if not ref.has("role"):
+				base.role = null
+		"plane":
+			if doc.plane_from_hit(hit).is_empty():
+				hud.toast("Aim at a flat face")
+				return
+			base = {base = {face = ref}}
+		_:
+			hud.toast("%s cannot be re-picked here: edit it or delete it" % repair.name)
+			return
+	picked_feature_requested.emit(String(repair.type), base, "")
 
 
 func _feature_name(fid: String) -> String:

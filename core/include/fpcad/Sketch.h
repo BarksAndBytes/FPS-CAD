@@ -113,7 +113,8 @@ struct SketchConstraint {
   std::string id;
   std::string kind;
   std::vector<std::string> refs;
-  Json value;  // dimensions only
+  Json value;  // dimensions only; a driven dimension's value is what the solver measured
+  bool driven = false;  // a reference dimension: shows the size, does not drive it
 };
 
 struct Sketch {
@@ -141,6 +142,10 @@ struct SolveResult {
   double residual = 0;       // root-mean-square constraint error, metres
   std::vector<std::string> conflicts;  // constraint ids still violated when !ok
   std::string message;
+  // Under-defined geometry: points that can still move, and circles, ellipses and text whose
+  // size can still change (empty when the sketch is fully defined).
+  std::vector<std::string> freePoints;
+  std::vector<std::string> freeEntities;
 };
 
 // Evaluates a dimension value (number or expression) in SI units.

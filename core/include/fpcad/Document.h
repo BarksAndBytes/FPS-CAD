@@ -6,6 +6,7 @@
 
 #include <array>
 #include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <vector>
@@ -73,8 +74,21 @@ struct PartDocument {
   // Shapes brought in by import features (STEP), by id, in OCCT's binary BRep format. Saved in
   // the part file as imports/<id>.brep.
   std::map<std::string, std::string> imports;
+  // The rollback bar: features from this index on are not built (-1: the bar is at the end).
+  // New features go in at the bar.
+  int rollback = -1;
 
   Feature* find(const std::string& id);
+  int indexOf(const std::string& id) const;  // -1 when absent
+  // Index where new features go: the rollback bar, or the end.
+  size_t insertionPoint() const;
+  // Inserts at the rollback bar (moving the bar down past it), filling id and name like add().
+  Feature& insert(Feature f);
+  // Moves a feature to index to (in the list without it); the rollback bar keeps its place
+  // between the same neighbours. False when id is absent or to is out of range.
+  bool moveTo(const std::string& id, size_t to);
+  // Removes features by id, keeping the rollback bar between the same neighbours.
+  void erase(const std::set<std::string>& ids);
   const Feature* find(const std::string& id) const;
   std::string uniqueName(const std::string& base) const;
   Feature& add(Feature f);  // fills id and name when empty
