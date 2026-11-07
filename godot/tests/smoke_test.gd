@@ -1144,8 +1144,16 @@ func _video_board(main: Node) -> void:
 	main.tools._act(true, false)
 	await _frames(2)
 	var vb: Node3D = main.boards.extra[-1]
-	_check(vb.kind == "video" and main.numpad.visible and main.numpad._lower, "Video board sets up a board and asks for a link (lower case)")
+	_check(vb.kind == "video" and main.video_menu.visible and main.video_menu.board == vb, "Video board sets up a board and opens its video menu")
+	main.video_menu._choose_link()
+	_check(not main.video_menu.visible and main.numpad.visible and main.numpad._lower, "Enter a link asks for it on the text pad (lower case)")
 	main.numpad.close()
+	_check(WB.is_local("C:/Users/me/Videos/a.mp4") and WB.is_local("/home/me/a.mp4") and WB.is_local("content://com.android.providers/document/1")
+		and WB.is_local("user://videos/x.ogv") and not WB.is_local("https://example.com/a.mp4"), "files on this device are told from web links")
+	_check(WB.local_name("content://com.android.externalstorage.documents/document/primary%3AMovies%2Fclip.mp4") == "clip.mp4"
+		and WB.local_name("content://com.android.providers.media.documents/document/video%3A1234") == "Video from this device"
+		and WB.page_title("<html><head><title>Video &amp; film - Wikipedia</title></head>") == "Video & film - Wikipedia",
+		"local files and pages get readable names")
 	vb.play_file("res://tests/tiny.ogv", "https://example.com/tiny.ogv")
 	await _frames(10)
 	_check(vb.video_state == "playing" and vb._video.is_playing() and vb._view.render_target_update_mode == SubViewport.UPDATE_ALWAYS,
@@ -1227,6 +1235,47 @@ func _video_board(main: Node) -> void:
 			"a failed join falls back to converting in one process, and still plays (%s)" % WB.last_split_problem)
 		WB.last_split_problem = ""
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(WB.cached_path(url)))
+		# A video file on this device: converted, kept in the library under its file name.
+		var local_clip := ProjectSettings.globalize_path("res://tests/ten_seconds.mp4")
+		WB.forget_video(WB.cached_path(local_clip))
+		main.boards.play_video(vb, local_clip)
+		for i in 3000:
+			if vb.video_state != "converting":
+				break
+			await _frames(1)
+		var lib: Array = WB.library()
+		var entry: Dictionary = {}
+		for e in lib:
+			if e.link == local_clip:
+				entry = e
+		_check(vb.video_state == "playing" and not entry.is_empty() and entry.title == "ten_seconds.mp4" and int(entry.bytes) > 0,
+			"a file on this device converts, plays, and is listed in the library by name (%s)" % vb.video_message)
+		# The video menu lists it; choosing it on another board plays the kept copy at once.
+		var other: Node3D = main.boards.add("video", Vector3(2, main.view.room.floor_y(), -2), 0.0, 1.0)
+		main.video_menu.open(other)
+		var rows: int = main.video_menu._list.get_child_count()
+		_check(rows >= 1 and main.video_menu._summary.text.begins_with("Downloaded videos"), "the video menu lists the downloaded videos (%d)" % rows)
+		main.video_menu._play(entry)
+		_check(not main.video_menu.visible and other.video_state == "playing" and other.video_url == local_clip, "choosing one plays it straight away")
+		main.video_menu.open(other)
+		main.video_menu._delete(entry)
+		_check(not FileAccess.file_exists(entry.path) and other.video_state == "ready" and vb.video_state == "ready"
+			and not WB.library().any(func(e): return e.path == entry.path), "Delete stops the boards playing it and removes the file")
+		main.video_menu.close()
+		main.boards.remove(other)
+		# Android's picked files are copied in first, a piece each frame, then converted.
+		vb.video_url = "content://test/tiny.webm"
+		vb.video_title = ""
+		var copied_to: String = WB.cached_path("content://test/tiny.webm")
+		vb._copy_in("res://tests/tiny.webm", copied_to)
+		_check(vb.video_state == "copying", "a picked file is copied in")
+		for i in 3000:
+			if vb.video_state != "copying" and vb.video_state != "converting":
+				break
+			await _frames(1)
+		_check(vb.video_state == "playing" and FileAccess.file_exists(copied_to) and not FileAccess.file_exists(copied_to.get_basename() + ".src"),
+			"then converted and played, the copy cleared away (%s)" % vb.video_message)
+		WB.forget_video(copied_to)
 	else:
 		print("SKIP FFmpeg conversion: no ffmpeg on this machine")
 	vb.play_url("https://youtu.be/abc")

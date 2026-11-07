@@ -66,8 +66,10 @@ var yaw := 0.0
 var board_scale := 1.0
 var notes: Array = []      # kind "notes": the player's notes, one per line
 var video_url := ""        # kind "video"
-var video_state := ""      # "", "ready", "loading", "converting", "playing", "paused" or "error"
+var video_state := ""      # "", "ready", "loading", "copying", "converting", "playing", "paused" or "error"
 var video_message := ""    # the error screen's reason
+var video_title := ""      # what the library calls it: the page's title, else the file's name
+var _copy := {}            # copying a file picked on Android into the videos folder: {src, dst, tmp, total, done}
 var _video: VideoStreamPlayer = null
 var _video_back := ColorRect.new()
 var _http: HTTPRequest = null
@@ -343,16 +345,20 @@ func set_video(url: String) -> void:
 	_stop_video()
 	if video_url == "":
 		video_state = ""
-		set_card("VIDEO", "No video yet", "Aim here with the Video board tool and press the primary button to give it a link to a .ogv video file.")
+		set_card("VIDEO", "No video yet", "Aim here with the Video board tool to choose a video: a web link, one already downloaded, or a file on this device.")
 	else:
 		video_state = "ready"
 		set_card("VIDEO", "Ready to play", video_url, INK)
 
 
 ## Downloads (unless kept from before) and plays the video at url.
-func play_url(url: String) -> void:
+func play_url(url: String, title := "") -> void:
 	video_url = url.strip_edges()
+	video_title = title
 	_stop_video()
+	if is_local(video_url):
+		_play_local(video_url)
+		return
 	var problem := url_problem(video_url)
 	if problem != "":
 		_video_error(problem)
@@ -827,6 +833,7 @@ func _finish_convert(code: int, log_text: String) -> void:
 		_video_error("FFmpeg couldn't convert this file (exit code %d).%s" % [code, "\n" + last if last != "" else ""])
 		return
 	DirAccess.rename_absolute(ProjectSettings.globalize_path(c.part), ProjectSettings.globalize_path(c.out))
+	_remember(c.out)
 	_start_video(c.out)
 
 
@@ -872,7 +879,7 @@ func toggle_video() -> void:
 		"paused":
 			_video.paused = false
 			video_state = "playing"
-		"loading", "converting":
+		"loading", "converting", "copying":
 			pass
 		_:
 			if video_url != "":
@@ -923,6 +930,7 @@ func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _b
 	var kind := video_kind(head, content_type)
 	if kind == "theora":
 		DirAccess.rename_absolute(ProjectSettings.globalize_path(part), ProjectSettings.globalize_path(path))
+		_remember(path)
 		_start_video(path)
 		return
 	if kind == "page":
@@ -936,6 +944,8 @@ func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _b
 			_video_error("The video link on that page led to another page, not a video.")
 			return
 		var found := find_page_video(html, url)
+		if video_title == "":
+			video_title = page_title(html)
 		if found == "":
 			_video_error("Couldn't find a video on that page. Pages whose video appears only through scripts or a protected player can't be used: link the video file itself.")
 			return
@@ -984,6 +994,7 @@ func _start_video(path: String) -> void:
 
 func _stop_video() -> void:
 	_retry_token += 1
+	_cancel_copy()
 	_cancel_convert()
 	if _http != null:
 		_http.cancel_request()
@@ -1010,6 +1021,9 @@ func _video_live() -> bool:
 
 
 func _update_video(dt: float) -> void:
+	if video_state == "copying" and not _copy.is_empty():
+		_pump_copy()
+		return
 	if video_state == "converting" and not _conv.is_empty():
 		_poll_convert()
 		return
@@ -1040,6 +1054,179 @@ func _update_video(dt: float) -> void:
 		var d := cam.global_position.distance_to(global_transform * PANEL_CENTRE) / maxf(board_scale, 0.01)
 		var loud := clampf(1.0 - (d - 3.0) / 17.0, 0.0, 1.0)
 		_video.volume_db = linear_to_db(maxf(loud, 0.0001))
+
+
+# ---------- local files and the library of downloaded videos ----------
+
+## A file on this device rather than a web link: a path, a file:// link, or (Android) the
+## content:// address the system file picker hands back.
+static func is_local(link: String) -> bool:
+	for scheme in ["content://", "file://", "user://", "res://"]:
+		if link.begins_with(scheme):
+			return true
+	return link.is_absolute_path() and not link.contains("://")
+
+
+## Plays a file on this device. Theora plays where it is; other videos are converted into the
+## videos folder (kept like downloads). Android's picked files (content://) can only be read
+## through the system, so they are copied into the videos folder first, a piece each frame.
+func _play_local(link: String) -> void:
+	var cached := cached_path(link)
+	if FileAccess.file_exists(cached):
+		_start_video(cached)
+		return
+	if video_title == "":
+		video_title = local_name(link)
+	if link.begins_with("content://"):
+		_copy_in(link, cached)
+		return
+	var path := link.trim_prefix("file://")
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		_video_error("That file isn't there any more, or can't be read:\n" + path)
+		return
+	var head := f.get_buffer(4096)
+	f.close()
+	match video_kind(head):
+		"theora":
+			_start_video(path)
+		"page":
+			_video_error(video_problem(head))
+		_:
+			_convert(path, cached, video_problem(head), false)
+
+
+## Starts copying src (a content:// address on Android) into the videos folder, to play or
+## convert into out.
+func _copy_in(src_path: String, out: String) -> void:
+	var src := FileAccess.open(src_path, FileAccess.READ)
+	if src == null:
+		_video_error("Android didn't let the game read that file (error %d). Pick it again from the video menu." % FileAccess.get_open_error())
+		return
+	DirAccess.make_dir_recursive_absolute(VIDEO_DIR)
+	var tmp := out.get_basename() + ".src"
+	var dst := FileAccess.open(tmp, FileAccess.WRITE)
+	if dst == null:
+		_video_error("Couldn't make room for the video in the game's storage.")
+		return
+	_copy = {src = src, dst = dst, tmp = tmp, total = src.get_length(), done = 0, out = out}
+	video_state = "copying"
+	set_card("VIDEO", "Copying from this device…", video_title, INK, 0.0)
+
+
+## Copies 8 MB a frame, then plays or converts the copy.
+func _pump_copy() -> void:
+	var src: FileAccess = _copy.src
+	var dst: FileAccess = _copy.dst
+	var chunk := src.get_buffer(8 * 1048576)
+	if not chunk.is_empty():
+		dst.store_buffer(chunk)
+		_copy.done += chunk.size()
+	var total: int = _copy.total
+	var p := float(_copy.done) / total if total > 0 else 0.0
+	set_card("VIDEO", "Copying from this device…", "%s\n\n%d%%" % [video_title, roundi(p * 100.0)], INK, p)
+	if not chunk.is_empty() and not src.eof_reached():
+		return
+	src.close()
+	dst.close()
+	var c := _copy
+	_copy = {}
+	var f := FileAccess.open(c.tmp, FileAccess.READ)
+	var head := f.get_buffer(4096) if f != null else PackedByteArray()
+	if f != null:
+		f.close()
+	match video_kind(head):
+		"theora":
+			DirAccess.rename_absolute(ProjectSettings.globalize_path(c.tmp), ProjectSettings.globalize_path(c.out))
+			_remember(c.out)
+			_start_video(c.out)
+		"page":
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(c.tmp))
+			_video_error(video_problem(head))
+		_:
+			_convert(c.tmp, c.out, video_problem(head), true)
+
+
+func _cancel_copy() -> void:
+	if _copy.is_empty():
+		return
+	_copy.src.close()
+	_copy.dst.close()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(_copy.tmp))
+	_copy = {}
+
+
+## A readable name for a local file: its file name (decoded from a content:// address).
+static func local_name(link: String) -> String:
+	var last := link.uri_decode().replace("\\", "/").get_file()
+	last = last.get_slice(":", last.get_slice_count(":") - 1)  # "primary:Movies/clip.mp4" → after the volume
+	last = last.get_file()
+	return last if last.contains(".") else "Video from this device"  # media ids ("video:1234") say nothing
+
+
+## The <title> of a web page, tidied, or "".
+static func page_title(html: String) -> String:
+	var m := RegEx.create_from_string("(?is)<title[^>]*>(.*?)</title>").search(html)
+	return _unescape(m.get_string(1)).replace("\n", " ").strip_edges() if m != null else ""
+
+
+const LIBRARY := VIDEO_DIR + "/library.json"
+
+
+## Notes a newly kept video in the library: where it came from, what it is called, when.
+func _remember(path: String) -> void:
+	var index := _library_index()
+	var title := video_title
+	if title == "":
+		title = local_name(video_url) if is_local(video_url) else video_url.get_slice("?", 0).get_file().uri_decode()
+	if title == "":
+		title = video_url
+	var f := FileAccess.open(path, FileAccess.READ)
+	index[path.get_file()] = {link = video_url, title = title, added = Time.get_unix_time_from_system(),
+		bytes = f.get_length() if f != null else 0}
+	_save_library_index(index)
+
+
+static func _library_index() -> Dictionary:
+	var text := FileAccess.get_file_as_string(LIBRARY)
+	var data: Variant = JSON.parse_string(text) if text != "" else {}
+	return data if data is Dictionary else {}
+
+
+static func _save_library_index(index: Dictionary) -> void:
+	DirAccess.make_dir_recursive_absolute(VIDEO_DIR)
+	var f := FileAccess.open(LIBRARY, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(index, "\t"))
+
+
+## The downloaded and converted videos kept on this device, newest first:
+## [{path, link, title, bytes, added}]. Videos kept before the library existed are listed too.
+static func library() -> Array:
+	var index := _library_index()
+	var out := []
+	var d := DirAccess.open(VIDEO_DIR)
+	if d == null:
+		return out
+	for name in d.get_files():
+		if not name.ends_with(".ogv"):
+			continue
+		var path := VIDEO_DIR.path_join(name)
+		var e: Dictionary = index.get(name, {})
+		var f := FileAccess.open(path, FileAccess.READ)
+		out.append({path = path, link = String(e.get("link", "")), title = String(e.get("title", "Downloaded video %s" % name.substr(0, 6))),
+			bytes = f.get_length() if f != null else int(e.get("bytes", 0)),
+			added = float(e.get("added", FileAccess.get_modified_time(path)))})
+	out.sort_custom(func(a, b): return a.added > b.added)
+	return out
+
+
+## Deletes a kept video and its library entry.
+static func forget_video(path: String) -> void:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	var index := _library_index()
+	index.erase(path.get_file())
+	_save_library_index(index)
 
 
 # ---------- notes ----------

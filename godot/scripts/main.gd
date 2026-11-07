@@ -47,6 +47,7 @@ var level := 0
 var sketcher: Node3D
 var dialog: CanvasLayer
 var numpad: CanvasLayer
+var video_menu: CanvasLayer  # video_menu.gd: what a video board plays
 var updater: Node
 var _update_checked := false
 
@@ -114,6 +115,9 @@ func _ready() -> void:
 	sketcher.changed.connect(_show_tool)
 	numpad = preload("res://scripts/number_pad.gd").new()
 	add_child(numpad)
+	video_menu = preload("res://scripts/video_menu.gd").new()
+	video_menu.game = self
+	add_child(video_menu)
 	dialog = preload("res://scripts/feature_dialog.gd").new()
 	dialog.game = self
 	add_child(dialog)
@@ -531,6 +535,8 @@ func on_model_changed() -> void:
 func _close_editors() -> void:
 	if numpad != null and numpad.visible:
 		numpad.close()
+	if video_menu != null and video_menu.visible:
+		video_menu.close()
 	if dialog != null and dialog.visible:
 		dialog.cancel()
 	if sketcher != null and sketcher.active:
@@ -675,7 +681,7 @@ func _aim_hit() -> Dictionary:
 ## True while something covers the view and should get the controller instead of the player.
 func modal_open() -> bool:
 	var tutorial_card: bool = (tutorial != null and tutorial.is_open_card()) or (challenge != null and challenge.is_open_card())
-	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or updater.busy()
+	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or video_menu.visible or updater.busy()
 
 
 func _process(dt: float) -> void:
@@ -728,6 +734,8 @@ func _keep_focus() -> void:
 		return
 	if numpad.visible:
 		numpad.keep_focus()
+	elif video_menu.visible:
+		video_menu.keep_focus()
 	elif hud.menu_open:
 		UiTheme.keep_focus(hud.menu_control())
 	elif tutorial != null and tutorial.is_open_card():
@@ -895,7 +903,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			cmap.open()
 			get_viewport().set_input_as_handled()
 		return
-	if state != "play" or cmap.visible or numpad.visible or updater.busy():
+	if state != "play" or cmap.visible or numpad.visible or video_menu.visible or updater.busy():
 		return  # the splash, the controls map, the number pad and the updater handle their own input
 	if dialog.visible and not hud.menu_open:
 		if dialog.handle(event):

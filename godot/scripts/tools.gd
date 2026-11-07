@@ -52,7 +52,7 @@ const TOOLS := [
 	{id = "mass", name = "Mass properties", pri = "show volume, mass and centre of mass", alt = "hide", opt = []},
 	{id = "board_props", name = "Properties board", pri = "set up a board of the part's properties", alt = "remove the board you aim at", opt = []},
 	{id = "board_notes", name = "Notes board", pri = "add a note (here, or to the board you aim at)", alt = "edit the note you aim at", opt = []},
-	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "change its video link", opt = []},
+	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "choose its video: a link, a downloaded video or a file", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
 const PART_ONLY := ["push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",

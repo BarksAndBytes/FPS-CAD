@@ -243,7 +243,7 @@ func act(id: String, primary: bool) -> void:
 			if primary:
 				if b != null and b.kind == "video":
 					if b.video_url == "":
-						_ask_video(b)
+						choose_video(b)
 					else:
 						b.toggle_video()
 						var what := {"playing": "Playing", "paused": "Paused", "loading": "Downloading the video"}
@@ -252,12 +252,12 @@ func act(id: String, primary: bool) -> void:
 					var vb := add("video", spot_ahead(), 0.0, new_scale())
 					_face_player(vb)
 					save()
-					_ask_video(vb)
+					choose_video(vb)
 			else:
 				if b == null or b.kind != "video":
-					game.hud.toast("Aim at a video board to change its link")
+					game.hud.toast("Aim at a video board to choose its video")
 					return
-				_ask_video(b)
+				choose_video(b)
 		"board_arrange":
 			if primary:
 				if b == null:
@@ -268,17 +268,34 @@ func act(id: String, primary: bool) -> void:
 				_remove_aimed(b)
 
 
+## Asks for a web link for board b.
+func ask_video_link(b: Node3D) -> void:
+	_ask_video(b)
+
+
 func _ask_video(b: Node3D) -> void:
 	var done := func(text: String) -> void: play_video(b, text)
 	game.numpad.ask_url("Video link", b.video_url, "A link to an Ogg Theora (.ogv) video file. Paste works too.", done)
 
 
 ## Gives a video board its link, plays it and saves.
-func play_video(b: Node3D, url: String) -> void:
+func play_video(b: Node3D, url: String, title := "") -> void:
 	if not is_instance_valid(b):
 		return
-	b.play_url(url)
+	b.play_url(url, title)
 	save()
+
+
+## Stops any board playing the kept video at path (before it is deleted).
+func release_video(path: String) -> void:
+	for b in extra:
+		if b.kind == "video" and (Whiteboard.cached_path(b.video_url) == path or b.video_url == path):
+			b.set_video(b.video_url)
+
+
+## The video menu for board b: a link, a downloaded video, or a file on this device.
+func choose_video(b: Node3D) -> void:
+	game.video_menu.open(b)
 
 
 func _remove_aimed(b: Node3D) -> void:

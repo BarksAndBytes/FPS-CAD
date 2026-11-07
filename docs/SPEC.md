@@ -140,9 +140,18 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
 - **Notes board**: the player's notes, one bullet per line. RT on empty floor sets up a board and
   asks for the first note; RT on a notes board adds a note; LT on a note edits it (clear it to
   delete it).
-- **Video board**: plays a video from a link. RT on empty floor sets one up and asks for the link
-  (the on-screen keyboard has URL signs and Paste); RT on a video board pauses and resumes it, LT
-  changes its link. Godot plays only Ogg Theora (.ogv) and only from a file, so the board
+- **Video board**: plays a video from a link or a file. RT on empty floor sets one up and opens its
+  video menu (`video_menu.gd`); RT on a video board pauses and resumes it, LT opens the menu. The
+  menu offers **Enter a link…** (the on-screen keyboard has URL signs and Paste), **Choose a file
+  on this device…** (the system's own picker: Windows' Open dialog filtered to video files,
+  Android's document picker for `video/*`), and the **library**: every video kept in
+  `user://videos`, newest first, with its title (a page's `<title>`, else the file name), size and
+  date, each playable on the board at once or deletable, plus Delete all. The library index is
+  `user://videos/library.json` (file → link, title, bytes, added); kept videos from before it are
+  listed by their file id. A local file plays where it is if it is Theora, else is converted into
+  the videos folder like a download; Android's picks are `content://` addresses only the system
+  can read, so the board copies them in first (8 MB a frame, with progress), then plays or
+  converts the copy. Deleting a video stops any board showing it first. Godot plays only Ogg Theora (.ogv) and only from a file, so the board
   downloads the link into `user://videos` (kept by an MD5 of the URL, so it plays again without
   downloading; 1 GB at most), showing progress, then checks the file's first bytes. A Theora
   video plays, letterboxed, looping, with its sound fading with distance (full within 3 board
