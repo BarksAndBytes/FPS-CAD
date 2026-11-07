@@ -1106,6 +1106,7 @@ func _references(main: Node) -> void:
 	await _repeat(main)
 	await _history(main)
 	await _check_design(main)
+	await _assemblies(main)
 
 
 ## 0.4: fillet and chamfer on picked edges, holes of each kind, shell, extrude end conditions.
@@ -1478,6 +1479,98 @@ func _check_design(main: Node) -> void:
 	tools._act(true, false)
 	_check(tools._clashes.size() == 1 and absf(float(tools._clashes[0].volume) - 0.2 * 0.4 * 0.4) < 1e-6,
 		"Interference finds the two bodies' overlap (%s)" % str(tools._clashes))
+
+
+## 0.8: a new assembly built from saved parts: insert, mate, constrained drag, BOM, explode.
+func _assemblies(main: Node) -> void:
+	var FB = load("res://scripts/file_browser.gd")
+	DirAccess.make_dir_recursive_absolute("user://projects")
+	var plate_path := ProjectSettings.globalize_path("user://projects/Smoke plate.fpprt")
+	var peg_path := ProjectSettings.globalize_path("user://projects/Smoke peg.fpprt")
+	var plate: RefCounted = ClassDB.instantiate(&"CadPart")
+	plate.new_blank("Smoke plate", "mm")
+	plate.add_primitive("box", Vector3(0, 0, 0), {w = 0.2, d = 0.2, h = 0.02}, "add")
+	plate.add_primitive("cylinder", Vector3(0.05, -0.01, 0), {r = 0.01, h = 0.05}, "cut")
+	_check(plate.save_file(plate_path) == "", "a plate part saved")
+	var peg: RefCounted = ClassDB.instantiate(&"CadPart")
+	peg.new_blank("Smoke peg", "mm")
+	peg.add_primitive("cylinder", Vector3(0, 0, 0), {r = 0.01, h = 0.05}, "add")
+	_check(peg.save_file(peg_path) == "", "a peg part saved")
+	main._on_hud_request("new_assembly", null)
+	await _frames(2)
+	_check(main.is_assembly and main.doc.component_count() == 0 and main.tools.tool().id == "insert_part", "New assembly starts empty with Insert part ready")
+	var tools: Node = main.tools
+	tools.aim = {hit = true, ground = true, point = Vector3(0.01, 0, 0.02), normal = Vector3.UP, distance = 1.0}
+	tools._act(true, false)
+	await _frames(1)
+	_check(main.file_browser.visible and main.file_browser._list.get_child_count() >= 2, "Insert part lists the saved parts")
+	var entry: Dictionary = FB.saved_files().filter(func(e): return e.name == "Smoke plate")[0]
+	main.file_browser._open(entry)
+	await _frames(1)
+	main.insert_part_file(peg_path, Vector3(0.3, 0, 0))
+	var doc: RefCounted = main.doc
+	var comps: Array = doc.components()
+	_check(comps.size() == 2 and comps[0].grounded and not comps[1].grounded, "two components; the first is grounded (%s)" % str(comps))
+	# Concentric: the peg into the plate's hole.
+	tools.set_tool_id("mate")
+	tools.options["mate"] = 2
+	var flat: Dictionary = doc.pick(Vector3(0.5, 0.01, -0.05), Vector3(-1, 0, 0), 1.0)
+	tools.aim = flat
+	tools._act(true, false)
+	tools.aim = doc.pick(Vector3(0.6, 0.02, 0), Vector3(-1, 0, 0), 1.0)
+	tools._act(true, false)
+	_check(doc.mates().is_empty() and doc.component(1).transform.origin.is_equal_approx(Vector3(0.3, 0, 0)),
+		"a concentric mate on a flat face is refused and nothing moves (%s)" % main.hud._toast.text)
+	var hole: Dictionary = doc.pick(Vector3(0.05, 0.01, 0), Vector3(1, 0, 0), 1.0)
+	var side: Dictionary = doc.pick(Vector3(0.6, 0.02, 0), Vector3(-1, 0, 0), 1.0)
+	_check(not hole.is_empty() and not side.is_empty() and hole.component == 0 and side.component == 1, "aiming at the hole and the peg")
+	tools.aim = hole
+	tools._act(true, false)
+	tools.aim = side
+	tools._act(true, false)
+	var pt: Transform3D = doc.component(1).transform
+	_check(doc.mates().size() == 1 and absf(pt.origin.x - 0.05) < 1e-6 and absf(pt.origin.z) < 1e-6,
+		"Concentric puts the peg in the hole (%s)" % str(pt.origin))
+	# Coincident: the peg's end on the plate's top.
+	tools.options["mate"] = 0
+	tools.aim = doc.pick(Vector3(0.05, -1, 0.0), Vector3(0, 1, 0), 2.0)
+	tools._act(true, false)
+	tools.aim = doc.pick(Vector3(-0.05, 1, 0), Vector3(0, -1, 0), 2.0)
+	tools._act(true, false)
+	pt = doc.component(1).transform
+	_check(doc.mates().size() == 2 and absf(pt.origin.y - 0.02) < 1e-6 and doc.mate_status().ok,
+		"Coincident sets the peg on the plate (%s)" % str(pt.origin))
+	# Dragging sideways keeps it in the hole.
+	var r: Dictionary = doc.drag_component(comps[1].id, Vector3(0.1, 0, 0))
+	pt = doc.component(1).transform
+	_check(absf(pt.origin.x - 0.05) < 1e-6, "the mates hold the peg when it is dragged sideways")
+	_check(doc.interference().is_empty(), "no interference")
+	var bom: Array = doc.bom()
+	_check(bom.size() == 2 and int(bom[0].quantity) == 1, "the bill of materials lists both parts")
+	tools.set_tool_id("explode")
+	tools._act(true, false)
+	_check(doc.get_explode() > 0.0 and doc.component(1).transform.origin.distance_to(pt.origin) > 1e-3, "Exploded view spreads the parts")
+	tools._act(false, false)
+	_check(doc.get_explode() == 0.0, "and puts them back")
+	main.hud.set_panel(true)
+	await _frames(1)
+	var rows: Array = main.hud._tree.find_children("*", "Button", true, false).map(func(b): return b.text)
+	_check("Ground" in rows and "Float" in rows and rows.count("Delete") == 2, "the model panel lists components and mates (%s)" % ", ".join(rows))
+	var mid: String = doc.mates()[1].id
+	main._on_hud_request("delete_mate", mid)
+	_check(doc.mates().size() == 1, "a mate can be deleted")
+	main._on_hud_request("undo", null)
+	_check(doc.mates().size() == 2, "and undo brings it back")
+	main.hud.set_panel(false)
+	main._save()
+	_check(main.current_path.ends_with(".fpasm"), "the assembly saves (%s)" % main.current_path)
+	var again: RefCounted = ClassDB.instantiate(&"CadAssembly")
+	var lf: String = again.load_file(ProjectSettings.globalize_path(main.current_path))
+	var rb: Dictionary = again.rebuild()
+	_check(lf == "" and rb.ok and again.mates().size() == 2 and again.mate_status().ok,
+		"…and loads again with its parts and mates (%s · %s · %s · %s)" % [lf, str(rb), str(again.mates()), str(again.mate_status())])
+	for path in [plate_path, peg_path, ProjectSettings.globalize_path(main.current_path)]:
+		DirAccess.remove_absolute(path)
 
 
 ## 0.3: Save, Save as, the Open browser, opening a file, STEP import, New part in other units.

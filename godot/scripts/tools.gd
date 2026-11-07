@@ -10,6 +10,7 @@ signal feature_requested(type: String, sketch_id: String, op: String)
 signal reference_requested(type: String, params: Dictionary)  # main.gd opens the panel when it has sizes
 signal board_tool(id: String, primary: bool)  # main.gd hands it to boards.gd
 signal picked_feature_requested(type: String, base: Dictionary, op: String)  # fillet, chamfer, hole, shell
+signal insert_requested(at: Vector3)  # assemblies: choose a saved part to place here
 
 ## How the tool wheel groups the tools: single tools and groups on the inner ring, a group's
 ## tools branching out from it (tool_wheel.gd). Entries are tool ids or [group name, description,
@@ -28,6 +29,7 @@ const WHEEL := [
 	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
 	["Measure", "Distances, angles, areas, the bounding box, mass properties, section view, interference",
 		["measure", "bbox", "mass", "section", "interference"]],
+	["Assembly", "Place saved parts, mate them, explode the view, list the parts", ["insert_part", "mate", "explode", "bom"]],
 	["Boards", "Whiteboards in the room: part properties, your notes; carry, turn and resize them",
 		["board_props", "board_notes", "board_video", "board_arrange"]],
 ]
@@ -50,6 +52,11 @@ const TOOLS := [
 	{id = "combine", name = "Combine bodies", pri = "pick / unpick a body (the first is kept)", alt = "combine, subtract or intersect them", opt = []},
 	{id = "split", name = "Split body", pri = "pick the body to split", alt = "split it with the face or plane you aim at", opt = []},
 	{id = "delete_body", name = "Delete body", pri = "delete the body you aim at", alt = "undo", opt = []},
+	{id = "insert_part", name = "Insert part", pri = "place a saved part here", alt = "remove the component you aim at", opt = []},
+	{id = "mate", name = "Mate", pri = "pick a face on each of two components", alt = "start again / undo the last mate",
+		opt = ["coincident (facing)", "coincident (aligned)", "concentric", "distance", "angle", "lock"]},
+	{id = "explode", name = "Exploded view", pri = "spread the components further apart", alt = "put them back together", opt = []},
+	{id = "bom", name = "Bill of materials", pri = "list the parts and how many", alt = "", opt = []},
 	{id = "repick", name = "Re-pick", pri = "pick the face it should use", alt = "cancel", opt = []},
 	{id = "push", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
 	{id = "measure", name = "Measure", pri = "set point / measure what you aim at", alt = "clear",
@@ -76,9 +83,10 @@ const TOOLS := [
 	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "choose its video: a link, a downloaded video or a file", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
-const PART_ONLY := ["section", "interference", "repick", "fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
+const PART_ONLY := ["section", "repick", "fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
 	"combine", "split", "delete_body", "push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
 	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_arrange"]
+const ASSEMBLY_ONLY := ["insert_part", "mate", "explode", "bom"]
 const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_arrange"]
 const REF_TOOLS := ["ref_plane", "ref_axis", "ref_point", "ref_csys"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
@@ -213,6 +221,9 @@ func cycle_option() -> void:
 func press(primary: bool) -> void:
 	if is_assembly and tool().id in PART_ONLY:
 		hud.toast("Open a part to use %s" % tool().name)
+		return
+	if not is_assembly and tool().id in ASSEMBLY_ONLY:
+		hud.toast("%s works in an assembly: File → New assembly, or open one" % tool().name)
 		return
 	_act(primary, false)
 	if tool().id == "push" and not _push_hit.is_empty():
@@ -372,9 +383,11 @@ func _act(primary: bool, repeat: bool) -> void:
 			if id == "":
 				return
 			if is_assembly:
-				_grab = {id = id, plane_y = hit.point.y, last = hit.point, component = hit.component, offset = Vector3.ZERO}
 				if not primary:
-					hud.toast("Duplicating components arrives with assembly editing")
+					hud.toast("To add another copy, use Insert part with the same part")
+					return
+				doc.checkpoint()
+				_grab = {id = id, plane_y = hit.point.y, last = hit.point, component = hit.component, offset = Vector3.ZERO, refused = false}
 				return
 			if primary:
 				doc.checkpoint()
@@ -394,6 +407,8 @@ func _act(primary: bool, repeat: bool) -> void:
 			_act_bodies(primary, hit, on_feature)
 		"repick":
 			_act_repick(primary, hit, on_feature)
+		"insert_part", "mate", "explode", "bom":
+			_act_assembly(primary, hit)
 		"ref_plane", "ref_axis", "ref_point", "ref_csys":
 			_act_reference(primary, hit)
 		"board_props", "board_notes", "board_video", "board_arrange":
@@ -417,14 +432,17 @@ func _act(primary: bool, repeat: bool) -> void:
 				view.show_com(null, 0.0)
 				return
 			_clashes = doc.interference()
-			if doc.body_count() < 2:
-				hud.toast("Interference needs two bodies or more")
+			var count: int = doc.component_count() if is_assembly else doc.body_count()
+			var what := "components" if is_assembly else "bodies"
+			if count < 2:
+				hud.toast("Interference needs two %s or more" % what)
 			elif _clashes.is_empty():
-				hud.toast("No interference: the %d bodies do not overlap" % doc.body_count())
+				hud.toast("No interference: the %d %s do not overlap" % [count, what])
 			else:
 				var parts := []
 				for x in _clashes:
-					parts.append("bodies %d and %d overlap by %s" % [int(x.a) + 1, int(x.b) + 1, Units.volume_text(float(x.volume), hud.units)])
+					var names: Array = [x.a, x.b] if is_assembly else ["body %d" % (int(x.a) + 1), "body %d" % (int(x.b) + 1)]
+					parts.append("%s and %s overlap by %s" % [names[0], names[1], Units.volume_text(float(x.volume), hud.units)])
 				hud.toast("Interference: " + "; ".join(parts))
 		"bbox":
 			_show_bbox = primary
@@ -656,6 +674,113 @@ func _act_bodies(primary: bool, hit: Dictionary, on_feature: bool) -> void:
 	var target: Dictionary = _picks[0].ref
 	_picks = []
 	picked_feature_requested.emit("body", {kind = "combine", target = target, tools = tools_refs}, "")
+
+
+## Assembly tools: place saved parts, mate faces of two components, explode, list the parts.
+func _act_assembly(primary: bool, hit: Dictionary) -> void:
+	var id: String = tool().id
+	match id:
+		"insert_part":
+			if not primary:
+				if String(hit.get("component_id", "")) == "":
+					hud.toast("Aim at a component to remove it")
+					return
+				hud.toast(doc.remove_component(hit.component_id).message)
+				changed.emit()
+				return
+			if hit.is_empty():
+				hud.toast("Aim at the floor or a component where the part should go")
+				return
+			insert_requested.emit(snapped_xz(hit.point) if hit.get("ground", false) else (hit.point as Vector3))
+		"mate":
+			if not primary:
+				if not _picks.is_empty():
+					_picks = []
+					hud.toast("Mate picks cleared")
+				elif doc.undo():
+					hud.toast("Last change undone")
+					changed.emit()
+				return
+			if String(hit.get("component_id", "")) == "":
+				hud.toast("Aim at a face of a component")
+				return
+			var ref: Dictionary = doc.face_ref(hit)
+			if ref.is_empty():
+				return
+			if not _picks.is_empty() and _picks[0].ref.component == ref.component:
+				hud.toast("Pick a face on a different component")
+				return
+			_picks.append({ref = ref, hit = hit, measure = doc.face_measure(hit)})
+			if _picks.size() == 1:
+				hud.toast("%s · now a face on another component" % hit.get("component_name", "Component"))
+				return
+			var a: Dictionary = _picks[0]
+			var b: Dictionary = _picks[1]
+			_picks = []
+			var opt := option()
+			var type: String = opt.get_slice(" ", 0)
+			var params := {}
+			if opt == "coincident (aligned)":
+				params.aligned = true
+			if type == "distance" or type == "angle":
+				_ask_mate_value(type, a, b)
+				return
+			_add_mate(type, a.ref, b.ref, params)
+		"explode":
+			var f: float = doc.get_explode()
+			f = minf(f + 0.5, 4.0) if primary else 0.0
+			doc.set_explode(f)
+			hud.toast("Exploded view ×%.1f · walk between the parts · %s puts them back" % [f, Actions.prompt(&"secondary")] if f > 0.0
+				else "Assembled")
+			changed.emit()
+		"bom":
+			if not primary:
+				return
+			bom_lines = []
+			var n := 1
+			for row in doc.bom():
+				bom_lines.append("%d. %s × %d  ·  %s  ·  %s each" % [n, row.name, int(row.quantity), row.material,
+					Units.mass_text(float(row.mass))])
+				n += 1
+			hud.toast("BILL OF MATERIALS   " + ("   ".join(bom_lines) if not bom_lines.is_empty() else "no parts yet"))
+
+
+var bom_lines: Array = []  # the last bill of materials
+
+
+## Distance and angle mates ask for their value, starting from what the faces measure now.
+func _ask_mate_value(type: String, a: Dictionary, b: Dictionary) -> void:
+	var angle := type == "angle"
+	var units: String = hud.units
+	var now := _mate_angle(a, b) if angle else _mate_gap(a, b)
+	get_parent().numpad.ask("Angle" if angle else "Distance", Units.show(now, units, angle),
+		"In degrees: the angle between the faces" if angle else "In %s: the gap between the faces" % units,
+		func(text: String):
+			var v: Variant = Units.parse(text, units, angle)
+			if v is float:
+				_add_mate(type, a.ref, b.ref, {angle = v} if angle else {distance = v}))
+
+
+func _add_mate(type: String, a: Dictionary, b: Dictionary, params: Dictionary) -> void:
+	var r: Dictionary = doc.add_mate(type, a, b, params)
+	hud.toast(r.message)
+	changed.emit()
+
+
+## The gap between two picked faces along the first one's normal (or between their centres).
+func _mate_gap(a: Dictionary, b: Dictionary) -> float:
+	var ma: Dictionary = a.measure
+	var pa: Vector3 = a.hit.point
+	var pb: Vector3 = b.hit.point
+	if ma.get("kind", "") == "plane":
+		return absf((pb - pa).dot((ma.normal as Vector3).normalized()))
+	return pa.distance_to(pb)
+
+
+func _mate_angle(a: Dictionary, b: Dictionary) -> float:
+	var da: Vector3 = a.measure.get("normal", Vector3.UP) if a.measure.get("kind", "") == "plane" else a.measure.get("axis", Vector3.UP)
+	var db: Vector3 = b.measure.get("normal", Vector3.UP) if b.measure.get("kind", "") == "plane" else b.measure.get("axis", Vector3.UP)
+	return acos(clampf(da.normalized().dot(db.normalized()), -1.0, 1.0))
 
 
 ## Starts picking again what a failed feature uses: its own picking tool, or Re-pick for a face.
@@ -1002,9 +1127,14 @@ func _update_grab() -> void:
 	if delta.length() < s * 0.5:
 		return
 	if is_assembly:
-		_grab.offset += delta
+		# The component goes only where its mates let it; mated neighbours follow.
+		var r: Dictionary = doc.drag_component(_grab.id, delta)
 		_grab.last += delta
-		view.preview_component_offset(_grab.component, _grab.offset)
+		if r.ok:
+			view.update_component_transforms()
+		elif not _grab.refused:
+			_grab.refused = true
+			hud.toast(r.message)
 		return
 	var r: Dictionary = doc.move_feature(_grab.id, delta)
 	if r.ok:
@@ -1014,12 +1144,8 @@ func _update_grab() -> void:
 
 func _drop() -> void:
 	if is_assembly and _grab.has("component"):
-		var c: Dictionary = doc.component(_grab.component)
-		var t: Transform3D = c.transform
-		t.origin += _grab.offset
-		var r: Dictionary = doc.set_component_transform(_grab.id, t)
-		hud.toast(r.message)
 		_grab = {}
+		hud.toast("Dropped · " + String(doc.mate_status().message))
 		changed.emit()
 		return
 	_grab = {}
@@ -1027,10 +1153,8 @@ func _drop() -> void:
 
 
 func _cancel_grab() -> void:
-	if not is_assembly and doc.undo():
+	if doc.undo():
 		changed.emit()
-	if is_assembly:
-		view.preview_component_offset(_grab.component, Vector3.ZERO)
 	_grab = {}
 	hud.toast("Move cancelled")
 

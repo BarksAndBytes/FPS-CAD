@@ -329,6 +329,31 @@ what it uses…**.
   blue where it is still free and dark where it is defined, entity by entity, instead of the whole
   sketch turning dark only when it is fully defined.
 
+## Assemblies (0.8)
+
+- **New assembly** (File page) starts an empty assembly with **Insert part** ready. Insert part
+  (wheel group **Assembly**) lists the saved parts; the chosen part is placed where you aimed (on
+  the floor, snapped to the grid). The first component is grounded. Instances of one part are
+  numbered (`Bracket <2>`). The secondary action removes the component aimed at (with its mates).
+- **Mate**: pick a face on each of two components. Options: coincident facing (flat faces meet,
+  normals opposed) or aligned (normals the same way); concentric (round faces share an axis);
+  distance and angle (asked for, starting from what the faces measure now); lock (keeps the
+  second where it is relative to the first). The solver (Levenberg–Marquardt with a numeric
+  Jacobian and minimum-norm steps) moves components that are not grounded as little as it can. A
+  mate that cannot be met with the others is refused and nothing moves. The secondary action
+  clears the picks, or undoes the last change. Mate references are face references in the part
+  (probe, normal, feature, role), so they follow edits to the parts.
+- **Constrained drag**: the Move tool drags a component, solving the mates at every step, so it
+  goes only where its mates let it and mated neighbours follow. A grounded component does not
+  move.
+- **Interference** (Measure group) lists the components whose solids overlap, with the volume.
+- **Bill of materials** lists each part, its quantity, material and mass each.
+- **Exploded view** spreads the components away from the assembly's centre (each along the line
+  through its own centre), half a step per press; the secondary action puts them back. The
+  spread is real for walking and aiming, and is not saved.
+- The model panel lists the components (Ground / Float, Remove) and the mates (⚠ when not met,
+  Delete), with the solver's status. Assemblies undo and redo.
+
 ## Native file layout (`.fpprt`)
 
 ```

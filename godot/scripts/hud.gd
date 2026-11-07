@@ -313,11 +313,10 @@ func show_feature(id: String) -> void:
 func refresh_panel() -> void:
 	for c in _params.get_children() + _tree.get_children():
 		c.queue_free()
+	if doc != null and doc.has_method("mates"):
+		_assembly_panel()
+		return
 	if doc == null or not doc.has_method("get_features"):
-		var l := Label.new()
-		l.text = "Assemblies list their components here in a later build."
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD
-		_params.add_child(l)
 		return
 	var features: Array = doc.get_features()
 	var current: Dictionary = {}
@@ -459,6 +458,56 @@ func _history_buttons(current: Dictionary, features: Array) -> void:
 		fix.text = "Re-pick what %s uses…" % current.name
 		fix.pressed.connect(func(): request.emit("repick", fid))
 		_params.add_child(fix)
+
+
+## Assemblies: the components (ground / float, remove) and the mates (delete; ⚠ when not met).
+func _assembly_panel() -> void:
+	var title := Label.new()
+	title.add_theme_font_size_override("font_size", 16)
+	title.text = "ASSEMBLY  ·  %s" % doc.get_assembly_name()
+	_params.add_child(title)
+	var st: Dictionary = doc.mate_status()
+	var status := UiTheme.text(String(st.message) if String(st.message) != "" else "No mates yet: use Mate from the Assembly group",
+		14, MUTED if st.ok else Color("e0775f"))
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_params.add_child(status)
+	for c in doc.components():
+		var row := HBoxContainer.new()
+		var name_l := UiTheme.text(("📌 " if c.grounded else "") + String(c.name) + ("" if c.ok else "  ⚠"), 15)
+		name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_l)
+		var cid: String = c.id
+		var g := Button.new()
+		g.text = "Float" if c.grounded else "Ground"
+		g.pressed.connect(func(): request.emit("toggle_ground", cid))
+		row.add_child(g)
+		var rm := Button.new()
+		rm.text = "Remove"
+		rm.pressed.connect(func(): request.emit("remove_component", cid))
+		row.add_child(rm)
+		_tree.add_child(row)
+	var mates: Array = doc.mates()
+	if not mates.is_empty():
+		_tree.add_child(HSeparator.new())
+		var mt := Label.new()
+		mt.text = "MATES"
+		mt.add_theme_color_override("font_color", MUTED)
+		mt.add_theme_font_size_override("font_size", 12)
+		_tree.add_child(mt)
+	for m in mates:
+		var row := HBoxContainer.new()
+		var label := "%s  %s ↔ %s" % [String(m.type).capitalize(), m.a, m.b]
+		if m.has("value"):
+			label += "  (%s)" % ("%.1f°" % rad_to_deg(float(m.value)) if m.type == "angle" else length(float(m.value)))
+		var l := UiTheme.text(label + ("" if m.ok else "  ⚠"), 14)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(l)
+		var mid: String = m.id
+		var del := Button.new()
+		del.text = "Delete"
+		del.pressed.connect(func(): request.emit("delete_mate", mid))
+		row.add_child(del)
+		_tree.add_child(row)
 
 
 func _sketch_summary(f: Dictionary) -> void:

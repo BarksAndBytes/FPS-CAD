@@ -1437,6 +1437,77 @@ int main() {
     CHECK(count(model, "<item ") == 1);
   });
 
+  run("0.8: mates solve, constrained drag, interference", [&] {
+    AssemblyModel a(AssemblyDocument::sample(), ".");
+    CHECK(a.rebuild());
+    CHECK(a.mateReport().ok);
+    auto pinAt = [&](int k) { return a.document().components[static_cast<size_t>(k)].placement.t; };
+    Vec3 home = pinAt(1);
+    CHECK(std::abs(home[0] + 0.08) < 1e-9 && std::abs(home[2] + 0.02) < 1e-9);
+    // Knocked out of place, the pin goes back into its hole and onto the plate.
+    a.document().components[1].placement.t = {home[0] + 0.01, home[1] - 0.005, home[2] + 0.007};
+    auto r = a.solveMates();
+    CHECK(r.ok);
+    Vec3 back = pinAt(1);
+    CHECK(std::abs(back[0] - home[0]) < 1e-8 && std::abs(back[1] - home[1]) < 1e-8 && std::abs(back[2] - home[2]) < 1e-8);
+    // Dragged sideways it cannot leave the hole; with the rest mate gone it slides up the axis.
+    r = a.drag(a.document().components[1].id, {0.03, 0, 0});
+    CHECK(std::abs(pinAt(1)[0] - home[0]) < 1e-8);
+    a.document().mates[1].suppressed = true;
+    r = a.drag(a.document().components[1].id, {0, 0, 0.01});
+    CHECK(r.ok && std::abs(pinAt(1)[2] - (home[2] + 0.01)) < 1e-8 && std::abs(pinAt(1)[0] - home[0]) < 1e-8);
+    // A grounded component does not move.
+    r = a.drag(a.document().components[0].id, {0.1, 0, 0});
+    CHECK(!r.ok);
+    // No interference with pins in their holes; a pin pushed into the plate clashes.
+    CHECK(a.interference().empty());
+    a.document().mates[0].suppressed = true;
+    a.document().components[1].placement.t = {home[0] + 0.02, home[1], home[2] + 0.01};
+    a.updatePlacements();
+    auto clash = a.interference();
+    CHECK(clash.size() == 1 && clash[0].volume > 0);
+    // Distance and angle between two plates' faces, and a lock.
+    AssemblyDocument d;
+    PartDocument plate;
+    plate.name = "Plate";
+    Feature box;
+    box.type = "box";
+    box.params = {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.01}};
+    std::string bid = plate.add(box).id;
+    Component c1;
+    c1.name = "Base";
+    c1.virtualPart = plate;
+    c1.grounded = true;
+    Component c2;
+    c2.name = "Top";
+    c2.virtualPart = plate;
+    c2.placement.t = {0.01, 0.02, 0.05};
+    d.components = {c1, c2};
+    Mate dist;
+    dist.type = "distance";
+    dist.params = {{"distance", 0.03}};
+    dist.refs = Json::array({{{"component", c1.id}, {"feature", bid}, {"role", "p+z"}, {"probe", {0, 0, 0.01}}, {"normal", {0, 0, 1}}},
+                             {{"component", c2.id}, {"feature", bid}, {"role", "p-z"}, {"probe", {0, 0, 0}}, {"normal", {0, 0, -1}}}});
+    d.mates = {dist};
+    AssemblyModel two(d, ".");
+    two.rebuild();
+    CHECK(two.mateReport().ok);
+    CHECK(std::abs(two.document().components[1].placement.t[2] - 0.04) < 1e-8);  // 30 mm gap above the 10 mm plate
+    Mate ang;
+    ang.type = "angle";
+    ang.params = {{"angle", kPiT / 2}};
+    ang.refs = Json::array({{{"component", c1.id}, {"feature", bid}, {"role", "p+x"}, {"probe", {0.05, 0, 0.005}}, {"normal", {1, 0, 0}}},
+                            {{"component", c2.id}, {"feature", bid}, {"role", "p+x"}, {"probe", {0.05, 0, 0.005}}, {"normal", {1, 0, 0}}}});
+    two.document().mates.push_back(ang);
+    CHECK(two.solveMates().ok);
+    Placement p2 = two.document().components[1].placement;
+    Placement rot = p2;
+    rot.t = {0, 0, 0};
+    Vec3 xdir = transformPoint(rot, {1, 0, 0});
+    CHECK(std::abs(xdir[0]) < 1e-6 && std::abs(xdir[2]) < 1e-6);  // turned a quarter about Z
+    CHECK(std::abs(p2.t[2] - 0.04) < 1e-8);  // still 30 mm above
+  });
+
   run("assembly saves, loads, instances parts and exports", [&] {
     std::string path = (out / "pins.fpasm").string();
     saveAssembly(path, AssemblyDocument::sample());
@@ -1447,7 +1518,7 @@ int main() {
     CHECK(ok);
     CHECK(a.components().size() == 5);
     CHECK(a.parts().size() == 2);  // plate + one shared pin part
-    CHECK(a.document().mates.size() == 4);
+    CHECK(a.document().mates.size() == 8);
     auto mp = a.massProperties();
     CHECK(mp.bodies == 5);
     CHECK(mp.volume > 0.2 * 0.12 * 0.01 * 0.9);

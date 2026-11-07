@@ -16,6 +16,7 @@ var _list := VBoxContainer.new()
 var _device_button: Button
 var _close_button: Button
 var _armed := ""  # the file whose Delete was pressed once
+var _on_pick := Callable()  # set while choosing a part to insert into an assembly
 
 
 func _ready() -> void:
@@ -63,8 +64,19 @@ func _button(label: String, action: Callable) -> Button:
 
 
 func open() -> void:
+	_on_pick = Callable()
+	_open_list()
+
+
+## Lists only parts; choosing one calls callback(path) instead of opening it.
+func pick_part(callback: Callable) -> void:
+	_on_pick = callback
+	_open_list()
+
+
+func _open_list() -> void:
 	_armed = ""
-	_device_button.visible = DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE)
+	_device_button.visible = DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE) and not _on_pick.is_valid()
 	refresh()
 	visible = true
 	var first := UiTheme.first_focusable(_list)
@@ -119,8 +131,14 @@ func refresh() -> void:
 		_list.remove_child(c)
 		c.queue_free()
 	var files := saved_files()
+	var picking := _on_pick.is_valid()
+	if picking:
+		files = files.filter(func(e): return String(e.path).get_extension() == "fpprt")
 	_summary.text = "%d saved  ·  %s" % [files.size(), ProjectSettings.globalize_path(PROJECTS)] if not files.is_empty() \
 		else "Nothing saved yet: use Save or Save as in the pause menu."
+	if picking:
+		_summary.text = "Choose a part to place where you aimed" if not files.is_empty() \
+			else "No saved parts yet: build a part and save it first"
 	for e in files:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
@@ -134,6 +152,9 @@ func refresh() -> void:
 		open_b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		open_b.pressed.connect(func(): _open(entry))
 		row.add_child(open_b)
+		if picking:
+			_list.add_child(row)
+			continue
 		var dup := Button.new()
 		dup.text = "Duplicate"
 		dup.custom_minimum_size = Vector2(110, 58)
@@ -153,6 +174,11 @@ static func _size_text(bytes: int) -> String:
 
 func _open(entry: Dictionary) -> void:
 	close()
+	if _on_pick.is_valid():
+		var cb := _on_pick
+		_on_pick = Callable()
+		cb.call(String(entry.path))
+		return
 	game.open_file(entry.path)
 
 

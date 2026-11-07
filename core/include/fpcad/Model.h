@@ -148,6 +148,9 @@ public:
     Vec3 centre{};       // round faces: a point on the axis; flat faces: the face's centre
   };
   FaceMeasure faceMeasure(int body, int face) const;
+  // A face reference {probe, normal, feature, role} found in this part and measured; the found
+  // point is in centre when the face is flat. ok is false when the face is not there.
+  FaceMeasure resolveFace(const Json& ref) const;
 
   // Overlapping bodies: each pair whose solids share volume, with that volume and its centre.
   struct Interference {

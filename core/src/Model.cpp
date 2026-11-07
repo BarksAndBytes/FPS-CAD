@@ -1837,6 +1837,29 @@ void PartModel::setSection(const std::optional<std::pair<Vec3, Vec3>>& plane) {
 
 bool PartModel::hasSection() const { return d_->section.has_value(); }
 
+PartModel::FaceMeasure PartModel::resolveFace(const Json& ref) const {
+  FaceMeasure m;
+  try {
+    Json r = ref;
+    int b = 0;
+    TopoDS_Face f;
+    gp_Pnt at;
+    gp_Dir n;
+    if (!d_->findFaceRef(r, b, f, at, n)) return m;
+    int fi = d_->faceIndex[static_cast<size_t>(b)].FindIndex(f) - 1;
+    m = faceMeasure(b, fi);
+    if (m.ok && m.kind == "plane") {
+      m.centre = {at.X(), at.Y(), at.Z()};
+      m.normal = {n.X(), n.Y(), n.Z()};
+    }
+  } catch (const std::exception&) {
+    m.ok = false;
+  } catch (const Standard_Failure&) {
+    m.ok = false;
+  }
+  return m;
+}
+
 PartModel::FaceMeasure PartModel::faceMeasure(int b, int fi) const {
   FaceMeasure m;
   if (b < 0 || b >= bodyCount() || fi < 0 || fi >= d_->faceIndex[static_cast<size_t>(b)].Extent()) return m;

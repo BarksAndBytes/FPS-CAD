@@ -32,7 +32,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Parameters | Equations, global variables, configurations, design tables | Variables and expressions | Medium |
 | Surfacing, freeform, mesh | Full surface toolsets, T-splines, mesh repair | None | None |
 | Sheet metal, weldments, plastics, mold | Dedicated environments | None | None |
-| Assemblies | Mates/joints solved, motion, interference, BOM, standard parts | Components, instances and placement; mates stored, not solved | Low |
+| Assemblies | Mates/joints solved, motion, interference, BOM, standard parts | Insert saved parts, solved mates (coincident, concentric, distance, angle, lock), constrained drag, interference, BOM, exploded view | Medium |
 | Drawings and MBD | 2D drawings, GD&T, BOM tables, 3D annotations | None (`.fpdrw` planned after 1.0) | None |
 | Inspection and analysis | Measure, mass properties, section, interference, draft, curvature | Measure distance, angle, length, radius, area; bounding box; mass properties; walkable section view; body interference | Medium |
 | Simulation and generative | FEA, motion, CFD, topology, generative | None | None |
@@ -279,24 +279,24 @@ UI work rather than a kernel limitation.
 | Mirror components | All three; Inventor 2027 assembly mirror | ✗ | |
 | Pattern components | All three | ✗ | |
 | Standard parts library | Toolbox / McMaster/insert / Content Center | ✗ | |
-| Bill of materials | All three | ✗ | |
+| Bill of materials | All three | ✓ | Parts, quantity, material, mass each (0.8) |
 
 ### 7.2 Mates and joints
 
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
-| Standard mates: coincident, parallel, perpendicular, tangent, concentric, distance, angle, lock | Mates / Joints / Constraints | ◐ | Stored in `.fpasm`; not solved (Phase 3) |
+| Standard mates: coincident, parallel, perpendicular, tangent, concentric, distance, angle, lock | Mates / Joints / Constraints | ◐ | Coincident (facing / aligned), concentric, distance, angle, lock solved (0.8); no tangent, parallel or perpendicular yet |
 | Joint types: rigid, revolute, slider, cylindrical, pin-slot, planar, ball | Fusion joints; SW and Inventor equivalents | ✗ | |
 | Advanced: symmetric, width, path, limit, coupler | All three | ✗ | |
 | Mechanical: gear, rack and pinion, cam, screw, hinge, slot, universal joint | All three | ✗ | |
-| Drag to move through degrees of freedom | All three | ◐ | Move a component freely; no DOF-aware dragging |
+| Drag to move through degrees of freedom | All three | ✓ | Move solves the mates at each step (0.8) |
 
 ### 7.3 Assembly tools
 
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
-| Interference / clearance detection | All three | ✗ | Challenge comparison already does exact booleans; reusable |
-| Exploded views and animations | All three; Inventor presentations | ✗ | Natural fit for first person |
+| Interference / clearance detection | All three | ◐ | Interference between components and bodies (0.7, 0.8); no clearance |
+| Exploded views and animations | All three; Inventor presentations | ◐ | Walkable radial exploded view (0.8); no steps or animation |
 | Motion study / animation | Motion Study / Animation, Motion Link / Dynamic Simulation | ✗ | |
 | Collision detection while dragging | All three | ✗ | |
 | Large-assembly modes and simplification | Large Design Review, SpeedPak / — / Simplify, Level of Detail | ✗ | |
@@ -503,7 +503,7 @@ release leaves the game usable on its own; earlier ones unblock later ones.
 3. Driven (reference) sketch dimensions; highlight under-constrained geometry.
 4. Interference between bodies.
 
-### 0.8 Assemblies
+### 0.8 Assemblies (done)
 1. New assembly; insert saved parts in the game.
 2. Solved mates (coincident, concentric, distance, angle, lock) with constrained dragging.
 3. Interference between components; bill of materials.

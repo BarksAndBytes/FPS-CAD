@@ -113,6 +113,7 @@ func _ready() -> void:
 	tools.feature_requested.connect(_on_feature_requested)
 	tools.reference_requested.connect(_on_reference_requested)
 	tools.picked_feature_requested.connect(_on_picked_feature_requested)
+	tools.insert_requested.connect(_on_insert_requested)
 	sketcher = Sketcher.new()
 	sketcher.game = self
 	add_child(sketcher)
@@ -271,6 +272,12 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 				d.set_units(_new_units.length, _new_units.mass)
 			_open(d, false)
 			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
+		"new_assembly":
+			d = ClassDB.instantiate(&"CadAssembly")
+			d.new_blank(FileBrowser.free_path("Assembly 1", "fpasm").get_file().get_basename(),
+				ProjectSettings.globalize_path(FileBrowser.PROJECTS))
+			_open(d, true)
+			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
 		"assembly":
 			d = ClassDB.instantiate(&"CadAssembly")
 			d.make_sample()
@@ -291,6 +298,9 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 		place_board_ahead(false)
 	boards.load_from(doc)  # the part's own boards, and the message board where it was left
 	tools.reset()
+	if m == "new_assembly":
+		tools.set_tool_id("insert_part")
+		hud.toast("A blank assembly. Aim at the floor and press %s to place a saved part" % Actions.prompt(&"primary"))
 	if m == "new" or m == "challenge":
 		tools.set_tool_id("sketch")
 		hud.toast("A blank part. Aim at the ground and press %s to start a sketch on the Top plane" % Actions.prompt(&"primary"))
@@ -406,7 +416,7 @@ func _menu_items() -> Array:
 
 ## The File page of the pause menu.
 func _file_items() -> Array:
-	var items := [["New part…", "new_part"], ["Open…", "open"], ["Save as…", "save_as"]]
+	var items := [["New part…", "new_part"], ["New assembly", "new_assembly"], ["Open…", "open"], ["Save as…", "save_as"]]
 	if not is_assembly:
 		items.append(["Import STEP…", "import_step"])
 	items += [["Export STEP", "export_step"], ["Export IGES", "export_iges"], ["Export STL", "export_stl"],
@@ -600,6 +610,17 @@ func _on_reference_requested(type: String, params: Dictionary) -> void:
 			_show_tool()
 	else:
 		tools.insert_reference(type, params)
+
+
+## Insert part: choose a saved part, then place it where the player aimed.
+func _on_insert_requested(at: Vector3) -> void:
+	file_browser.pick_part(func(path: String): insert_part_file(path, at))
+
+
+func insert_part_file(path: String, at: Vector3) -> void:
+	var r: Dictionary = doc.insert_part(ProjectSettings.globalize_path(path), Transform3D(Basis(), at))
+	hud.toast(r.message)
+	_on_model_changed()
 
 
 func _on_picked_feature_requested(type: String, base: Dictionary, op: String) -> void:
@@ -1335,6 +1356,11 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			_save_as()
 		"import_step":
 			_import_step()
+		"new_assembly":
+			_menu_page = ""
+			hud.set_menu(false)
+			_autosave()
+			_start_mode("new_assembly")
 		"new_part":
 			_menu_page = "new"
 			var items := []
@@ -1356,6 +1382,17 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			get_tree().quit()
 		"select_feature":
 			tools.selected = arg
+		"toggle_ground":
+			for c in doc.components():
+				if c.id == arg:
+					hud.toast(doc.set_grounded(arg, not c.grounded).message)
+			_on_model_changed()
+		"remove_component":
+			hud.toast(doc.remove_component(arg).message)
+			_on_model_changed()
+		"delete_mate":
+			hud.toast(doc.delete_mate(arg).message)
+			_on_model_changed()
 		"move_feature_up", "move_feature_down":
 			var feats: Array = doc.get_features()
 			var at := -1

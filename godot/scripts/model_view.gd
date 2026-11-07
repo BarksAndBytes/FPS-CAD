@@ -593,6 +593,20 @@ func highlight_component(index: int) -> void:
 
 
 ## Shows a component shifted by offset while it is being carried, before the move is committed.
+## Moves every component's nodes to where the assembly has them now (after a drag or a solve).
+func update_component_transforms() -> void:
+	if not is_assembly or doc == null:
+		return
+	for i in _component_nodes:
+		var c: Dictionary = doc.component(i)
+		if c.is_empty():
+			continue
+		var nodes: Array = _component_nodes[i]
+		nodes[0].transform = c.transform
+		nodes[1].transform = c.transform
+		nodes[2] = c.transform
+
+
 func preview_component_offset(index: int, offset: Vector3) -> void:
 	if not _component_nodes.has(index):
 		return

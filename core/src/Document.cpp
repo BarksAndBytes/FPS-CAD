@@ -378,11 +378,22 @@ AssemblyDocument AssemblyDocument::sample() {
     c.virtualPart = pin;  // same fileId: four instances of one part
     c.placement.t = {(i % 2 ? 0.08 : -0.08), (i < 2 ? 0.04 : -0.04), -0.020};  // head rests on the plate
     a.components.push_back(c);
+    // The pin's shaft in its hole, and its head resting on the plate.
+    double cx = i % 2 ? 0.08 : -0.08, cy = i < 2 ? 0.04 : -0.04;
     Mate m;
     m.type = "concentric";
-    m.refs = Json::array({{{"component", pc.id}, {"feature", plate.features[static_cast<size_t>(i + 1)].id}},
-                          {{"component", c.id}, {"feature", pin.features[0].id}}});
+    m.refs = Json::array({{{"component", pc.id}, {"feature", plate.features[static_cast<size_t>(i + 1)].id}, {"role", "cyl"},
+                           {"probe", {cx + 0.004, cy, 0.005}}, {"normal", {-1, 0, 0}}},
+                          {{"component", c.id}, {"feature", pin.features[0].id}, {"role", "cyl"},
+                           {"probe", {0.004, 0, 0.015}}, {"normal", {1, 0, 0}}}});
     a.mates.push_back(m);
+    Mate rest;
+    rest.type = "coincident";
+    rest.refs = Json::array({{{"component", pc.id}, {"feature", plate.features[0].id}, {"role", "p+z"},
+                              {"probe", {cx + 0.02, cy, 0.01}}, {"normal", {0, 0, 1}}},
+                             {{"component", c.id}, {"feature", pin.features[1].id}, {"role", "p-z"},
+                              {"probe", {0.006, 0, 0.03}}, {"normal", {0, 0, -1}}}});
+    a.mates.push_back(rest);
   }
   return a;
 }
