@@ -64,6 +64,12 @@ public:
   // 0.6: the history. The rollback bar (index of the first feature not built; -1 at the end),
   // moving a feature (refused when it would break a feature that builds now), suppressing.
   int get_rollback() const;
+  // 0.7: a section view ({origin, normal}, the side the normal points to is cut away; {} clears),
+  // a face's measurements, and overlapping bodies.
+  void set_section(const godot::Dictionary& plane);
+  bool has_section() const;
+  godot::Dictionary face_measure(const godot::Dictionary& hit) const;
+  godot::Array interference() const;
   godot::Dictionary set_rollback(int index);
   godot::Dictionary reorder_feature(const godot::String& id, int index);
   godot::Dictionary set_suppressed(const godot::String& id, bool suppressed);

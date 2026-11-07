@@ -497,6 +497,48 @@ Dictionary CadPart::delete_feature(const String& id) {
 
 int CadPart::get_rollback() const { return model_->document().rollback; }
 
+void CadPart::set_section(const Dictionary& plane) {
+  if (plane.is_empty()) {
+    model_->setSection(std::nullopt);
+    return;
+  }
+  Vector3 o = plane.get("origin", Vector3());
+  Vector3 n = plane.get("normal", Vector3(0, 0, -1));
+  fpcad::Vec3 co = toCad(o), cn = toCad(n);
+  model_->setSection(std::make_pair(co, cn));
+}
+
+bool CadPart::has_section() const { return model_->hasSection(); }
+
+Dictionary CadPart::face_measure(const Dictionary& hit) const {
+  fpcad::PickHit h = dictToHit(hit);
+  auto m = model_->faceMeasure(h.body, h.face);
+  Dictionary d;
+  d["ok"] = m.ok;
+  if (!m.ok) return d;
+  d["area"] = m.area;
+  d["kind"] = str(m.kind);
+  d["radius"] = m.radius;
+  d["radius2"] = m.radius2;
+  d["normal"] = toGodot(m.normal);
+  d["axis"] = toGodot(m.axis);
+  d["centre"] = toGodot(m.centre);
+  return d;
+}
+
+Array CadPart::interference() const {
+  Array out;
+  for (auto& x : model_->interference()) {
+    Dictionary d;
+    d["a"] = x.a;
+    d["b"] = x.b;
+    d["volume"] = x.volume;
+    d["centre"] = toGodot(x.centre);
+    out.push_back(d);
+  }
+  return out;
+}
+
 Dictionary CadPart::set_rollback(int index) {
   auto& doc = model_->document();
   int n = static_cast<int>(doc.features.size());
@@ -724,7 +766,12 @@ Dictionary CadPart::plane_from_hit(const Dictionary& hit) const {
 }
 
 Dictionary CadPart::plane_basis(const Dictionary& plane) const {
-  fpcad::SketchPlane p = planeOf(plane);
+  fpcad::SketchPlane p;
+  try {
+    p = planeOf(plane);
+  } catch (const std::exception&) {
+    return Dictionary();
+  }
   Dictionary d;
   d["origin"] = toGodot(p.origin);
   d["normal"] = toGodot(p.normal);
@@ -753,6 +800,11 @@ Dictionary CadPart::solve_sketch(const Dictionary& sketch) const {
     PackedStringArray conflicts;
     for (auto& c : r.conflicts) conflicts.push_back(str(c));
     d["conflicts"] = conflicts;
+    PackedStringArray freePts, freeEnts;
+    for (auto& id : r.freePoints) freePts.push_back(str(id));
+    for (auto& id : r.freeEntities) freeEnts.push_back(str(id));
+    d["free_points"] = freePts;
+    d["free_entities"] = freeEnts;
     d["sketch"] = jsonToVariant(s.toJson());
   } catch (const std::exception& e) {
     d["ok"] = false;
@@ -1145,6 +1197,10 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("move_feature", "id", "delta"), &CadPart::move_feature);
   ClassDB::bind_method(D_METHOD("delete_feature", "id"), &CadPart::delete_feature);
   ClassDB::bind_method(D_METHOD("get_rollback"), &CadPart::get_rollback);
+  ClassDB::bind_method(D_METHOD("set_section", "plane"), &CadPart::set_section);
+  ClassDB::bind_method(D_METHOD("has_section"), &CadPart::has_section);
+  ClassDB::bind_method(D_METHOD("face_measure", "hit"), &CadPart::face_measure);
+  ClassDB::bind_method(D_METHOD("interference"), &CadPart::interference);
   ClassDB::bind_method(D_METHOD("set_rollback", "index"), &CadPart::set_rollback);
   ClassDB::bind_method(D_METHOD("reorder_feature", "id", "index"), &CadPart::reorder_feature);
   ClassDB::bind_method(D_METHOD("set_suppressed", "id", "suppressed"), &CadPart::set_suppressed);

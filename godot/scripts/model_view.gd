@@ -207,8 +207,33 @@ func refresh(size: float = -1.0) -> void:
 		_tri_faces.append(doc.triangle_faces(b))
 		_face_features.append(doc.face_feature_ids(b))
 		_edges.append(_make_edges(doc.build_edges(b, defl)))
+		if doc.has_method("has_section") and doc.has_section():
+			_edges.append(_section_cap(b))
 	_refresh_sketches()
 	_refresh_references()
+
+
+## The cut face of a section view, tinted so it reads as a cut (it is the last face of the body).
+func _section_cap(b: int) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var ids: Array = _face_features[b]
+	var tris := _face_triangles(b, ids.size() - 1, 0.0008 * _mesh_size if _mesh_size > 0.0 else 0.0008)
+	if not tris.is_empty():
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = tris
+		var m := ArrayMesh.new()
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		mi.mesh = m
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.54, 0.24, 0.55)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	return mi
 
 
 ## Unused sketches show as lines in the world (used ones hide, as in most CAD tools).

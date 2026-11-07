@@ -2180,15 +2180,30 @@ func set_dimension(text: String, kind: String, refs: Array) -> bool:
 		game.hud.toast("A %s must be more than zero" % kind)
 		return false
 	var s: Dictionary = sketch.duplicate(true)
-	var found := false
+	var found: Dictionary = {}
+	var is_new := true
 	for c in s.constraints:
 		if c.kind == kind and _same_refs(c.refs, refs):
 			c.value = value
-			found = true
-	if not found:
-		s.constraints.append({id = _new_id(s, "d"), kind = kind, refs = refs, value = value})
+			found = c
+			is_new = false
+	if found.is_empty():
+		found = {id = _new_id(s, "d"), kind = kind, refs = refs, value = value}
+		s.constraints.append(found)
+	var was_driven: bool = found.get("driven", false)
+	found.erase("driven")  # a typed value drives the geometry when it can
 	if kind == "distance" and refs.size() == 1 and _ents.has(refs[0]) and _ents[refs[0]].kind == "text" and value is float:
 		text_height = value  # the next text starts at this height
+	var trial: Dictionary = game.doc.solve_sketch(s)
+	if not trial.ok and (is_new or was_driven):
+		# It would over-define the sketch: keep it as a driven (reference) dimension, which shows
+		# the size without driving it, like a desktop CAD tool offers.
+		found.driven = true
+		if _commit(s, "Reference dimension"):
+			game.hud.toast("That would over-define the sketch, so it is a reference dimension (in brackets): it shows the size" if not was_driven
+				else "Still a reference dimension: the sketch is already defined there")
+			return true
+		return false
 	return _commit(s, "Dimension")
 
 
@@ -2758,9 +2773,21 @@ func _paint() -> void:
 	var picked := {}
 	for p in _picks:
 		picked[p.id] = true
+	# Under-defined geometry stays blue and the rest turns dark, one entity at a time.
+	var free_pts := {}
+	var free_ents := {}
+	var per_entity: bool = status.get("ok", false) and status.has("free_points")
+	if per_entity:
+		for fp in status.free_points:
+			free_pts[fp] = true
+		for fe in status.free_entities:
+			free_ents[fe] = true
 	for id in _ents:
 		var e: Dictionary = _ents[id]
-		var color := COLOR_CONSTRUCTION if e.get("construction", false) else base
+		var own := base
+		if per_entity:
+			own = COLOR_FREE if free_ents.has(id) or (e.get("pts", []) as Array).any(func(q): return free_pts.has(q)) else COLOR_DEFINED
+		var color := COLOR_CONSTRUCTION if e.get("construction", false) else own
 		if picked.has(id) or (_hover.get("kind", "") == "entity" and _hover.id == id):
 			color = COLOR_ACTIVE
 		for poly in _polylines(e):
@@ -2768,7 +2795,10 @@ func _paint() -> void:
 	# Points, the origin axes and the cursor.
 	var d := _tol * 0.35
 	for id in _pts:
-		var c := COLOR_ACTIVE if (picked.has(id) or (_hover.get("kind", "") == "point" and _hover.id == id)) else base
+		var own_p := base
+		if per_entity:
+			own_p = COLOR_FREE if free_pts.has(id) else COLOR_DEFINED
+		var c := COLOR_ACTIVE if (picked.has(id) or (_hover.get("kind", "") == "point" and _hover.id == id)) else own_p
 		if id != "o":
 			_cross(im, _pts[id], d, c)
 			if _fixed.has(id):  # fixed (converted) points get a small square
@@ -2971,7 +3001,7 @@ func _draw_labels() -> void:
 		var l := _label(shown)
 		shown += 1
 		l.position = _w(pos)
-		l.text = _dimension_text(c)
+		l.text = ("(%s)" if c.get("driven", false) else "%s") % _dimension_text(c)
 	# Each pattern: its count and spacing (or spread) beside its first copy.
 	for p in sketch.get("patterns", []):
 		var where := Vector2.ZERO

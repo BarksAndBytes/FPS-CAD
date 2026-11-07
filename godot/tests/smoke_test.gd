@@ -473,7 +473,14 @@ func _run() -> void:
 	_check(main.sketcher.sketch.entities[-1].get("construction", false), "and back to construction")
 	var shaded: PackedVector2Array = main.doc.sketch_fill(main.sketcher.sketch)
 	_check(shaded.size() >= 6, "the rectangle is still the only shaded profile")
-	_check(not main.sketcher.set_dimension("1000", "distance", ["l3"]), "a conflicting dimension is refused")
+	var before_dims: int = main.sketcher.sketch.constraints.size()
+	var pts_before: Array = main.sketcher.sketch.points.duplicate(true)
+	_check(main.sketcher.set_dimension("1000", "distance", ["l3"]), "a dimension that would over-define the sketch is still added")
+	var ref_dim: Dictionary = main.sketcher.sketch.constraints[-1]
+	_check(main.sketcher.sketch.constraints.size() == before_dims + 1 and ref_dim.get("driven", false)
+		and float(ref_dim.value) > 0.0 and main.sketcher.sketch.points == pts_before,
+		"…as a reference dimension that measures the line and moves nothing (%s)" % str(ref_dim.get("value")))
+	main.sketcher.undo()
 	await _pad(JOY_BUTTON_X)
 	await _frames(3)
 	var feats: Array = main.doc.get_features()
@@ -1098,6 +1105,7 @@ func _references(main: Node) -> void:
 	await _finish(main)
 	await _repeat(main)
 	await _history(main)
+	await _check_design(main)
 
 
 ## 0.4: fillet and chamfer on picked edges, holes of each kind, shell, extrude end conditions.
@@ -1420,6 +1428,56 @@ func _history(main: Node) -> void:
 			fixed = f.ok
 	_check(fixed and tools.repair.is_empty() and not main.dialog.visible, "picking a new edge fixes the fillet")
 	main.hud.set_panel(false)
+
+
+## 0.7: measuring faces, edges and angles, the section view, interference.
+func _check_design(main: Node) -> void:
+	main._start_mode("new")
+	main.player.set_size_now(1.0)
+	await _frames(2)
+	var doc: RefCounted = main.doc
+	doc.add_primitive("box", Vector3(0, 0, 0), {w = 1.0, d = 1.0, h = 0.5}, "add")
+	main._on_model_changed()
+	var tools: Node = main.tools
+	var down := Vector3(0, -1, 0)
+	tools.set_tool_id("measure")
+	tools.options["measure"] = 2  # face or edge
+	tools.aim = doc.pick(Vector3(0.1, 5, 0.1), down, 20.0)
+	tools._act(true, false)
+	_check(tools.measure_text().begins_with("Face area"), "Measure reads the area of the face aimed at (%s)" % tools.measure_text())
+	tools.aim = doc.pick(Vector3(0.495, 5, 0.1), down, 20.0)
+	tools._act(true, false)
+	_check(tools.measure_text() == "Edge length " + main.hud.length(1.0),
+		"…and the length of the edge aimed at (%s)" % tools.measure_text())
+	tools.options["measure"] = 3  # angle
+	tools.aim = doc.pick(Vector3(0.1, 5, 0.1), down, 20.0)
+	tools._act(true, false)
+	tools.aim = doc.pick(Vector3(5, 0.25, 0.1), Vector3(-1, 0, 0), 20.0)
+	tools._act(true, false)
+	_check(tools.measure_text().begins_with("Angle 90.00°"), "the angle between the top and a side is 90° (%s)" % tools.measure_text())
+	tools._act(false, false)
+	_check(tools.measure_text() == "", "the secondary action clears it")
+	# Section: cut with the Front plane; the player's side is taken away and can be walked into.
+	tools.set_tool_id("section")
+	tools.options["section"] = 1
+	var eye_z: float = main.player.camera.global_position.z
+	tools._act(true, false)
+	await _frames(2)
+	_check(doc.has_section(), "Section view cuts the part")
+	var near_side := 0.3 * signf(eye_z) if eye_z != 0.0 else 0.3
+	_check(doc.pick(Vector3(0.1, 5, near_side), down, 20.0).is_empty(), "the half on the player's side is gone")
+	var cap: Dictionary = doc.pick(Vector3(0.1, 0.25, near_side * 10.0), Vector3(0, 0, -signf(near_side)), 20.0)
+	_check(not cap.is_empty() and absf(cap.point.z) < 1e-6 and String(cap.feature_id) == "", "the cut face stands on the plane")
+	tools._act(false, false)
+	await _frames(2)
+	_check(not doc.has_section() and not doc.pick(Vector3(0.1, 5, near_side), down, 20.0).is_empty(), "the secondary action shows the whole part")
+	# Interference between two overlapping bodies.
+	doc.add_primitive("box", Vector3(0.5, 0, 0), {w = 0.4, d = 0.4, h = 0.4}, "new-body")
+	main._on_model_changed()
+	tools.set_tool_id("interference")
+	tools._act(true, false)
+	_check(tools._clashes.size() == 1 and absf(float(tools._clashes[0].volume) - 0.2 * 0.4 * 0.4) < 1e-6,
+		"Interference finds the two bodies' overlap (%s)" % str(tools._clashes))
 
 
 ## 0.3: Save, Save as, the Open browser, opening a file, STEP import, New part in other units.

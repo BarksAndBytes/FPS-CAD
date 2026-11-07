@@ -34,7 +34,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Sheet metal, weldments, plastics, mold | Dedicated environments | None | None |
 | Assemblies | Mates/joints solved, motion, interference, BOM, standard parts | Components, instances and placement; mates stored, not solved | Low |
 | Drawings and MBD | 2D drawings, GD&T, BOM tables, 3D annotations | None (`.fpdrw` planned after 1.0) | None |
-| Inspection and analysis | Measure, mass properties, section, interference, draft, curvature | Point-to-point measure, bounding box, mass properties with centre of mass | Low–medium |
+| Inspection and analysis | Measure, mass properties, section, interference, draft, curvature | Measure distance, angle, length, radius, area; bounding box; mass properties; walkable section view; body interference | Medium |
 | Simulation and generative | FEA, motion, CFD, topology, generative | None | None |
 | Manufacturing | CAM, additive prep, nesting, costing | STL/3MF export only | Low |
 | Data management | PDM / Vault / cloud versions, branching | Local native files with history; undo/redo; autosave | Low (by design) |
@@ -128,9 +128,9 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Angular dimension | All three | ✓ | Pick two lines |
 | Point-to-line and parallel-line distance | All three | ✓ | |
 | Ordinate / baseline dimensions | All three | ✗ | |
-| Driven (reference) dimensions | All three | ✗ | |
+| Driven (reference) dimensions | All three | ✓ | An over-defining dimension becomes a reference dimension in brackets (0.7) |
 | Dimensions as expressions | Equations / parameters / parameters | ✓ | `width / 2`, `25 mm`, part variables |
-| Degrees-of-freedom status | Fully/under/over defined / constraint status / DOF | ✓ | HUD message; blue/black lines |
+| Degrees-of-freedom status | Fully/under/over defined / constraint status / DOF | ✓ | HUD message; free geometry blue and defined geometry dark, entity by entity (0.7) |
 | Conflict detection | SketchXpert / warnings / warnings | ✓ | A conflicting change is refused with a message |
 | Find under-constrained geometry | Fusion "Find Under-Constrained" (Oct 2026) | ✗ | |
 | Closed-profile shading | All three | ✓ | Holes cut out; construction excluded |
@@ -327,9 +327,9 @@ flat view (a sketch or a face), long before full drawings.
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
 | Measure distance | All three | ✓ | Point to point with ΔX ΔY ΔZ; snaps to corners |
-| Measure angle, radius, edge length, face area | All three | ✗ | |
+| Measure angle, radius, edge length, face area | All three | ✓ | Measure → face or edge / angle (0.7) |
 | Mass properties (volume, area, mass, centre of mass) | All three | ✓ | Mass properties tool; material and density from the part |
-| Section view | All three | ✗ | Valuable in first person: walk a cut-away |
+| Section view | All three | ✓ | Walkable: the cut is real for display, walking and aiming (0.7) |
 | Draft analysis | All three (Fusion ±90° range, Oct 2026) | ✗ | |
 | Curvature, zebra stripes | All three | ✗ | |
 | Thickness, undercut, symmetry checks | SW; Fusion | ✗ | |
@@ -497,7 +497,7 @@ release leaves the game usable on its own; earlier ones unblock later ones.
 3. Failed features marked, with a "re-pick the face" fix.
 4. Stronger face references so upstream edits stop breaking later features.
 
-### 0.7 Check the design
+### 0.7 Check the design (done)
 1. Measure angle, radius or diameter, edge length, face area.
 2. A section view you can walk through.
 3. Driven (reference) sketch dimensions; highlight under-constrained geometry.

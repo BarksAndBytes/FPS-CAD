@@ -306,6 +306,29 @@ what it uses…**.
   a later cut split it), and only then the old nearest-face-with-that-normal rule. A push/pull of
   one of two parallel faces no longer jumps to the other when the sketch moves.
 
+## Checking the design (0.7)
+
+- **Measure** has two more options (LB / E): **face or edge** reads the edge under the crosshair
+  (length; radius and diameter for arcs and circles) or else the face (area; radius and diameter
+  for round faces; sphere and torus radii), with the edge or face highlighted before you press;
+  **angle** takes two picks (flat faces, straight edges or round faces' axes) and gives the angle
+  between them and its supplement. The readout goes on the board like a distance.
+- **Section view** (Measure group): cuts the part through the crosshair facing you, or with the
+  Front, Right or Top plane, or the flat face aimed at; your side is taken away. The cut is real
+  for display, walking and aiming (the core meshes and picks each body cut by a half-space, the
+  cut face tinted orange), so you can walk into the part; the model itself is unchanged and the
+  cut stays through edits until the secondary action shows the whole part.
+- **Interference** (Measure group): lists every pair of bodies that overlap with the shared
+  volume, and marks the first overlap's centre.
+- **Driven dimensions**: a new sketch dimension that would over-define the sketch is added as a
+  reference dimension, shown in brackets: the solver measures it after each solve and it drives
+  nothing (`driven: true` in the constraint). Typing a value into it makes it drive again when the
+  sketch allows.
+- **Under-defined geometry**: the solver reports which points can still move and which circles
+  can still change size (from the constraint Jacobian's null space). Sketch geometry is drawn
+  blue where it is still free and dark where it is defined, entity by entity, instead of the whole
+  sketch turning dark only when it is fully defined.
+
 ## Native file layout (`.fpprt`)
 
 ```

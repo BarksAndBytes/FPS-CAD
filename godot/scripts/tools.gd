@@ -26,7 +26,8 @@ const WHEEL := [
 	["Modify", "Change what is there: push/pull faces, move, delete", ["push", "move", "delete"]],
 	["Primitives", "Place ready-made shapes", ["box", "cylinder", "sphere"]],
 	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
-	["Measure", "Distances, the bounding box, and mass properties", ["measure", "bbox", "mass"]],
+	["Measure", "Distances, angles, areas, the bounding box, mass properties, section view, interference",
+		["measure", "bbox", "mass", "section", "interference"]],
 	["Boards", "Whiteboards in the room: part properties, your notes; carry, turn and resize them",
 		["board_props", "board_notes", "board_video", "board_arrange"]],
 ]
@@ -51,7 +52,11 @@ const TOOLS := [
 	{id = "delete_body", name = "Delete body", pri = "delete the body you aim at", alt = "undo", opt = []},
 	{id = "repick", name = "Re-pick", pri = "pick the face it should use", alt = "cancel", opt = []},
 	{id = "push", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
-	{id = "measure", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
+	{id = "measure", name = "Measure", pri = "set point / measure what you aim at", alt = "clear",
+		opt = ["snap to corners", "free", "face or edge", "angle"]},
+	{id = "section", name = "Section view", pri = "cut the part here (walk into it)", alt = "show the whole part",
+		opt = ["facing me", "Front plane", "Right plane", "Top plane", "aimed face"]},
+	{id = "interference", name = "Interference", pri = "check where bodies overlap", alt = "hide", opt = []},
 	{id = "delete", name = "Delete", pri = "delete target", alt = "undo", opt = []},
 	{id = "box", name = "Box", pri = "place box", alt = "copy size from target", opt = ["add", "cut", "new body"]},
 	{id = "cylinder", name = "Cylinder", pri = "place cylinder", alt = "copy size from target", opt = ["add", "cut", "new body"]},
@@ -71,7 +76,7 @@ const TOOLS := [
 	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "choose its video: a link, a downloaded video or a file", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
-const PART_ONLY := ["repick", "fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
+const PART_ONLY := ["section", "interference", "repick", "fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
 	"combine", "split", "delete_body", "push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
 	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_arrange"]
 const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_arrange"]
@@ -105,6 +110,9 @@ var _show_bbox := false
 var _show_mass := false
 var _bbox_cache := {}
 var _com_cache: Variant = null
+var _measure_info := ""       # face or edge / angle readout
+var _angle_first := {}        # the first pick of an angle measurement
+var _clashes: Array = []      # interference results shown
 var _picks: Array = []        # fillet/chamfer: edge_near results; shell: {ref, body, face}
 var _hover_edge := {}
 var repair := {}  # {id, name, type} while a failed feature's references are picked again
@@ -158,6 +166,8 @@ func reset() -> void:
 	_measure_b = null
 	_ref_picks = []
 	_picks = []
+	_measure_info = ""
+	_clashes = []
 	_show_bbox = false
 	_show_mass = false
 	_place_dims = {}
@@ -178,6 +188,7 @@ func set_tool(i: int) -> void:
 	_ref_picks = []
 	_picks = []
 	_hover_edge = {}
+	_angle_first = {}
 	repair = {}
 	view.show_picks([], [])
 	view.highlight_reference("")
@@ -387,6 +398,34 @@ func _act(primary: bool, repeat: bool) -> void:
 			_act_reference(primary, hit)
 		"board_props", "board_notes", "board_video", "board_arrange":
 			board_tool.emit(tool().id, primary)
+		"section":
+			if not primary:
+				doc.set_section({})
+				hud.toast("Whole part shown")
+				changed.emit()
+				return
+			var plane := _section_plane(hit)
+			if plane.is_empty():
+				hud.toast("Aim at a flat face for its plane, or pick another option with %s" % Actions.prompt(&"context_wheel"))
+				return
+			doc.set_section(plane)
+			hud.toast("Section view · walk into the cut · %s shows the whole part" % Actions.prompt(&"secondary"))
+			changed.emit()
+		"interference":
+			if not primary:
+				_clashes = []
+				view.show_com(null, 0.0)
+				return
+			_clashes = doc.interference()
+			if doc.body_count() < 2:
+				hud.toast("Interference needs two bodies or more")
+			elif _clashes.is_empty():
+				hud.toast("No interference: the %d bodies do not overlap" % doc.body_count())
+			else:
+				var parts := []
+				for x in _clashes:
+					parts.append("bodies %d and %d overlap by %s" % [int(x.a) + 1, int(x.b) + 1, Units.volume_text(float(x.volume), hud.units)])
+				hud.toast("Interference: " + "; ".join(parts))
 		"bbox":
 			_show_bbox = primary
 			if primary:
@@ -413,7 +452,13 @@ func _act(primary: bool, repeat: bool) -> void:
 			if not primary:
 				_measure_a = null
 				_measure_b = null
+				_measure_info = ""
+				_angle_first = {}
 				return
+			if option() in ["face or edge", "angle"]:
+				_measure_pick(hit)
+				return
+			_measure_info = ""
 			var p: Variant = _snap_point(hit)
 			if p == null:
 				return
@@ -1015,7 +1060,108 @@ func _snap_point(hit: Dictionary) -> Variant:
 	return best if best != null else p
 
 
+## Measures the face or edge aimed at (area, length, radius), or the angle between two picks.
+func _measure_pick(hit: Dictionary) -> void:
+	var m := _measured(hit)
+	if m.is_empty():
+		hud.toast("Aim at a face or an edge of the part")
+		return
+	_measure_a = null
+	_measure_b = null
+	if option() == "face or edge":
+		_measure_info = m.text
+		hud.toast(m.text)
+		return
+	if m.dir == null:
+		hud.toast("%s has no direction to measure an angle from: pick a flat face, a straight edge or a round face's axis" % m.what)
+		return
+	if _angle_first.is_empty():
+		_angle_first = m
+		_measure_info = ""
+		hud.toast("First: %s · now aim at the second and press %s" % [m.what, Actions.prompt(&"primary")])
+		return
+	var a: Vector3 = _angle_first.dir
+	var b: Vector3 = m.dir
+	var deg := rad_to_deg(acos(clampf(absf(a.dot(b)), 0.0, 1.0)))
+	_measure_info = "Angle %.2f° (%.2f°) between %s and %s" % [deg, 180.0 - deg, _angle_first.what, m.what]
+	hud.toast(_measure_info)
+	_angle_first = {}
+
+
+## What the crosshair is on, measured: {what, text, dir (a direction or null), points (edge)}.
+func _measured(hit: Dictionary) -> Dictionary:
+	if hit.is_empty() or hit.get("ground", false) or is_assembly or String(hit.get("feature_id", "")) == "":
+		return {}
+	var e: Dictionary = doc.edge_near(hit.point, 0.04 * player.size)
+	if e.get("ok", false):
+		var r := float(e.get("radius", 0.0))
+		var pts: PackedVector3Array = e.points
+		var text := "Edge length %s" % hud.length(float(e.length))
+		var dir: Variant = null
+		if r > 0.0:
+			text += " · radius %s · diameter %s" % [hud.length(r), hud.length(2.0 * r)]
+		elif pts.size() >= 2:
+			dir = (pts[pts.size() - 1] - pts[0]).normalized()
+		return {what = "an edge", text = text, dir = dir, points = pts}
+	var f: Dictionary = doc.face_measure(hit)
+	if not f.get("ok", false):
+		return {}
+	var text := "Face area %s" % Units.area_text(float(f.area), hud.units)
+	var dir: Variant = null
+	var what := "a face"
+	match String(f.kind):
+		"plane":
+			dir = (f.normal as Vector3).normalized()
+			what = "a flat face"
+		"cylinder", "cone":
+			text += " · radius %s · diameter %s" % [hud.length(float(f.radius)), hud.length(2.0 * float(f.radius))]
+			dir = (f.axis as Vector3).normalized()
+			what = "a round face's axis"
+		"sphere":
+			text += " · sphere radius %s" % hud.length(float(f.radius))
+		"torus":
+			text += " · tube radius %s · ring radius %s" % [hud.length(float(f.radius)), hud.length(float(f.radius2))]
+	return {what = what, text = text, dir = dir, points = PackedVector3Array()}
+
+
+## The section plane for the Section tool's option: through the crosshair facing the player,
+## a standard plane, or the aimed flat face. The side the player stands on is cut away.
+func _section_plane(hit: Dictionary) -> Dictionary:
+	var eye: Vector3 = player.camera.global_position if player.get("camera") != null else Vector3.ZERO
+	var opt := option()
+	var origin := Vector3.ZERO
+	var normal := Vector3.ZERO
+	match opt:
+		"facing me":
+			if hit.is_empty():
+				return {}
+			origin = hit.point
+			var look: Vector3 = hit.point - eye
+			look.y = 0.0
+			if look.length() < 1e-9:
+				return {}
+			normal = Vector3(signf(look.x), 0, 0) if absf(look.x) > absf(look.z) else Vector3(0, 0, signf(look.z))
+			normal = -normal  # toward the player: their side is taken away
+		"Front plane", "Right plane", "Top plane":
+			var sp: Dictionary = doc.standard_plane(STANDARD_PLANES[opt])
+			var basis: Dictionary = doc.plane_basis(sp.plane)
+			origin = basis.origin
+			normal = basis.normal
+			if (eye - origin).dot(normal) < 0.0:
+				normal = -normal
+		"aimed face":
+			if hit.is_empty() or hit.get("ground", false) or String(hit.get("feature_id", "")) == "":
+				return {}
+			if doc.plane_from_hit(hit).is_empty():
+				return {}
+			origin = hit.point
+			normal = hit.normal
+	return {origin = origin, normal = normal}
+
+
 func measure_text() -> String:
+	if _measure_info != "":
+		return _measure_info
 	if _measure_a == null or _measure_b == null:
 		return ""
 	var d: Vector3 = _measure_b - _measure_a
@@ -1089,13 +1235,26 @@ func _update_preview(hit: Dictionary) -> void:
 			elif on_feature and id != "ref_point":
 				face_plane = true
 		"measure":
-			var sp: Variant = _snap_point(hit)
-			if _measure_a != null and _measure_b == null and sp != null:
-				var spv: Vector3 = sp
-				label = hud.length(spv.distance_to(_measure_a))
-			view.show_measure(_measure_a, _measure_b, sp, s_size())
+			if option() in ["face or edge", "angle"]:
+				var mm := _measured(hit)
+				view.show_picks([] if mm.is_empty() else [mm.points], [])
+				if not mm.is_empty():
+					label = mm.text.get_slice(" · ", 0) if option() == "angle" else mm.text
+					face_plane = (mm.points as PackedVector3Array).is_empty()
+				view.show_measure(null, null, null, s_size())
+			else:
+				var sp: Variant = _snap_point(hit)
+				if _measure_a != null and _measure_b == null and sp != null:
+					var spv: Vector3 = sp
+					label = hud.length(spv.distance_to(_measure_a))
+				view.show_measure(_measure_a, _measure_b, sp, s_size())
+		"section":
+			if not hit.is_empty():
+				label = "Cut here (%s)" % option()
 	if id != "measure":
 		view.show_measure(_measure_a, _measure_b, null, s_size())
+	if id == "interference" and not _clashes.is_empty():
+		view.show_com(_clashes[0].centre, 0.15 * player.size)
 	if id in PICK_TOOLS and not is_assembly:
 		label = _pick_preview(id, hit, on_feature, label)
 		face_plane = on_feature and id in ["hole", "shell", "draft"]
@@ -1110,7 +1269,7 @@ func _update_preview(hit: Dictionary) -> void:
 	view.show_bbox(_bbox_cache if _show_bbox and id == "bbox" and not is_assembly else {})
 	if _show_mass and id == "mass" and not is_assembly and _com_cache != null:
 		view.show_com(_com_cache, 0.15 * player.size)
-	else:
+	elif not (id == "interference" and not _clashes.is_empty()):
 		view.show_com(null, 0.0)
 	# Highlights: the face being pushed, or the feature/component under the crosshair.
 	if is_assembly:
