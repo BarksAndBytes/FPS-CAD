@@ -468,37 +468,57 @@ CASCADE already reads STEP.
 
 ---
 
-## 19. Gaps by value: a suggested order
+## 19. Roadmap to 1.0
 
-This is a starting point for planning, not a commitment. It favours what makes everyday parts
-possible, then what suits a first-person game.
+Agreed November 2026, after a whole-product review of what is critical to a CAD workflow. Each
+release leaves the game usable on its own; earlier ones unblock later ones.
 
-1. **Everyday part modelling**
-   - Patterns (linear, circular) and mirror
-   - Holes (simple, counterbore, countersink) and cosmetic threads
-   - Fillet and chamfer with edge picking
-   - Shell and draft
-   - Extrude end conditions (up to face/next) and two-direction extrudes
-2. **Sketching depth** (done in November 2026; what is left)
-   - Fonts and rotated text
-   - Stretch, curvature (G2) spline ends, control-point splines
-   - Construction planes for sketching off the model (§2)
-3. **Reference geometry** (done in November 2026; left: planes tangent to curved faces, using
-   coordinate systems for export and measuring).
-4. **History control**: rollback, reorder, suppress in the UI.
-5. **Inspection**: section views (walk inside a cut model), measure angle/radius/area, mass
-   properties panel, interference check.
-6. **STEP import**.
-7. **Assemblies**: solved mates/joints, exploded views (walkable), BOM, interference.
-8. **Sheet metal**: a strong fit for building in first person.
-9. **Drawings**: flat DXF/PDF output first, then the planned `.fpdrw`.
-10. **Later or out of scope**:
-    - Surfacing and freeform
-    - Simulation
-    - CAM
-    - Routing
-    - Electronics
-    - Cloud PDM and collaboration (local-only by design)
+### 0.3 Work on real files
+1. Save As with a chosen name; rename a part.
+2. An Open browser of every saved part: recent first, delete, duplicate.
+3. New part from the pause menu, choosing units and material.
+4. STEP import as a solid to build on.
+
+### 0.4 Finish the part
+1. Fillet and chamfer on picked edges, as an in-game tool.
+2. Extrude end conditions: through all, up to face, two directions.
+3. Hole tool: simple, counterbore, countersink, tapped (with a thread note).
+4. Shell, picking the faces left open.
+
+### 0.5 Repeat and reuse
+1. Linear and circular patterns of features.
+2. Mirror features.
+3. Draft.
+4. Body tools: combine, subtract, split, delete.
+
+### 0.6 Control the history
+1. Rollback bar: insert a feature mid-history.
+2. Reorder; suppress and unsuppress.
+3. Failed features marked, with a "re-pick the face" fix.
+4. Stronger face references so upstream edits stop breaking later features.
+
+### 0.7 Check the design
+1. Measure angle, radius or diameter, edge length, face area.
+2. A section view you can walk through.
+3. Driven (reference) sketch dimensions; highlight under-constrained geometry.
+4. Interference between bodies.
+
+### 0.8 Assemblies
+1. New assembly; insert saved parts in the game.
+2. Solved mates (coincident, concentric, distance, angle, lock) with constrained dragging.
+3. Interference between components; bill of materials.
+4. A walkable exploded view.
+
+### 0.9 Drawings
+1. DXF and PDF of a flat view: a sketch, a face, a projection.
+2. Standard views with model dimensions: the first `.fpdrw`.
+
+### 1.0 Harden and polish
+Stability, performance on large parts, controls and docs; no new feature areas.
+
+### After 1.0
+Sheet metal first (it suits building in first person), then surfacing, simulation, CAM, routing,
+electronics. Cloud PDM and collaboration stay out (local-only by design).
 
 ---
 
