@@ -113,6 +113,10 @@ String CadPart::save_file(const String& path) {
 }
 
 String CadPart::get_part_name() const { return str(model_->document().name); }
+void CadPart::set_part_name(const String& name) {
+  std::string n = str(name.strip_edges());
+  if (!n.empty()) model_->document().name = n;
+}
 String CadPart::get_units() const { return str(model_->document().units); }
 String CadPart::get_file_id() const { return str(model_->document().fileId); }
 String CadPart::get_material() const {
@@ -176,6 +180,39 @@ Dictionary CadPart::set_material(const String& name, double density) {
   doc.material = m ? m->name : n;
   doc.density = m ? m->density : density;
   return result(true, "");
+}
+
+// Brings in a STEP file as an import feature: a new body standing on the ground at the origin
+// (or the part's first body when there is none yet).
+Dictionary CadPart::import_step(const String& path) {
+  fpcad::ImportResult im = fpcad::importStep(str(path));
+  if (!im.ok) return result(false, im.message);
+  checkpoint();
+  auto& doc = model_->document();
+  std::string id = fpcad::newId();
+  doc.imports[id] = im.brep;
+  fpcad::Feature f;
+  f.type = "import";
+  std::string file = str(path.get_file());
+  f.name = doc.uniqueName("Import " + (file.empty() ? std::string("STEP") : file.substr(0, file.find_last_of('.'))));
+  f.op = model_->bodyCount() == 0 ? fpcad::BodyOp::Add : fpcad::BodyOp::NewBody;
+  f.params = {{"shape", id}, {"file", file},
+              {"x", -(im.min[0] + im.max[0]) / 2}, {"y", -(im.min[1] + im.max[1]) / 2}, {"z", -im.min[2]}};
+  std::string fid = doc.add(f).id;
+  fpcad::RebuildReport r = model_->rebuild();
+  bool ok = true;
+  for (auto& st : r.features)
+    if (st.featureId == fid && !st.ok) ok = false;
+  if (!ok) {
+    undo();
+    redo_.clear();
+    return result(false, "the imported shape could not be added to the part");
+  }
+  Dictionary d = result(true, im.message);
+  d["id"] = str(fid);
+  d["volume"] = im.volume;
+  d["solids"] = im.solids;
+  return d;
 }
 
 Dictionary CadPart::set_units(const String& length, const String& mass) {
@@ -410,7 +447,7 @@ Dictionary CadPart::move_feature(const String& id, const Vector3& delta) {
   auto shift = [&](fpcad::Json& obj, const char* key, double by) {
     obj[key] = model_->param(*f, key) + by;
   };
-  if (f->type == "box" || f->type == "cylinder" || f->type == "sphere" || f->type == "cone") {
+  if (f->type == "box" || f->type == "cylinder" || f->type == "sphere" || f->type == "cone" || f->type == "import") {
     shift(f->params, "x", d[0]);
     shift(f->params, "y", d[1]);
     shift(f->params, "z", d[2]);
@@ -1000,6 +1037,8 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_material"), &CadPart::get_material);
   ClassDB::bind_method(D_METHOD("get_density"), &CadPart::get_density);
   ClassDB::bind_method(D_METHOD("get_mass_units"), &CadPart::get_mass_units);
+  ClassDB::bind_method(D_METHOD("import_step", "path"), &CadPart::import_step);
+  ClassDB::bind_method(D_METHOD("set_part_name", "name"), &CadPart::set_part_name);
   ClassDB::bind_method(D_METHOD("native_library_dir"), &CadPart::native_library_dir);
   ClassDB::bind_method(D_METHOD("material_library"), &CadPart::material_library);
   ClassDB::bind_method(D_METHOD("material_info"), &CadPart::material_info);

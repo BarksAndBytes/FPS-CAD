@@ -126,7 +126,9 @@ Json checkManifest(ZipReader& z, const std::string& path, const char* kind) {
 }
 
 std::string partHistory(const PartDocument& d) {
-  return d.featuresJson().dump() + d.variablesJson().dump() + d.units;
+  std::string imported;
+  for (auto& [id, data] : d.imports) imported += id + ":" + hashOf(data) + ";";
+  return d.featuresJson().dump() + d.variablesJson().dump() + d.units + imported;
 }
 
 Json viewpointsJson(const PartDocument& d) {
@@ -170,6 +172,12 @@ void savePart(const std::string& path, const PartDocument& doc, const PartModel*
     z.add("history/features.json", doc.featuresJson().dump(2));
     z.add("history/variables.json", doc.variablesJson().dump(2));
     z.add("views/viewpoints.json", viewpointsJson(doc).dump(2));
+    Json importIds = Json::array();
+    for (auto& [id, data] : doc.imports) {
+      z.add("imports/" + id + ".brep", data);
+      importIds.push_back(id);
+    }
+    z.add("imports/index.json", importIds.dump());
     z.add("views/boards.json", (doc.boards.is_array() ? doc.boards : Json::array()).dump(2));
   });
 }
@@ -191,6 +199,13 @@ PartDocument loadPart(const std::string& path) {
     throw;
   } catch (const std::exception& e) {
     throw FileError(path + ": feature history is damaged (" + e.what() + ")");
+  }
+  if (z.has("imports/index.json")) {
+    for (auto& id : z.json("imports/index.json")) {
+      std::string name = "imports/" + id.get<std::string>() + ".brep";
+      if (!z.has(name)) throw FileError(path + ": " + name + " is missing");
+      d.imports[id.get<std::string>()] = z.read(name);
+    }
   }
   if (z.has("views/boards.json")) {
     try {

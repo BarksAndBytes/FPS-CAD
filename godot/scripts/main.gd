@@ -22,12 +22,15 @@ const ToolWheel := preload("res://scripts/tool_wheel.gd")
 const Whiteboard := preload("res://scripts/whiteboard.gd")
 const Units := preload("res://scripts/units.gd")
 const Boards := preload("res://scripts/boards.gd")
+const FileBrowser := preload("res://scripts/file_browser.gd")
 
 var doc: RefCounted
 var is_assembly := false
 var state := "boot"
 var mode := ""
 var last_saved := ""
+var current_path := ""   # the file the open document was opened from or last saved to ("" if never)
+var _new_units := {length = "mm", mass = "g"}  # what New part starts in
 
 var player: Node3D
 var view: Node3D
@@ -48,6 +51,7 @@ var sketcher: Node3D
 var dialog: CanvasLayer
 var numpad: CanvasLayer
 var video_menu: CanvasLayer  # video_menu.gd: what a video board plays
+var file_browser: CanvasLayer  # file_browser.gd: Open
 var updater: Node
 var _update_checked := false
 
@@ -118,6 +122,9 @@ func _ready() -> void:
 	video_menu = preload("res://scripts/video_menu.gd").new()
 	video_menu.game = self
 	add_child(video_menu)
+	file_browser = preload("res://scripts/file_browser.gd").new()
+	file_browser.game = self
+	add_child(file_browser)
 	dialog = preload("res://scripts/feature_dialog.gd").new()
 	dialog.game = self
 	add_child(dialog)
@@ -258,7 +265,9 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 			_spawn(sp.feet, sp.yaw, sp.size, sp.pitch)
 		"new":
 			d = ClassDB.instantiate(&"CadPart")
-			d.new_blank("Part 1", "mm")
+			d.new_blank(FileBrowser.free_path("Part 1", "fpprt").get_file().get_basename(), _new_units.length)
+			if _new_units.length != "mm" or _new_units.mass != "g":
+				d.set_units(_new_units.length, _new_units.mass)
 			_open(d, false)
 			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
 		"assembly":
@@ -301,7 +310,7 @@ func _menu_back() -> void:
 	var was := _menu_page
 	_menu_page = ""
 	hud.set_menu_items(_menu_items())
-	hud.focus_menu_action(was + "_menu")
+	hud.focus_menu_action("new_part" if was == "new" else was + "_menu")
 
 
 func _units_items() -> Array:
@@ -390,12 +399,17 @@ func _menu_items() -> Array:
 	if doc != null and doc.has_method("material_info") and not is_assembly:
 		items += [["Units: " + Units.system_label(hud.units, doc.get_mass_units()), "units_menu"],
 			["Material: " + doc.get_material(), "material_menu"]]
-	items += [
-		["Save", "save"], ["Open last saved", "open_saved"],
-		["Export STEP", "export_step"], ["Export IGES", "export_iges"],
-		["Export STL", "export_stl"], ["Export 3MF", "export_3mf"],
-		["Exit to title", "title"], ["Quit", "quit"],
-	]
+	items += [["Save", "save"], ["File: new, open, save as, import, export…", "file_menu"], ["Exit to title", "title"], ["Quit", "quit"]]
+	return items
+
+
+## The File page of the pause menu.
+func _file_items() -> Array:
+	var items := [["New part…", "new_part"], ["Open…", "open"], ["Save as…", "save_as"]]
+	if not is_assembly:
+		items.append(["Import STEP…", "import_step"])
+	items += [["Export STEP", "export_step"], ["Export IGES", "export_iges"], ["Export STL", "export_stl"],
+		["Export 3MF", "export_3mf"], ["Back", "menu_back"]]
 	return items
 
 
@@ -467,6 +481,7 @@ func _on_cmap_closed() -> void:
 
 func _open(new_doc: RefCounted, assembly: bool) -> void:
 	doc = new_doc
+	current_path = ""
 	is_assembly = assembly
 	var report: Dictionary = doc.rebuild()
 	if not report.ok:
@@ -537,6 +552,8 @@ func _close_editors() -> void:
 		numpad.close()
 	if video_menu != null and video_menu.visible:
 		video_menu.close()
+	if file_browser != null and file_browser.visible:
+		file_browser.close()
 	if dialog != null and dialog.visible:
 		dialog.cancel()
 	if sketcher != null and sketcher.active:
@@ -607,15 +624,128 @@ func _doc_name() -> String:
 	return n.to_lower().replace(" ", "-").validate_filename()
 
 
+## Saves to the file the document came from; a document never saved gets a free name in the
+## projects folder (never another part's file).
 func _save(path: String = "") -> void:
 	if path == "":
-		path = "%s/%s.%s" % [PROJECTS, _doc_name(), "fpasm" if is_assembly else "fpprt"]
+		path = current_path if current_path != "" else FileBrowser.free_path(_display_name(), _ext())
+	DirAccess.make_dir_recursive_absolute(PROJECTS)
 	var err: String = doc.save_file(ProjectSettings.globalize_path(path))
 	if err == "":
 		last_saved = path
-		hud.toast("Saved to " + ProjectSettings.globalize_path(path))
+		current_path = path
+		hud.toast("Saved %s  ·  %s" % [path.get_file().get_basename(), ProjectSettings.globalize_path(path)])
 	else:
 		hud.toast("Not saved: " + err)
+
+
+func _display_name() -> String:
+	return doc.get_assembly_name() if is_assembly else doc.get_part_name()
+
+
+func _ext() -> String:
+	return "fpasm" if is_assembly else "fpprt"
+
+
+## Save as: asks for a name, renames the part to it and saves under it (a free file name).
+func _save_as() -> void:
+	hud.set_menu(false)
+	numpad.ask_text("Save as", _display_name(), "A name for this %s" % ("assembly" if is_assembly else "part"),
+		func(text: String) -> void:
+			var name := text.strip_edges()
+			if not is_assembly:
+				doc.set_part_name(name)
+			_save(FileBrowser.free_path(name, _ext(), current_path if current_path.get_file().get_basename() == name else ""))
+			hud.refresh_panel()
+	)
+
+
+## Opens a saved part or assembly: a path, or (Android) a content:// file from the picker, which
+## is copied into the projects folder first.
+func open_file(path: String) -> void:
+	var local := path
+	if path.begins_with("content://"):
+		var data := FileAccess.get_file_as_bytes(path)
+		if data.is_empty():
+			hud.toast("Android didn't let the game read that file")
+			return
+		var name := path.uri_decode().get_file().get_slice(":", path.uri_decode().get_file().get_slice_count(":") - 1).get_file()
+		var ext := name.get_extension() if name.get_extension() in ["fpprt", "fpasm"] else "fpprt"
+		DirAccess.make_dir_recursive_absolute(PROJECTS)
+		local = FileBrowser.free_path(name.get_basename() if name.get_basename() != "" else "Opened", ext)
+		var f := FileAccess.open(local, FileAccess.WRITE)
+		f.store_buffer(data)
+		f.close()
+	var asm := local.get_extension() == "fpasm"
+	var d: RefCounted = ClassDB.instantiate(&"CadAssembly" if asm else &"CadPart")
+	var err: String = d.load_file(ProjectSettings.globalize_path(local))
+	if err != "" and not asm:
+		var other: RefCounted = ClassDB.instantiate(&"CadAssembly")
+		if other.load_file(ProjectSettings.globalize_path(local)) == "":
+			d = other
+			asm = true
+			err = ""
+	if err != "":
+		hud.toast(err)
+		return
+	_close_editors()
+	hud.set_menu(false)
+	_open(d, asm)
+	current_path = local
+	last_saved = local
+	_frame_model()
+	hud.toast("Opened %s" % local.get_file().get_basename())
+
+
+## Stands the player where the whole model is in view, sized to it.
+func _frame_model() -> void:
+	if is_assembly or not doc.has_method("bounding_box"):
+		return
+	var b: Dictionary = doc.bounding_box()
+	if not b.get("ok", false):
+		return
+	var lo: Vector3 = b.min
+	var hi: Vector3 = b.max
+	var c := (lo + hi) / 2.0
+	var diag := (hi - lo).length()
+	var s := clampf(diag / 2.5, 0.02, 200.0)
+	_spawn(Vector3(c.x, view.room.floor_y(), hi.z + diag * 0.9 + 0.5 * s), 0.0, s, -0.35)
+
+
+## Import STEP: the system's file picker, then the shape comes in as a new body.
+func _import_step() -> void:
+	hud.set_menu(false)
+	if is_assembly:
+		hud.toast("Open a part to import into")
+		return
+	var filters := PackedStringArray(["*/*"]) if OS.has_feature("android") else PackedStringArray(["*.step, *.stp ; STEP files"])
+	var done := func(ok: bool, paths: PackedStringArray, _filter: int) -> void:
+		if ok and not paths.is_empty():
+			import_step_file(paths[0])
+	if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+		DisplayServer.file_dialog_show("Import a STEP file", "", "", false, DisplayServer.FILE_DIALOG_MODE_OPEN_FILE, filters, done)
+	else:
+		numpad.ask_url("STEP file to import", "", "Its full path on this computer", func(text: String) -> void: import_step_file(text))
+
+
+func import_step_file(path: String) -> void:
+	var local := path
+	if path.begins_with("content://"):
+		var data := FileAccess.get_file_as_bytes(path)
+		if data.is_empty():
+			hud.toast("Android didn't let the game read that file")
+			return
+		local = "user://import.step"
+		var f := FileAccess.open(local, FileAccess.WRITE)
+		f.store_buffer(data)
+		f.close()
+	hud.toast("Importing %s…" % path.uri_decode().get_file())
+	var r: Dictionary = doc.import_step(ProjectSettings.globalize_path(local))
+	if not r.ok:
+		hud.toast("Not imported: " + String(r.message))
+		return
+	_on_model_changed()
+	hud.toast("Imported %s  ·  Move it with the Move tool" % r.message)
 
 
 func _export(ext: String) -> void:
@@ -681,7 +811,7 @@ func _aim_hit() -> Dictionary:
 ## True while something covers the view and should get the controller instead of the player.
 func modal_open() -> bool:
 	var tutorial_card: bool = (tutorial != null and tutorial.is_open_card()) or (challenge != null and challenge.is_open_card())
-	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or video_menu.visible or updater.busy()
+	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or video_menu.visible or file_browser.visible or updater.busy()
 
 
 func _process(dt: float) -> void:
@@ -736,6 +866,8 @@ func _keep_focus() -> void:
 		numpad.keep_focus()
 	elif video_menu.visible:
 		video_menu.keep_focus()
+	elif file_browser.visible:
+		file_browser.keep_focus()
 	elif hud.menu_open:
 		UiTheme.keep_focus(hud.menu_control())
 	elif tutorial != null and tutorial.is_open_card():
@@ -903,7 +1035,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			cmap.open()
 			get_viewport().set_input_as_handled()
 		return
-	if state != "play" or cmap.visible or numpad.visible or video_menu.visible or updater.busy():
+	if state != "play" or cmap.visible or numpad.visible or video_menu.visible or file_browser.visible or updater.busy():
 		return  # the splash, the controls map, the number pad and the updater handle their own input
 	if dialog.visible and not hud.menu_open:
 		if dialog.handle(event):
@@ -1038,6 +1170,15 @@ func _on_touch_released(name: String) -> void:
 
 
 func _on_hud_request(action: String, arg: Variant) -> void:
+	if action.begins_with("new:"):
+		for s in Units.SYSTEMS:
+			if s.id == action.substr(4):
+				_new_units = {length = s.length, mass = s.mass}
+		_menu_page = ""
+		hud.set_menu(false)
+		_autosave()
+		_start_mode("new")
+		return
 	if action.begins_with("units:"):
 		_apply_units(action.substr(6))
 		return
@@ -1147,18 +1288,25 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			_show_title()
 		"save":
 			_save()
-		"open_saved":
-			if last_saved == "":
-				hud.toast("Nothing saved yet in this session")
-				return
-			var d = ClassDB.instantiate(&"CadAssembly" if last_saved.ends_with(".fpasm") else &"CadPart")
-			var err: String = d.load_file(ProjectSettings.globalize_path(last_saved))
-			if err != "":
-				hud.toast(err)
-				return
-			_close_editors()
-			_open(d, last_saved.ends_with(".fpasm"))
+		"file_menu":
+			_menu_page = "file"
+			hud.set_menu_items(_file_items(), "FILE")
+			hud.focus_menu_action("open")
+		"open":
 			hud.set_menu(false)
+			file_browser.open()
+		"save_as":
+			_save_as()
+		"import_step":
+			_import_step()
+		"new_part":
+			_menu_page = "new"
+			var items := []
+			for s in Units.SYSTEMS:
+				items.append(["New part in %s  ·  %s" % [s.id, s.name], "new:" + s.id])
+			items.append(["Back", "menu_back"])
+			hud.set_menu_items(items, "NEW PART")
+			hud.focus_menu_action("new:MMGS")
 		"export_step":
 			_export("step")
 		"export_iges":

@@ -1,6 +1,7 @@
 #include "fpcad/Model.h"
 
 #include <algorithm>
+#include <sstream>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
@@ -8,6 +9,7 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BinTools.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -995,7 +997,29 @@ struct PartModel::Impl {
     return loft.Shape();
   }
 
+  // Imported shapes, parsed once per shape (an import can be large).
+  mutable std::map<std::string, TopoDS_Shape> importCache;
+
+  TopoDS_Shape importShape(const Feature& f) const {
+    std::string id = f.params.value("shape", std::string());
+    auto it = doc.imports.find(id);
+    if (it == doc.imports.end()) throw FeatureError("the imported shape is missing from the file");
+    std::string key = id + ":" + std::to_string(it->second.size());
+    auto c = importCache.find(key);
+    if (c == importCache.end()) {
+      std::istringstream is(it->second, std::ios::binary);
+      TopoDS_Shape s;
+      BinTools::Read(s, is);
+      if (s.IsNull()) throw FeatureError("the imported shape could not be read");
+      c = importCache.emplace(key, s).first;
+    }
+    gp_Trsf t;
+    t.SetTranslation(gp_Vec(get(f.params, "x"), get(f.params, "y"), get(f.params, "z")));
+    return BRepBuilderAPI_Transform(c->second, t, true).Shape();
+  }
+
   TopoDS_Shape toolShape(const Feature& f) const {
+    if (f.type == "import") return importShape(f);
     if (f.type == "extrude" && f.params.contains("sketch")) return sketchExtrude(f);
     if (f.type == "revolve") return sketchRevolve(f);
     if (f.type == "sweep") return sketchSweep(f);

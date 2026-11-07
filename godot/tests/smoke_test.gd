@@ -1094,6 +1094,71 @@ func _references(main: Node) -> void:
 	await _boards(main)
 	await _part_settings(main)
 	await _video_board(main)
+	await _files(main)
+
+
+## 0.3: Save, Save as, the Open browser, opening a file, STEP import, New part in other units.
+func _files(main: Node) -> void:
+	var FB = load("res://scripts/file_browser.gd")
+	DirAccess.make_dir_recursive_absolute("user://projects")
+	for e in FB.saved_files():
+		if String(e.name).begins_with("Smoke "):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(e.path))
+	main.doc.set_part_name("Smoke part")
+	main.current_path = ""
+	main._save()
+	var first: String = main.current_path
+	_check(first.ends_with("Smoke part.fpprt") and FileAccess.file_exists(first), "Save names the file after the part (%s)" % first)
+	main.current_path = ""
+	main._save()
+	_check(main.current_path.ends_with("Smoke part 2.fpprt"), "a new part never overwrites another's file (%s)" % main.current_path)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(main.current_path))
+	main.current_path = first
+	main._save_as()
+	_check(main.numpad.visible, "Save as asks for a name")
+	main.numpad._edit.text = "Smoke bracket"
+	main.numpad._key("OK")
+	_check(main.doc.get_part_name() == "Smoke bracket" and main.current_path.ends_with("Smoke bracket.fpprt") and FileAccess.file_exists(main.current_path),
+		"Save as renames the part and saves it under the new name")
+	var names: Array = FB.saved_files().map(func(e): return e.name)
+	_check("Smoke bracket" in names and "Smoke part" in names, "the Open browser lists saved parts")
+	main.file_browser.open()
+	_check(main.file_browser.visible and main.file_browser._list.get_child_count() >= 2, "Open shows them")
+	var entry: Dictionary = FB.saved_files().filter(func(e): return e.name == "Smoke part")[0]
+	main.file_browser._duplicate(entry)
+	_check(FileAccess.file_exists("user://projects/Smoke part copy.fpprt"), "Duplicate copies a part")
+	var copy: Dictionary = FB.saved_files().filter(func(e): return e.name == "Smoke part copy")[0]
+	main.file_browser._delete(copy)
+	_check(FileAccess.file_exists(copy.path), "Delete asks once more first")
+	main.file_browser._delete(copy)
+	_check(not FileAccess.file_exists(copy.path), "the second press deletes")
+	main.file_browser._open(entry)
+	_check(not main.file_browser.visible and main.doc.get_part_name() == "Smoke part" and main.current_path == entry.path, "opening a saved part loads it")
+	# STEP: export this part, import it back as a new body.
+	var vol: float = main.doc.mass_properties().volume
+	var bodies: int = main.doc.body_count()
+	var step := ProjectSettings.globalize_path("user://smoke-import.step")
+	_check(main.doc.export_file(step, "mm").ok, "the part exports to STEP")
+	main.import_step_file(step)
+	_check(main.doc.body_count() == bodies + 1 and absf(main.doc.mass_properties().volume - 2.0 * vol) < vol * 1e-3
+		and main.doc.get_features()[-1].type == "import", "Import STEP brings it in as a new body (%d bodies)" % main.doc.body_count())
+	var imp: Dictionary = main.doc.get_features()[-1]
+	_check(main.doc.move_feature(imp.id, Vector3(0.5, 0, 0)).ok, "an imported body can be moved")
+	main._save()
+	var again: RefCounted = ClassDB.instantiate(&"CadPart")
+	_check(again.load_file(ProjectSettings.globalize_path(main.current_path)) == "" and again.rebuild().ok
+		and absf(again.mass_properties().volume - 2.0 * vol) < vol * 1e-3, "the imported shape is saved inside the part file")
+	DirAccess.remove_absolute(step)
+	# New part in IPS.
+	main._on_hud_request("new_part", null)
+	_check(main.hud._menu_buttons.has("new:IPS"), "New part offers the unit systems")
+	main._on_hud_request("new:IPS", null)
+	await _frames(3)
+	_check(main.doc.get_units() == "in" and main.doc.get_mass_units() == "lb" and main.doc.get_features().is_empty()
+		and main.current_path == "", "New part in IPS starts a blank inch part")
+	for e in FB.saved_files():
+		if String(e.name).begins_with("Smoke "):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(e.path))
 
 
 ## A video board: what can play, the error screen for what can't, pause, and saving the link.

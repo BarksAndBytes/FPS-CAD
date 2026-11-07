@@ -28,6 +28,8 @@ public:
   void new_blank(const godot::String& name, const godot::String& units);
   godot::String get_material() const;
   godot::String get_mass_units() const;
+  godot::Dictionary import_step(const godot::String& path);
+  void set_part_name(const godot::String& name);
   godot::String native_library_dir() const;
   godot::Array material_library() const;
   godot::Dictionary material_info() const;

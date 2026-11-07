@@ -35,6 +35,19 @@ ExportFormat formatFromPath(const std::string& path);
 const char* formatName(ExportFormat f);
 
 ExportResult exportPart(const PartModel& model, const std::string& path, const ExportOptions& opts = {});
+
+// A STEP file read into solids, in metres. brep: the shape in OCCT's binary format (BinTools), as
+// an import feature stores it. min/max: its bounding box.
+struct ImportResult {
+  bool ok = false;
+  std::string message;
+  std::string brep;
+  int solids = 0;
+  double volume = 0;  // m^3
+  double min[3] = {0, 0, 0};
+  double max[3] = {0, 0, 0};
+};
+ImportResult importStep(const std::string& path);
 ExportResult exportAssembly(const AssemblyModel& model, const std::string& path, const ExportOptions& opts = {});
 
 }  // namespace fpcad

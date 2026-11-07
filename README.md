@@ -72,7 +72,7 @@ any way you like, in any orientation, and it passes when the geometry matches. P
 | A / B | Enter / Esc | Select / back in every menu |
 | Y | I, Tab | Inspect the target's parameters (model panel) |
 | View | F1 | Controls map (controller, keyboard and touch pages) |
-| Menu | Esc | Pause menu: controls, units (MMGS, CGS, MKS, IPS, FPS), material, save, open, export, exit to title |
+| Menu | Esc | Pause menu: controls, units (MMGS, CGS, MKS, IPS, FPS), material, save, File (new part, open, save as, import STEP, export), exit to title |
 | — | F | Fly through walls |
 | X | Enter | Finish the sketch |
 | Y (sketching) | I | Sketch view ↔ free look (sketches open square to the plane, X right, Y up) |

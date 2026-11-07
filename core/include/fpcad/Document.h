@@ -5,6 +5,7 @@
 // own axes. Feature parameters are JSON values: a number (SI units) or an expression string.
 
 #include <array>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -32,6 +33,7 @@ BodyOp bodyOpFromString(const std::string& s);
 //   extrude   plane {origin[3], normal[3], xdir[3]}, profile, depth, symmetric
 //             profile = {"kind":"rect","cx","cy","w","h"} | {"kind":"circle","cx","cy","r"}
 //                     | {"kind":"polyline","points":[[x,y],...]}
+//   import    shape (id in PartDocument::imports), x y z (where its origin goes), file (name shown)
 //   fillet    target (feature id), edges ("all"|"vertical"|"top"|"bottom"), r
 //   chamfer   target (feature id), edges, d
 struct Feature {
@@ -68,6 +70,9 @@ struct PartDocument {
   // Whiteboards standing in the room (the game's own layout data: kind, where, notes). Not part
   // of the history: undo and redo leave them where they are.
   Json boards = Json::array();
+  // Shapes brought in by import features (STEP), by id, in OCCT's binary BRep format. Saved in
+  // the part file as imports/<id>.brep.
+  std::map<std::string, std::string> imports;
 
   Feature* find(const std::string& id);
   const Feature* find(const std::string& id) const;

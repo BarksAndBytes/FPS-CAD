@@ -1013,6 +1013,37 @@ int main() {
     CHECK(std::abs(m.massProperties().mass - m.massProperties().volume * 7870) < 1e-9);
   });
 
+  run("STEP import brings a part back as a solid that saves with the part", [&] {
+    PartModel src(PartDocument::deskSample());
+    src.rebuild();
+    std::string step = (out / "desk-for-import.step").string();
+    CHECK(exportPart(src, step).ok);
+    ImportResult im = importStep(step);
+    CHECK(im.ok && im.solids >= 1);
+    double v0 = src.massProperties().volume;
+    CHECK(std::abs(im.volume - v0) / v0 < 1e-4);  // metres, not millimetres
+    PartDocument d;
+    d.imports["shape1"] = im.brep;
+    Feature f;
+    f.type = "import";
+    f.params = {{"shape", "shape1"}, {"x", 1.0}, {"y", 0.0}, {"z", 0.0}};
+    d.add(f);
+    PartModel m(d);
+    m.rebuild();
+    CHECK(m.lastReport().ok && m.bodyCount() >= 1);
+    CHECK(std::abs(m.massProperties().volume - v0) / v0 < 1e-4);
+    CHECK(std::abs(m.boundingBox()->min[0] - (im.min[0] + 1.0)) < 1e-6);  // moved by x
+    std::string path = (out / "imported.fpprt").string();
+    savePart(path, m.document(), &m);
+    PartDocument back = loadPart(path);
+    CHECK(back.imports.size() == 1 && back.imports["shape1"] == im.brep);
+    CHECK(cachedBodyCount(path) >= 1);
+    back.imports["shape1"] += "x";  // a changed import makes the cached geometry stale
+    savePart(path, back, &m);
+    CHECK(cachedBodyCount(path) == 0);
+    CHECK(!importStep((out / "missing.step").string()).ok);
+  });
+
   run("native part file round-trips with cached geometry", [&] {
     PartModel m(PartDocument::sample());
     m.rebuild();

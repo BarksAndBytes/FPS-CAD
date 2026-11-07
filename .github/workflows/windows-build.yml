@@ -59,13 +59,15 @@ jobs:
         run: |
           BUILD=${{ github.run_number }}
           echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+          RELEASE=$(tr -d '[:space:]' < VERSION)
+          echo "RELEASE=$RELEASE" >> "$GITHUB_ENV"
           printf '%s\n' \
             'extends RefCounted' \
             '## Written by CI for each published build.' \
             "const BUILD := $BUILD" \
             "const COMMIT := \"${GITHUB_SHA::7}\"" \
             "const BRANCH := \"${GITHUB_REF_NAME}\"" \
-            "const VERSION := \"0.2.$BUILD\"" > godot/scripts/build_info.gd
+            "const VERSION := \"$RELEASE.$BUILD\"" > godot/scripts/build_info.gd
           cat godot/scripts/build_info.gd
 
       - name: Install Godot and its Windows export templates
@@ -171,7 +173,7 @@ jobs:
           import hashlib, json, os, sys
           data = open(sys.argv[1], "rb").read()
           print(json.dumps({"platform": "windows", "build": int(os.environ["BUILD"]),
-                            "version": "0.2." + os.environ["BUILD"], "commit": os.environ["GITHUB_SHA"][:7],
+                            "version": os.environ["RELEASE"] + "." + os.environ["BUILD"], "commit": os.environ["GITHUB_SHA"][:7],
                             "branch": os.environ["GITHUB_REF_NAME"], "url": sys.argv[2],
                             "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}, indent=2))
           PY
@@ -190,7 +192,7 @@ jobs:
           gh release create windows-dev "export/$ZIP" export/latest.json \
             --prerelease --target "$GITHUB_SHA" \
             --title "Windows build ${BUILD} (${GITHUB_SHA::7})" \
-            --notes "Build ${BUILD} (version 0.2.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a PC.
+            --notes "Build ${BUILD} (version ${RELEASE}.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a PC.
 
           Run: download the zip, right-click it and choose Extract All, then open the folder and run FPS-CAD.exe. Keep every file together; the DLLs beside the exe are the CAD kernel, and ffmpeg.exe converts videos for the video board. Windows 10 or 11, 64-bit, with a GPU that supports Vulkan or Direct3D 12. If it closes straight away, run FPS-CAD.console.exe instead to see the error.
 

@@ -214,6 +214,25 @@ then the title screen over an orbiting model: Training, New part, Free build, As
 Controls, Quit. Training runs on the core's `trainingCourse()` part and checks real game state
 for each of its fourteen objectives, including sketching on a face and extruding it. Completion is stored in `user://settings.cfg`.
 
+## Files (0.3)
+
+The pause menu has **Save** and a **File** page: **New part…** (in MMGS, CGS, MKS, IPS or FPS),
+**Open…**, **Save as…**, **Import STEP…** and the exports. Parts and assemblies live in
+`user://projects`, one file each, named after the part. Save writes back to the file the document
+came from; a document never saved gets a free name (`Bracket`, `Bracket 2`, ...) so it can never
+overwrite another part. Save as asks for a name, renames the part and saves under it.
+
+**Open** (`file_browser.gd`) lists every saved part and assembly, most recently changed first,
+with kind, size and date: open, duplicate (`<name> copy`), or delete (the button asks "Sure?"
+first). **Open a file on this device…** uses the system's picker; Android's `content://` picks
+are copied into the projects folder, then opened. An opened part puts the player where the whole
+model is in view, sized to it.
+
+**Import STEP** reads the file with Open Cascade (`importStep`, in metres), keeps only its solids,
+and adds an `import` feature: the shape is stored inside the part file (`imports/`), stands on the
+ground centred on the origin, is the first body or a new body, moves with the Move tool (its
+`x y z`), undoes, and invalidates the cached geometry when it changes.
+
 ## Native file layout (`.fpprt`)
 
 ```
@@ -222,6 +241,8 @@ history/features.json    ordered features with parameters and references
 history/variables.json   global variables and equations
 geometry/body-N.brep     cached B-rep per body (rebuilt from history if missing or stale)
 views/viewpoints.json    saved "stand here" positions and sizes
+views/boards.json        the whiteboards standing in the room
+imports/index.json       ids of imported shapes; imports/<id>.brep each shape (OCCT binary BRep)
 ```
 
 An `.fpasm` adds `assembly/components.json` (file references by relative path + fileId, or
