@@ -159,7 +159,14 @@ jobs:
         run: |
           NAME="FPS-CAD-windows-${GITHUB_SHA::7}"
           echo "ZIP=$NAME.zip" >> "$GITHUB_ENV"
-          mv export/windows "export/$NAME"
+          # The self-checked game can hold its folder for a moment after it exits: wait and retry.
+          taskkill //F //IM FPS-CAD.exe > /dev/null 2>&1 || true
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            mv export/windows "export/$NAME" && break
+            echo "folder still in use, retrying ($i)"
+            sleep 3
+          done
+          test -d "export/$NAME"
           (cd export && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null)
           ls -la export
 
