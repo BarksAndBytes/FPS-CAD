@@ -255,6 +255,31 @@ aims at in the room, then open the feature panel on the sizes with a live previe
   face, stored as a face reference: the solid is trimmed by that face's plane). Directions: out
   of the plane, into it, both sides equally, or both sides with two depths (`depth2`).
 
+## Repeat and reuse (0.5)
+
+- **Linear pattern / Circular pattern** (wheel group **Repeat**): the primary action picks or
+  unpicks features (those that add or cut a shape: primitives, extrudes, revolves, sweeps, lofts,
+  holes, imports); the secondary action opens the panel. Linear: a direction (±X, ±Y, ±Z, along
+  or against the straight edge aimed at, or a reference axis), count and spacing, and an optional
+  second direction with its own count and spacing. Circular: the axis aimed at (a round face, a
+  straight edge or a reference axis) or X / Y / Z through the origin, count and total angle (360°
+  spaces the copies evenly; less puts the last copy at that angle). Each picked feature's shape is
+  repeated with the feature's own result (add, cut, intersect, new body); overlapping copies are
+  fused first so the body gets one clean boolean. Stored as a `pattern` feature (`features`,
+  `kind`, `dir`/`flip`, `count`, `spacing`, `dir2`/`flip2`, `count2`, `spacing2`, or `axis`,
+  `count`, `angle`).
+- **Mirror**: the same picking; the plane is the flat face or reference plane aimed at, or a
+  standard plane. With no features picked the whole part is mirrored and joined to itself.
+- **Draft** (Finish group): pick the faces to draft, then aim at the flat face they are drafted
+  from (the neutral plane) and press the secondary action. The faces lean in as they go away
+  from the neutral face, like a part drawn from a mould; the angle steps by 1°.
+- **Bodies** group: **Combine bodies** picks two or more bodies (the first is kept) and joins
+  them, subtracts the others from it, or keeps only the overlap, using the others up or keeping
+  them. **Split body** picks a body, then splits it in two with the face or plane aimed at (or a
+  standard or reference plane). **Delete body** removes the body aimed at; the secondary action
+  undoes. Bodies are remembered by a face on them, so the feature follows edits upstream.
+- The wheel's inner ring grows with the number of groups so its buttons never overlap.
+
 ## Native file layout (`.fpprt`)
 
 ```

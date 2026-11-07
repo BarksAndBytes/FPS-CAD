@@ -244,11 +244,19 @@ func _layout() -> void:
 	var c := size / 2.0
 	var half := minf(size.x, size.y) / 2.0
 	# Keep the outer ring on screen: on short (phone) screens both rings move in.
-	_r = clampf(half - 12.0 - CHILD / 2.0 - (SLOT + CHILD) / 2.0 - 14.0, 84.0, RADIUS)
-	_r2 = _r + (SLOT + CHILD) / 2.0 + 14.0
+	# With many groups the inner ring grows so its buttons do not overlap, and the buttons shrink
+	# when the screen has no room for that.
+	var n := maxi(3, _slots.size())
+	var gap := sin(PI / n)
+	var want := maxf(RADIUS, (SLOT + 10.0) / (2.0 * gap))
+	_r = clampf(half - 12.0 - CHILD / 2.0 - (SLOT + CHILD) / 2.0 - 14.0, 84.0, want)
+	var slot := minf(SLOT, 2.0 * _r * gap - 8.0)
+	_r2 = _r + (slot + CHILD) / 2.0 + 14.0
 	for i in _slots.size():
 		var a := _slot_angle(i)
-		_slots[i].position = c + Vector2(cos(a), sin(a)) * _r - Vector2(SLOT, SLOT) / 2.0
+		_slots[i].custom_minimum_size = Vector2(slot, slot)
+		_slots[i].size = Vector2(slot, slot)
+		_slots[i].position = c + Vector2(cos(a), sin(a)) * _r - Vector2(slot, slot) / 2.0
 	_title.position = c + Vector2(-90, -30)
 	_title.size = Vector2(180, 28)
 	_detail.position = c + Vector2(-78, 0)

@@ -67,6 +67,11 @@ Feature& PartDocument::add(Feature f) {
     base[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(base[0])));
     if (f.type == "csys") base = "Coordinate system";
     if (f.type == "face_offset") base = "Push/Pull";
+    if (f.type == "pattern") base = f.params.value("kind", std::string("linear")) == "circular" ? "Circular pattern" : "Linear pattern";
+    if (f.type == "body") {
+      std::string k = f.params.value("kind", std::string());
+      base = k == "subtract" ? "Subtract" : k == "intersect" ? "Intersect" : k == "split" ? "Split" : k == "delete" ? "Delete body" : "Combine";
+    }
     f.name = uniqueName(base);
   }
   features.push_back(std::move(f));

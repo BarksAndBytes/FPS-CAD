@@ -27,7 +27,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | --- | --- | --- | --- |
 | Sketching | ~60 entity, edit and constraint tools | 15 drawing tools (incl. polygon, slot, ellipse, spline, text), trim/extend/split/fillet/chamfer/offset/linked convert, live move, copy/rotate/scale/mirror, live patterns, smart dimensions, 12 relations, snap inference | High |
 | Part features | ~40 sketched and applied features | Extrude (end conditions), revolve, sweep, loft, push/pull, primitives, fillet, chamfer, hole, shell | Medium |
-| Patterns and mirror | Linear, circular, curve, sketch, table, fill; mirror | None | None |
+| Patterns and mirror | Linear, circular, curve, sketch, table, fill; mirror | Linear (two directions), circular, mirror of features or the whole part | Medium |
 | Reference geometry | Planes, axes, points, coordinate systems | Offset / angled / 3-point / mid planes, edge / cylinder / 2-point / 2-plane axes, points, coordinate systems; all follow the model | High |
 | Parameters | Equations, global variables, configurations, design tables | Variables and expressions | Medium |
 | Surfacing, freeform, mesh | Full surface toolsets, T-splines, mesh repair | None | None |
@@ -189,11 +189,11 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Hole wizard: simple, counterbore, countersink, tapped | Hole Wizard / Hole / Hole | ✓ | Finish → Hole (0.4); metric coarse and Unified tap sizes |
 | Threads (cosmetic and modelled) | All three | ✗ | |
 | Shell | All three | ✓ | Finish → Shell, faces left open picked in the room (0.4) |
-| Draft | All three; Fusion fixed-plane mode (Oct 2026) | ✗ | |
+| Draft | All three; Fusion fixed-plane mode (Oct 2026) | ◐ | Neutral-plane draft of picked faces (0.5); no parting line |
 | Dome, flex, deform, scale | SW; Fusion scale; Inventor | ✗ | |
-| Split body / split face | All three | ✗ | |
+| Split body / split face | All three | ◐ | Split a body with a plane or flat face (0.5); no split face |
 | Move / copy body | All three | ◐ | Move and duplicate features; no rotation |
-| Combine (booleans between bodies) | Combine / Combine / Combine | ◐ | Add, cut and new-body per feature; no body-to-body combine tool |
+| Combine (booleans between bodies) | Combine / Combine / Combine | ✓ | Bodies → Combine: join, subtract, intersect; keep or use up the tools (0.5) |
 | Delete / keep bodies | All three; SW 2026 "bodies by size" | ✗ | |
 | Thicken / offset surface to solid | All three | ✗ | Needs surfaces (§5) |
 
@@ -201,11 +201,11 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 
 | Capability | Professional | FPS-CAD | Notes |
 | --- | --- | --- | --- |
-| Linear pattern | All three | ✗ | High value |
-| Circular pattern | All three | ✗ | High value (the flanged-bushing challenge needs four holes) |
+| Linear pattern | All three | ✓ | Two directions, along axes, edges or reference axes (0.5) |
+| Circular pattern | All three | ✓ | Around a round face, edge, reference axis or X/Y/Z (0.5) |
 | Pattern along a curve, sketch-driven, table-driven, fill | All three | ✗ | |
 | Variable pattern | SW | ✗ | |
-| Mirror features / bodies | All three; Inventor associative mirror | ✗ | High value |
+| Mirror features / bodies | All three; Inventor associative mirror | ✓ | Picked features, or the whole part joined to its image (0.5) |
 
 ### 3.4 Direct, primitive and freeform modelling
 
@@ -485,7 +485,7 @@ release leaves the game usable on its own; earlier ones unblock later ones.
 3. Hole tool: simple, counterbore, countersink, tapped (with a thread note).
 4. Shell, picking the faces left open.
 
-### 0.5 Repeat and reuse
+### 0.5 Repeat and reuse (done)
 1. Linear and circular patterns of features.
 2. Mirror features.
 3. Draft.

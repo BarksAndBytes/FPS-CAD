@@ -20,7 +20,9 @@ const WHEEL := [
 	"select",
 	"sketch",
 	["Solids", "Turn a sketch into a solid: extrude, revolve, sweep, loft", ["extrude", "revolve", "sweep", "loft"]],
-	["Finish", "Round, bevel, drill and hollow: fillet, chamfer, hole, shell", ["fillet", "chamfer", "hole", "shell"]],
+	["Finish", "Round, bevel, drill, hollow and draft: fillet, chamfer, hole, shell, draft", ["fillet", "chamfer", "hole", "shell", "draft"]],
+	["Repeat", "Copy features in rows, around an axis, or mirrored", ["linear_pattern", "circular_pattern", "mirror"]],
+	["Bodies", "Whole bodies: combine, subtract, split, delete", ["combine", "split", "delete_body"]],
 	["Modify", "Change what is there: push/pull faces, move, delete", ["push", "move", "delete"]],
 	["Primitives", "Place ready-made shapes", ["box", "cylinder", "sphere"]],
 	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
@@ -40,6 +42,13 @@ const TOOLS := [
 	{id = "chamfer", name = "Chamfer", pri = "pick / unpick the edge you aim at", alt = "bevel the picked edges", opt = []},
 	{id = "hole", name = "Hole", pri = "place a hole (snapped)", alt = "place it exactly where you aim", opt = []},
 	{id = "shell", name = "Shell", pri = "pick / unpick a face to leave open", alt = "hollow the part", opt = []},
+	{id = "draft", name = "Draft", pri = "pick / unpick a face to draft", alt = "draft from the flat face you aim at", opt = []},
+	{id = "linear_pattern", name = "Linear pattern", pri = "pick / unpick a feature", alt = "repeat in rows (along the edge you aim at)", opt = []},
+	{id = "circular_pattern", name = "Circular pattern", pri = "pick / unpick a feature", alt = "repeat around the axis you aim at", opt = []},
+	{id = "mirror", name = "Mirror", pri = "pick / unpick a feature (none: the whole part)", alt = "mirror in the face or plane you aim at", opt = []},
+	{id = "combine", name = "Combine bodies", pri = "pick / unpick a body (the first is kept)", alt = "combine, subtract or intersect them", opt = []},
+	{id = "split", name = "Split body", pri = "pick the body to split", alt = "split it with the face or plane you aim at", opt = []},
+	{id = "delete_body", name = "Delete body", pri = "delete the body you aim at", alt = "undo", opt = []},
 	{id = "push", name = "Push / Pull", pri = "push face out", alt = "pull face in", opt = ["snap step", "grid step", "fine step"]},
 	{id = "measure", name = "Measure", pri = "set point", alt = "clear", opt = ["snap to corners", "free"]},
 	{id = "delete", name = "Delete", pri = "delete target", alt = "undo", opt = []},
@@ -61,12 +70,15 @@ const TOOLS := [
 	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "choose its video: a link, a downloaded video or a file", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
-const PART_ONLY := ["fillet", "chamfer", "hole", "shell", "push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
+const PART_ONLY := ["fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
+	"combine", "split", "delete_body", "push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
 	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_arrange"]
 const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_arrange"]
 const REF_TOOLS := ["ref_plane", "ref_axis", "ref_point", "ref_csys"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
-const PICK_TOOLS := ["fillet", "chamfer", "hole", "shell"]
+const PICK_TOOLS := ["fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
+	"combine", "split", "delete_body"]
+const FEATURE_PICK_TOOLS := ["linear_pattern", "circular_pattern", "mirror"]
 const OPS := {"add": "add", "cut": "cut", "new body": "new-body"}
 const STANDARD_PLANES := {"Top plane": "top", "Front plane": "front", "Right plane": "right"}
 
@@ -360,8 +372,12 @@ func _act(primary: bool, repeat: bool) -> void:
 					return
 				changed.emit()
 				_grab = {id = copy, plane_y = hit.point.y, last = hit.point}
-		"fillet", "chamfer", "hole", "shell":
+		"fillet", "chamfer", "hole", "shell", "draft":
 			_act_pick(primary, hit, on_feature)
+		"linear_pattern", "circular_pattern", "mirror":
+			_act_repeat(primary, hit, on_feature)
+		"combine", "split", "delete_body":
+			_act_bodies(primary, hit, on_feature)
 		"ref_plane", "ref_axis", "ref_point", "ref_csys":
 			_act_reference(primary, hit)
 		"board_props", "board_notes", "board_video", "board_arrange":
@@ -457,7 +473,8 @@ func _act_pick(primary: bool, hit: Dictionary, on_feature: bool) -> void:
 			if primary:
 				p = snap_on_face(p, hit.normal, player.snap_step())
 			picked_feature_requested.emit("hole", {point = doc.cad_point(p), normal = ref.normal}, "cut")
-		"shell":
+		"shell", "draft":
+			var what := "open" if id == "shell" else "to draft"
 			if primary:
 				if not on_feature:
 					hud.toast("Aim at a face of the part")
@@ -465,17 +482,137 @@ func _act_pick(primary: bool, hit: Dictionary, on_feature: bool) -> void:
 				for i in _picks.size():
 					if _picks[i].body == hit.body and _picks[i].face == hit.face:
 						_picks.remove_at(i)
-						hud.toast("%d face%s open" % [_picks.size(), "" if _picks.size() == 1 else "s"])
+						hud.toast("%d face%s %s" % [_picks.size(), "" if _picks.size() == 1 else "s", what])
 						return
 				_picks.append({ref = doc.face_ref(hit), body = hit.body, face = hit.face})
-				hud.toast("%d face%s open · %s to hollow the part" % [_picks.size(), "" if _picks.size() == 1 else "s", Actions.prompt(&"secondary")])
+				hud.toast("%d face%s %s · %s to %s" % [_picks.size(), "" if _picks.size() == 1 else "s", what, Actions.prompt(&"secondary"),
+					"hollow the part" if id == "shell" else "draft them from the flat face you aim at"])
 			else:
 				var refs := []
 				for f in _picks:
 					refs.append(f.ref)
+				if id == "draft":
+					if refs.is_empty():
+						hud.toast("Pick the faces to draft first: aim at each and press %s" % Actions.prompt(&"primary"))
+						return
+					if not on_feature or doc.plane_from_hit(hit).is_empty():
+						hud.toast("Aim at a flat face to draft from (the neutral plane), then press %s" % Actions.prompt(&"secondary"))
+						return
+				var base := {faces = refs}
+				if id == "draft":
+					base.neutral = doc.face_ref(hit)
 				_picks = []
 				view.show_picks([], [])
-				picked_feature_requested.emit("shell", {faces = refs}, "")
+				picked_feature_requested.emit(id, base, "")
+
+
+## Linear and circular patterns and mirror: the primary action picks features, the secondary
+## opens the panel with what is aimed at as the direction, axis or plane.
+func _act_repeat(primary: bool, hit: Dictionary, on_feature: bool) -> void:
+	var id: String = tool().id
+	if primary:
+		if not on_feature:
+			hud.toast("Aim at a feature of the part")
+			return
+		var fid: String = hit.feature_id
+		var at := _picks.find(fid)
+		if at >= 0:
+			_picks.remove_at(at)
+		else:
+			_picks.append(fid)
+		hud.toast("%d feature%s picked%s · %s to %s" % [_picks.size(), "" if _picks.size() == 1 else "s",
+			"" if _picks.is_empty() else " (" + ", ".join(_picks.map(func(f): return _feature_name(f))) + ")",
+			Actions.prompt(&"secondary"), "mirror" if id == "mirror" else "repeat"])
+		return
+	var feats: Array = _picks.duplicate()
+	if feats.is_empty() and id != "mirror":
+		hud.toast("Pick the features to repeat first: aim at each and press %s" % Actions.prompt(&"primary"))
+		return
+	var base := {features = feats}
+	match id:
+		"linear_pattern":
+			base.kind = "linear"
+			var e: PackedVector3Array = doc.straight_edge_near(hit, 0.3 * player.size) if on_feature else PackedVector3Array()
+			if e.size() >= 2:
+				var on := Geometry3D.get_closest_point_to_segment(hit.point, e[0], e[1])
+				base.dir_edge = {edge = {probe = doc.cad_point(on)}}
+		"circular_pattern":
+			base.kind = "circular"
+			var ax: Variant = _axis_ref(hit)
+			if ax != null:
+				base.axis_aimed = ax
+		"mirror":
+			var pl: Variant = _plane_ref(hit)
+			if pl is Dictionary:
+				base.plane_aimed = pl
+	_picks = []
+	picked_feature_requested.emit("pattern" if id != "mirror" else "mirror", base, "")
+
+
+## Combine, split and delete whole bodies. A body is remembered by a face on it.
+func _act_bodies(primary: bool, hit: Dictionary, on_feature: bool) -> void:
+	var id: String = tool().id
+	if id == "delete_body":
+		if not primary:
+			if doc.undo():
+				changed.emit()
+			return
+		if not on_feature:
+			hud.toast("Aim at the body to delete")
+			return
+		doc.checkpoint()
+		var r: Dictionary = doc.insert_feature("body", "", {kind = "delete", target = doc.face_ref(hit)})
+		if not r.get("ok", false):
+			doc.undo()
+			hud.toast(String(r.get("message", "That body cannot be deleted")))
+			return
+		hud.toast("Body %d deleted (%s undoes)" % [int(hit.body) + 1, Actions.prompt(&"secondary")])
+		changed.emit()
+		return
+	if primary:
+		if not on_feature:
+			hud.toast("Aim at a body")
+			return
+		if id == "split":
+			_picks = [{ref = doc.face_ref(hit), body = hit.body}]
+			hud.toast("Body %d picked · aim at a flat face or plane and press %s to split it" % [int(hit.body) + 1, Actions.prompt(&"secondary")])
+			return
+		for i in _picks.size():
+			if _picks[i].body == hit.body:
+				_picks.remove_at(i)
+				hud.toast("%d bod%s picked" % [_picks.size(), "y" if _picks.size() == 1 else "ies"])
+				return
+		_picks.append({ref = doc.face_ref(hit), body = hit.body})
+		hud.toast("%d bod%s picked%s · %s to combine them" % [_picks.size(), "y" if _picks.size() == 1 else "ies",
+			" (the first is kept)" if _picks.size() == 1 else "", Actions.prompt(&"secondary")])
+		return
+	if id == "split":
+		if _picks.is_empty():
+			hud.toast("Pick the body to split first: aim at it and press %s" % Actions.prompt(&"primary"))
+			return
+		var base := {kind = "split", target = _picks[0].ref}
+		var pl: Variant = _plane_ref(hit)
+		if pl is Dictionary:
+			base.plane_aimed = pl
+		_picks = []
+		picked_feature_requested.emit("body", base, "")
+		return
+	if _picks.size() < 2:
+		hud.toast("Pick two bodies or more first: aim at each and press %s" % Actions.prompt(&"primary"))
+		return
+	var tools_refs := []
+	for i in range(1, _picks.size()):
+		tools_refs.append(_picks[i].ref)
+	var target: Dictionary = _picks[0].ref
+	_picks = []
+	picked_feature_requested.emit("body", {kind = "combine", target = target, tools = tools_refs}, "")
+
+
+func _feature_name(fid: String) -> String:
+	for f in doc.get_features():
+		if f.id == fid:
+			return f.name
+	return fid
 
 
 ## Snaps a point on a face to the grid in the face's own directions (not along its normal).
@@ -901,7 +1038,7 @@ func _update_preview(hit: Dictionary) -> void:
 		view.show_measure(_measure_a, _measure_b, null, s_size())
 	if id in PICK_TOOLS and not is_assembly:
 		label = _pick_preview(id, hit, on_feature, label)
-		face_plane = on_feature and id in ["hole", "shell"]
+		face_plane = on_feature and id in ["hole", "shell", "draft"]
 	if not (id in REF_TOOLS):
 		view.highlight_reference("")
 	if id == "sketch" and not is_assembly and option() == "aimed face":
@@ -923,7 +1060,7 @@ func _update_preview(hit: Dictionary) -> void:
 	elif id == "push" and (on_feature or not _push_hit.is_empty()):
 		var h2: Dictionary = _push_hit if not _push_hit.is_empty() else hit
 		view.highlight(h2.get("body", -1), "", h2.get("face", -1), s_size())
-	elif on_feature and id in ["select", "move", "delete"]:
+	elif on_feature and id in ["select", "move", "delete"] + FEATURE_PICK_TOOLS:
 		view.highlight(hit.body, hit.feature_id, -1, s_size())
 	elif selected != "" and not is_assembly:
 		view.highlight(0, selected, -1, s_size())
@@ -956,11 +1093,18 @@ func _pick_preview(id: String, hit: Dictionary, on_feature: bool, label: String)
 				label = "Edge · %s%s" % [hud.length(float(e.length)), (" · R %s" % hud.length(r)) if r > 0.0 else ""]
 				if _pick_index(e) >= 0:
 					label += " · picked"
-		"shell":
+		"shell", "draft":
 			for f in _picks:
 				faces.append([f.body, f.face])
 			if on_feature:
-				label = "Face · %d open" % _picks.size()
+				label = "Face · %d %s" % [_picks.size(), "open" if id == "shell" else "to draft"]
+		"linear_pattern", "circular_pattern", "mirror":
+			if on_feature:
+				label = "%s%s · %d picked" % [hit.get("feature_name", ""), " (picked)" if hit.feature_id in _picks else "", _picks.size()]
+		"combine", "split", "delete_body":
+			if on_feature:
+				var picked := _picks.any(func(b): return b.body == hit.body)
+				label = "Body %d%s" % [int(hit.body) + 1, " (picked)" if picked else ""]
 		"hole":
 			if on_feature:
 				label = "Hole here"

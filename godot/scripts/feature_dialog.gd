@@ -12,11 +12,14 @@ signal closed(ok: bool, feature_id: String)
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const Units := preload("res://scripts/units.gd")
 const TITLES := {extrude = "EXTRUDE", revolve = "REVOLVE", sweep = "SWEEP", loft = "LOFT", plane = "PLANE",
-	axis = "AXIS", point = "POINT", fillet = "FILLET", chamfer = "CHAMFER", hole = "HOLE", shell = "SHELL"}
+	axis = "AXIS", point = "POINT", fillet = "FILLET", chamfer = "CHAMFER", hole = "HOLE", shell = "SHELL",
+	pattern = "PATTERN", mirror = "MIRROR", draft = "DRAFT", body = "BODIES"}
 ## Features built from things picked in the model (edges, faces, a point) plus sizes set here.
-const PICKED_TYPES := ["fillet", "chamfer", "hole", "shell"]
+const PICKED_TYPES := ["fillet", "chamfer", "hole", "shell", "pattern", "mirror", "draft", "body"]
+## Picked features whose panel choices map to references in their params (see _values_from).
+const MAPPED_TYPES := ["pattern", "mirror", "draft", "body"]
 ## Fields that show or hide others when they change.
-const SHAPING_KEYS := ["kind", "end", "direction", "thread"]
+const SHAPING_KEYS := ["kind", "end", "direction", "thread", "count2", "how"]
 ## Tapped holes: thread and its tap drill (metres), metric coarse and Unified.
 const THREADS_METRIC := [["M2", 0.0016], ["M2.5", 0.00205], ["M3", 0.0025], ["M4", 0.0033], ["M5", 0.0042],
 	["M6", 0.005], ["M8", 0.0068], ["M10", 0.0085], ["M12", 0.0102], ["M16", 0.014]]
@@ -32,7 +35,7 @@ var editing := false
 var sketch_id := ""
 var base_params := {}  # a reference feature's params the panel does not edit (what it refers to)
 var values := {}
-var fields: Array = []  # {key, label, kind: "length" | "angle" | "choice", choices}
+var fields: Array = []  # {key, label, kind: "length" | "angle" | "count" | "choice", choices}
 var focus := 0
 var ok := true
 var message := ""
@@ -169,7 +172,7 @@ func open_edit(f: Dictionary) -> bool:
 	var p: Dictionary = f.params
 	if type in PICKED_TYPES:
 		base_params = p.duplicate(true)
-		values = p.duplicate(true)
+		values = _values_from(p) if type in MAPPED_TYPES else p.duplicate(true)
 		if not _setup_fields():
 			return false
 		values.op = f.op
@@ -305,6 +308,39 @@ func _setup_fields() -> bool:
 				fields += [{key = "cbore_d", label = "Bore Ø", kind = "length"}, {key = "cbore_depth", label = "Bore depth", kind = "length"}]
 			elif values.kind == "countersink":
 				fields += [{key = "csink_d", label = "Sink Ø", kind = "length"}, {key = "csink_angle", label = "Sink angle", kind = "angle"}]
+		"pattern":
+			var g: float = game.player.grid_step()
+			if String(base_params.get("kind", "linear")) == "linear":
+				_defaults({dir = "edge" if base_params.has("dir_edge") else "x", count = 3, spacing = g, count2 = 1,
+					dir2 = "y", spacing2 = g})
+				var dirs := _direction_choices()
+				fields = [{key = "dir", label = "Direction", kind = "choice", choices = dirs},
+					{key = "count", label = "Count", kind = "count"}, {key = "spacing", label = "Spacing", kind = "length"},
+					{key = "count2", label = "Count 2", kind = "count"}]
+				if int(values.count2) > 1:
+					fields += [{key = "dir2", label = "Direction 2", kind = "choice", choices = dirs},
+						{key = "spacing2", label = "Spacing 2", kind = "length"}]
+			else:
+				_defaults({axis = "aimed" if base_params.has("axis_aimed") else "z", count = 6, angle = TAU})
+				fields = [{key = "axis", label = "Axis", kind = "choice", choices = _axis_choices()},
+					{key = "count", label = "Count", kind = "count"}, {key = "angle", label = "Total angle", kind = "angle"}]
+		"mirror":
+			_defaults({plane = "aimed" if base_params.has("plane_aimed") else "right"})
+			fields = [{key = "plane", label = "Mirror plane", kind = "choice", choices = _plane_choices()}]
+		"draft":
+			_defaults({angle = deg_to_rad(3.0)})
+			fields = [{key = "angle", label = "Draft angle", kind = "angle", step = deg_to_rad(1.0), min = deg_to_rad(1.0),
+				max = deg_to_rad(45.0)}]
+		"body":
+			if String(base_params.get("kind", "")) == "split":
+				_defaults({plane = "aimed" if base_params.has("plane_aimed") else "right"})
+				fields = [{key = "plane", label = "Split with", kind = "choice", choices = _plane_choices()}]
+			else:
+				_defaults({how = "combine", keep = "no"})
+				fields = [{key = "how", label = "Operation", kind = "choice",
+					choices = [["combine", "Combine (join)"], ["subtract", "Subtract the others"], ["intersect", "Keep the overlap"]]}]
+				if values.how != "combine":
+					fields.append({key = "keep", label = "Other bodies", kind = "choice", choices = [["no", "Use them up"], ["yes", "Keep them"]]})
 		"point":
 			if String(base_params.get("kind", "xyz")) != "xyz":
 				return false
@@ -313,7 +349,7 @@ func _setup_fields() -> bool:
 			values = {x = base_params.get("x", 0.0), y = base_params.get("y", 0.0), z = base_params.get("z", 0.0)}
 		_:
 			return false
-	if type in REFERENCE_TYPES or type in ["fillet", "chamfer", "shell"]:
+	if type in REFERENCE_TYPES or type in ["fillet", "chamfer", "shell", "pattern", "mirror", "draft", "body"]:
 		values.op = ""
 		return true
 	if type == "hole":
@@ -371,6 +407,8 @@ func _params() -> Dictionary:
 			if values.end == "up_to_face" and base_params.has("face"):
 				e.face = base_params.face
 			return e
+		"pattern", "mirror", "draft", "body":
+			return _mapped_params()
 		"fillet", "chamfer", "shell", "hole":
 			var p := base_params.duplicate(true)
 			for k in values:
@@ -412,7 +450,7 @@ func _apply() -> void:
 			game.hud.toast("Aim at a flat face of the model first, then choose Up to the face aimed at")
 		else:
 			base_params.face = ref
-	if type in ["extrude", "hole"]:
+	if type in ["extrude", "hole", "pattern", "body"]:
 		_setup_fields()  # the fields follow the choices (a blind end shows Depth, a counterbore its sizes)
 		focus = mini(focus, fields.size() - 1)
 	_show(game.doc.update_feature(feature_id, values.op, _params()))
@@ -490,7 +528,12 @@ func _value_text(f: Dictionary) -> String:
 		"length":
 			return v if v is String else game.hud.length(float(v))
 		"angle":
-			return v if v is String else "%.0f°" % rad_to_deg(float(v))
+			if v is String:
+				return v
+			var deg := rad_to_deg(float(v))
+			return ("%.0f°" if absf(deg - roundf(deg)) < 1e-6 else "%.1f°") % deg
+		"count":
+			return v if v is String else str(int(v))
 		"choice":
 			for c in f.choices:
 				if c[0] == v:
@@ -517,8 +560,15 @@ func adjust(d: int) -> void:
 			if v is String:
 				game.hud.toast("%s is an expression; type a new value to change it" % f.label)
 				return
-			var a := snappedf(float(v) + d * deg_to_rad(15.0), deg_to_rad(15.0))
-			values[f.key] = clampf(a, -TAU, TAU) if f.get("signed", false) else clampf(a, deg_to_rad(15.0), TAU)
+			var st: float = f.get("step", deg_to_rad(15.0))
+			var a := snappedf(float(v) + d * st, st)
+			var top: float = f.get("max", TAU)
+			values[f.key] = clampf(a, -top, top) if f.get("signed", false) else clampf(a, f.get("min", st), top)
+		"count":
+			if v is String:
+				game.hud.toast("%s is an expression; type a new value to change it" % f.label)
+				return
+			values[f.key] = clampi(int(v) + d, 1, 1000)
 		"choice":
 			var n: int = f.choices.size()
 			var at := 0
@@ -536,9 +586,124 @@ func type_value() -> void:
 	var angle: bool = f.kind == "angle"
 	var units: String = game.hud.units
 	var key: String = f.key
+	if f.kind == "count":
+		game.numpad.ask(f.label, str(values[key]), "A whole number from 1 to 1000.",
+			func(text: String): set_value(key, clampi(int(text), 1, 1000) if text.is_valid_int() else values[key]))
+		return
 	game.numpad.ask(f.label, Units.show(values[key], units, angle),
 		("Degrees" if angle else "In " + units) + ", or an expression using the part's variables.",
 		func(text: String): set_value(key, Units.parse(text, units, angle)))
+
+
+## Direction choices for a linear pattern: the part's axes both ways, the edge aimed at, and the
+## reference axes.
+func _direction_choices() -> Array:
+	var out := [["x", "+X"], ["-x", "−X"], ["y", "+Y"], ["-y", "−Y"], ["z", "+Z (up)"], ["-z", "−Z (down)"]]
+	if base_params.has("dir_edge"):
+		out += [["edge", "Along the edge aimed at"], ["-edge", "Against the edge aimed at"]]
+	for rv in game.doc.reference_views():
+		if rv.kind == "axis" and rv.ok:
+			out += [["ref:" + rv.id, rv.name], ["-ref:" + rv.id, rv.name + " reversed"]]
+	return out
+
+
+func _axis_choices() -> Array:
+	var out := []
+	if base_params.has("axis_aimed"):
+		out.append(["aimed", "The axis aimed at"])
+	out += [["z", "Z (up) through the origin"], ["x", "X through the origin"], ["y", "Y through the origin"]]
+	for rv in game.doc.reference_views():
+		if rv.kind == "axis" and rv.ok:
+			out.append(["ref:" + rv.id, rv.name])
+	return out
+
+
+func _plane_choices() -> Array:
+	var out := []
+	if base_params.has("plane_aimed"):
+		out.append(["aimed", "The face or plane aimed at"])
+	out += [["right", "Right plane"], ["front", "Front plane"], ["top", "Top plane"]]
+	for rv in game.doc.reference_views():
+		if rv.kind in ["plane", "csys"] and rv.ok:
+			out.append(["ref:" + rv.id, rv.name])
+	return out
+
+
+## A panel choice ("x", "-ref:f3", "aimed", ...) as the reference the core reads.
+func _ref_of(choice: String, aimed_key: String) -> Variant:
+	var k := choice.trim_prefix("-")
+	if k.begins_with("ref:"):
+		return {feature = k.substr(4)}
+	if k in ["edge", "aimed"]:
+		return base_params.get(aimed_key, "z")
+	return k
+
+
+## The panel choice for a stored reference: the inverse of _ref_of.
+static func _choice_of(ref: Variant, aimed_name: String) -> String:
+	if ref is String:
+		return ref
+	if ref is Dictionary and ref.has("feature"):
+		return "ref:" + String(ref.feature)
+	return aimed_name
+
+
+func _mapped_params() -> Dictionary:
+	var p := base_params.duplicate(true)
+	match type:
+		"pattern":
+			if String(p.get("kind", "linear")) == "linear":
+				p.dir = _ref_of(values.dir, "dir_edge")
+				p.flip = String(values.dir).begins_with("-")
+				p.count = values.count
+				p.spacing = values.spacing
+				p.count2 = values.count2
+				p.dir2 = _ref_of(values.dir2, "dir_edge")
+				p.flip2 = String(values.dir2).begins_with("-")
+				p.spacing2 = values.spacing2
+			else:
+				p.axis = _ref_of(values.axis, "axis_aimed")
+				p.count = values.count
+				p.angle = values.angle
+		"mirror":
+			p.plane = _ref_of(values.plane, "plane_aimed")
+		"draft":
+			p.angle = values.angle
+		"body":
+			if String(p.get("kind", "")) == "split":
+				p.plane = _ref_of(values.plane, "plane_aimed")
+			else:
+				p.kind = values.how
+				p.keep = values.get("keep", "no") == "yes"
+	return p
+
+
+## The panel values for a stored pattern, mirror, draft or body feature.
+func _values_from(p: Dictionary) -> Dictionary:
+	var v := {}
+	match type:
+		"pattern":
+			for k in ["count", "spacing", "count2", "spacing2", "angle"]:
+				if p.has(k):
+					v[k] = p[k]
+			if p.has("dir"):
+				v.dir = ("-" if p.get("flip", false) else "") + _choice_of(p.dir, "edge")
+			if p.has("dir2"):
+				v.dir2 = ("-" if p.get("flip2", false) else "") + _choice_of(p.dir2, "edge")
+			if p.has("axis"):
+				v.axis = _choice_of(p.axis, "aimed")
+		"mirror":
+			if p.has("plane"):
+				v.plane = _choice_of(p.plane, "aimed")
+		"draft":
+			v.angle = p.get("angle", deg_to_rad(3.0))
+		"body":
+			if p.has("plane"):
+				v.plane = _choice_of(p.plane, "aimed")
+			if String(p.get("kind", "")) != "split":
+				v.how = p.get("kind", "combine")
+				v.keep = "yes" if p.get("keep", false) else "no"
+	return v
 
 
 func accept() -> void:

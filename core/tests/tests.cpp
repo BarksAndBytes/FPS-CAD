@@ -1100,6 +1100,121 @@ int main() {
     }
   });
 
+  run("0.5: linear and circular patterns, mirror, draft, body tools", [&] {
+    // A 200 x 200 x 20 mm plate with a 10 mm hole near one corner.
+    auto plate = [] {
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.2}, {"d", 0.2}, {"h", 0.02}}));
+      Feature& h = d.add(feature("hole", {{"point", {-0.08, -0.08, 0.02}}, {"normal", {0, 0, 1}}, {"d", 0.01}, {"end", "through_all"}}, BodyOp::Cut));
+      return std::make_pair(d, h.id);
+    };
+    const double V = 0.2 * 0.2 * 0.02, H = kPiT * 0.005 * 0.005 * 0.02;
+    {
+      auto [d, hid] = plate();
+      d.add(feature("pattern", {{"features", {hid}}, {"kind", "linear"}, {"dir", "x"}, {"count", 4}, {"spacing", 0.05},
+                                {"dir2", "y"}, {"count2", 3}, {"spacing2", 0.05}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 12 * H, 1e-10);  // a 4 x 3 grid of holes
+    }
+    {
+      auto [d, hid] = plate();
+      d.add(feature("pattern", {{"features", {hid}}, {"kind", "circular"}, {"axis", "z"}, {"count", 4}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 4 * H, 1e-10);  // one in each corner
+    }
+    {
+      // Copies that overlap fuse into one: bosses 30 mm wide every 20 mm along X.
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.2}, {"d", 0.2}, {"h", 0.02}}));
+      Feature& b = d.add(feature("box", {{"x", -0.05}, {"y", 0}, {"z", 0.02}, {"w", 0.03}, {"d", 0.03}, {"h", 0.01}}));
+      d.add(feature("pattern", {{"features", {b.id}}, {"kind", "linear"}, {"dir", "x"}, {"count", 3}, {"spacing", 0.02}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V + 0.07 * 0.03 * 0.01, 1e-10);
+    }
+    {
+      // Mirror the hole across the Right plane (X = 0); then the whole part across Front (Y = 0).
+      auto [d, hid] = plate();
+      d.add(feature("mirror", {{"features", {hid}}, {"plane", "right"}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 2 * H, 1e-10);
+      PartDocument d2;
+      d2.add(feature("box", {{"x", 0.05}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.05}, {"h", 0.02}}));
+      d2.add(feature("mirror", {{"plane", "right"}}));
+      PartModel m2(d2);
+      CHECK(m2.rebuild().ok);
+      CHECK_NEAR(m2.massProperties().volume, 2 * 0.1 * 0.05 * 0.02, 1e-10);
+      CHECK(m2.bodyCount() == 1);
+    }
+    {
+      // A pattern can only repeat features before it, and only ones that make a shape.
+      auto [d, hid] = plate();
+      Feature& fl = d.add(feature("fillet", {{"r", 0.001}}));
+      d.add(feature("pattern", {{"features", {fl.id}}, {"kind", "linear"}, {"dir", "x"}, {"count", 2}, {"spacing", 0.05}}));
+      PartModel m(d);
+      CHECK(!m.rebuild().ok);
+    }
+    {
+      // Draft the four sides of a 100 mm cube 5° from its bottom face.
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}));
+      Json sides = Json::array();
+      for (auto n : {std::array<double, 3>{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}})
+        sides.push_back({{"probe", {0.05 * n[0], 0.05 * n[1], 0.05}}, {"normal", n}});
+      d.add(feature("draft", {{"faces", sides}, {"neutral", {{"probe", {0, 0, 0}}, {"normal", {0, 0, -1}}}}, {"angle", 5 * kPiT / 180}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      // A frustum: the top shrinks by tan 5° · 100 mm on each side.
+      double t = 0.1 - 2 * 0.1 * std::tan(5 * kPiT / 180);
+      double expect = 0.1 / 3 * (0.01 + t * t + 0.1 * t);
+      CHECK_NEAR(m.massProperties().volume, expect, 1e-9);
+    }
+    {
+      // Two overlapping bodies: combine, subtract (keeping or not), split, delete.
+      auto two = [] {
+        PartDocument d;
+        d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}));
+        d.add(feature("box", {{"x", 0.05}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}, BodyOp::NewBody));
+        return d;
+      };
+      Json a = {{"probe", {-0.05, 0, 0.05}}, {"normal", {-1, 0, 0}}};
+      Json b = {{"probe", {0.1, 0, 0.05}}, {"normal", {1, 0, 0}}};
+      const double C = 0.001;
+      auto run1 = [&](Json p, int bodies, double vol) {
+        PartDocument d = two();
+        d.add(feature("body", p));
+        PartModel m(d);
+        auto r = m.rebuild();
+        CHECK(r.ok);
+        CHECK(m.bodyCount() == bodies);
+        CHECK_NEAR(m.massProperties().volume, vol, 1e-10);
+      };
+      run1({{"kind", "combine"}, {"target", a}, {"tools", {b}}}, 1, 1.5 * C);
+      run1({{"kind", "subtract"}, {"target", a}, {"tools", {b}}}, 1, 0.5 * C);
+      run1({{"kind", "subtract"}, {"target", a}, {"tools", {b}}, {"keep", true}}, 2, 1.5 * C);
+      run1({{"kind", "intersect"}, {"target", a}, {"tools", {b}}}, 1, 0.5 * C);
+      {
+        PartDocument d = two();
+        d.add(feature("body", {{"kind", "split"}, {"target", a}, {"plane", "top"}}));  // the Top plane is the ground: misses
+        PartModel m(d);
+        CHECK(!m.rebuild().ok);
+      }
+      run1({{"kind", "delete"}, {"target", b}}, 1, C);
+    }
+    {
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}));
+      d.add(feature("body", {{"kind", "split"}, {"target", {{"probe", {0, 0, 0.1}}, {"normal", {0, 0, 1}}}}, {"plane", "right"}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK(m.bodyCount() == 2);
+      CHECK_NEAR(m.massProperties().volume, 0.001, 1e-10);
+    }
+  });
+
   run("STEP import brings a part back as a solid that saves with the part", [&] {
     PartModel src(PartDocument::deskSample());
     src.rebuild();

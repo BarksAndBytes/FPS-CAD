@@ -71,6 +71,8 @@
 #include <Bnd_Box.hxx>
 #include <TopoDS_Compound.hxx>
 #include <gp_Ax1.hxx>
+#include <BRepOffsetAPI_DraftAngle.hxx>
+#include <gp_Trsf.hxx>
 
 namespace fpcad {
 namespace {
@@ -1256,6 +1258,245 @@ struct PartModel::Impl {
     bodies[body] = result;
   }
 
+  // ---- 0.5: patterns, mirror, draft, body tools ----
+
+  // The features a pattern or mirror repeats, checked to come before it and to make a shape.
+  std::vector<const Feature*> sourceFeatures(const Feature& f) const {
+    std::vector<const Feature*> out;
+    if (!f.params.contains("features")) return out;
+    size_t self = doc.features.size();
+    for (size_t i = 0; i < doc.features.size(); ++i)
+      if (doc.features[i].id == f.id) self = i;
+    for (auto& idj : f.params.at("features")) {
+      std::string id = idj.get<std::string>();
+      size_t at = doc.features.size();
+      for (size_t i = 0; i < doc.features.size(); ++i)
+        if (doc.features[i].id == id) at = i;
+      if (at == doc.features.size()) throw FeatureError("a feature it repeats no longer exists");
+      const Feature& src = doc.features[at];
+      if (at > self) throw FeatureError(src.name + " must come before this feature");
+      if (src.suppressed) continue;
+      static const std::set<std::string> shaped = {"box", "cylinder", "sphere", "cone", "extrude", "revolve",
+                                                   "sweep", "loft", "hole", "import"};
+      if (!shaped.count(src.type)) throw FeatureError(src.name + " cannot be repeated: only features that add or cut a shape can");
+      out.push_back(&src);
+    }
+    return out;
+  }
+
+  // Applies each source feature again, once per transform, as one boolean per source.
+  void repeatFeatures(const std::vector<const Feature*>& srcs, const std::vector<gp_Trsf>& moves, int self) {
+    for (const Feature* src : srcs) {
+      TopoDS_Shape tool = toolShape(*src);
+      if (src->op == BodyOp::NewBody) {
+        for (auto& t : moves) applyBoolean(*src, BRepBuilderAPI_Transform(tool, t, true).Shape(), self);
+        continue;
+      }
+      BRep_Builder bb;
+      TopoDS_Compound c;
+      bb.MakeCompound(c);
+      for (auto& t : moves) bb.Add(c, BRepBuilderAPI_Transform(tool, t, true).Shape());
+      TopoDS_Shape all = c;
+      if (moves.size() > 1 && src->op == BodyOp::Add) {
+        // Overlapping copies fuse into one tool first, so the body gets a single clean boolean.
+        TopExp_Explorer ex(c, TopAbs_SOLID);
+        if (ex.More()) {
+          TopoDS_Shape acc = ex.Current();
+          for (ex.Next(); ex.More(); ex.Next()) acc = BRepAlgoAPI_Fuse(acc, ex.Current()).Shape();
+          all = acc;
+        }
+      }
+      applyBoolean(*src, all, self);
+    }
+  }
+
+  void applyPattern(Feature& f, int self) {
+    Json& p = f.params;
+    auto srcs = sourceFeatures(f);
+    if (srcs.empty()) throw FeatureError("pick the features to repeat");
+    int count = static_cast<int>(std::lround(get(p, "count", Quantity::Count)));
+    if (count < 1 || count > 1000) throw FeatureError("the count must be between 1 and 1000");
+    std::vector<gp_Trsf> moves;
+    std::string kind = p.value("kind", std::string("linear"));
+    if (kind == "linear") {
+      gp_Ax1 a = axisRef(p["dir"], nullptr);
+      gp_Vec d1(a.Direction());
+      if (p.value("flip", false)) d1.Reverse();
+      double s1 = get(p, "spacing");
+      int count2 = p.contains("count2") ? static_cast<int>(std::lround(get(p, "count2", Quantity::Count))) : 1;
+      if (count2 < 1 || count * count2 > 1000) throw FeatureError("the pattern can have at most 1000 copies");
+      gp_Vec d2;
+      double s2 = 0;
+      if (count2 > 1) {
+        gp_Ax1 b = axisRef(p["dir2"], nullptr);
+        d2 = gp_Vec(b.Direction());
+        if (p.value("flip2", false)) d2.Reverse();
+        if (d2.IsParallel(d1, 1e-6)) throw FeatureError("the two directions must differ");
+        s2 = get(p, "spacing2");
+      }
+      for (int j = 0; j < count2; ++j)
+        for (int i = 0; i < count; ++i) {
+          if (i == 0 && j == 0) continue;
+          gp_Trsf t;
+          t.SetTranslation(d1 * (s1 * i) + d2 * (s2 * j));
+          moves.push_back(t);
+        }
+    } else if (kind == "circular") {
+      gp_Ax1 ax = axisRef(p["axis"], nullptr);
+      double total = p.contains("angle") ? get(p, "angle", Quantity::Angle) : 2 * M_PI;
+      if (std::abs(total) < 1e-9) throw FeatureError("the angle must not be zero");
+      bool full = std::abs(std::abs(total) - 2 * M_PI) < 1e-9;
+      double step = full ? total / count : (count > 1 ? total / (count - 1) : 0);
+      for (int i = 1; i < count; ++i) {
+        gp_Trsf t;
+        t.SetRotation(ax, step * i);
+        moves.push_back(t);
+      }
+    } else {
+      throw FeatureError("unknown pattern kind '" + kind + "'");
+    }
+    if (moves.empty()) return;  // one copy: the original
+    repeatFeatures(srcs, moves, self);
+  }
+
+  void applyMirror(Feature& f, int self) {
+    Json& p = f.params;
+    gp_Ax3 pl = planeRef(p["plane"], nullptr);
+    gp_Trsf t;
+    t.SetMirror(gp_Ax2(pl.Location(), pl.Direction()));
+    auto srcs = sourceFeatures(f);
+    if (!srcs.empty()) {
+      repeatFeatures(srcs, {t}, self);
+      return;
+    }
+    // No features picked: the whole part is mirrored and joined to itself, body by body.
+    if (bodies.empty()) throw FeatureError("there is nothing to mirror yet");
+    for (size_t b = 0; b < bodies.size(); ++b) {
+      TopoDS_Shape m = BRepBuilderAPI_Transform(bodies[b], t, true).Shape();
+      FaceTags mt;
+      tagAll(m, self, mt);
+      for (FaceTags::Iterator it(tags[b]); it.More(); it.Next()) mt.Bind(it.Key(), it.Value());
+      BRepAlgoAPI_Fuse op(bodies[b], m);
+      if (!op.IsDone() || op.HasErrors()) throw FeatureError("joining the mirror image failed");
+      TopoDS_Shape r = op.Shape();
+      tags[b] = remap(op, mt, r, self);
+      bodies[b] = r;
+    }
+  }
+
+  // A body found from a face reference {probe, normal, feature}: the body that face is on.
+  int bodyRef(Json& r) const {
+    int b = 0;
+    TopoDS_Face f;
+    gp_Pnt at;
+    gp_Dir n;
+    if (!findFace(gp_Pnt(xyz(r.at("probe"))), gp_Dir(xyz(r.at("normal"))), r.value("feature", std::string()), b, f, at, n))
+      throw FeatureError("a body it uses is no longer there");
+    r["probe"] = {at.X(), at.Y(), at.Z()};
+    r["normal"] = {n.X(), n.Y(), n.Z()};
+    return b;
+  }
+
+  void applyDraft(Feature& f, int self) {
+    Json& p = f.params;
+    double angle = get(p, "angle", Quantity::Angle);
+    if (std::abs(angle) < 1e-9 || std::abs(angle) >= M_PI / 2) throw FeatureError("the draft angle must be between 0° and 90°");
+    gp_Ax3 neutral = facePlane(p["neutral"], nullptr);
+    // Pulled away from the neutral face, into the part: the drafted faces narrow away from it, as
+    // a part drawn out of a mould does.
+    gp_Dir pull = neutral.Direction().Reversed();
+    if (!p.contains("faces") || p.at("faces").empty()) throw FeatureError("pick the faces to draft");
+    int body = -1;
+    std::vector<TopoDS_Face> faces;
+    for (auto& fr : p["faces"]) {
+      int b = 0;
+      TopoDS_Face face;
+      gp_Pnt at;
+      gp_Dir n;
+      if (!findFace(gp_Pnt(xyz(fr.at("probe"))), gp_Dir(xyz(fr.at("normal"))), fr.value("feature", std::string()), b, face, at, n))
+        throw FeatureError("a face to draft is no longer there");
+      if (body >= 0 && b != body) throw FeatureError("the faces to draft must be on one body");
+      body = b;
+      fr["probe"] = {at.X(), at.Y(), at.Z()};
+      fr["normal"] = {n.X(), n.Y(), n.Z()};
+      faces.push_back(face);
+    }
+    BRepOffsetAPI_DraftAngle mk(bodies[body]);
+    gp_Pln np(neutral.Location(), neutral.Direction());
+    for (auto& face : faces) {
+      mk.Add(face, pull, angle, np);
+      if (!mk.AddDone()) throw FeatureError("a picked face cannot be drafted from that neutral plane (it must not be parallel to it)");
+    }
+    mk.Build();
+    if (!mk.IsDone()) throw FeatureError("the draft failed");
+    TopoDS_Shape r = mk.Shape();
+    tags[body] = remap(mk, tags[body], r, self);
+    bodies[body] = r;
+  }
+
+  void applyBodyTool(Feature& f, int self) {
+    Json& p = f.params;
+    std::string kind = p.value("kind", std::string());
+    if (bodies.empty()) throw FeatureError("there are no bodies yet");
+    int target = bodyRef(p["target"]);
+    if (kind == "delete") {
+      bodies.erase(bodies.begin() + target);
+      tags.erase(tags.begin() + target);
+      return;
+    }
+    if (kind == "split") {
+      gp_Ax3 pl = planeRef(p["plane"], nullptr);
+      gp_Pnt o = pl.Location();
+      gp_Vec n(pl.Direction());
+      TopoDS_Face big = BRepBuilderAPI_MakeFace(gp_Pln(o, pl.Direction())).Face();
+      TopoDS_Shape above = BRepPrimAPI_MakeHalfSpace(big, o.Translated(n)).Solid();
+      TopoDS_Shape below = BRepPrimAPI_MakeHalfSpace(big, o.Translated(-n)).Solid();
+      BRepAlgoAPI_Common a(bodies[target], above), c(bodies[target], below);
+      if (!a.IsDone() || !c.IsDone() || a.HasErrors() || c.HasErrors()) throw FeatureError("the split failed");
+      TopoDS_Shape ra = a.Shape(), rc = c.Shape();
+      if (!hasSolid(ra) || !hasSolid(rc)) throw FeatureError("the plane does not cut through that body");
+      FaceTags ta = remap(a, tags[target], ra, self), tc = remap(c, tags[target], rc, self);
+      bodies[target] = ra;
+      tags[target] = ta;
+      bodies.insert(bodies.begin() + target + 1, rc);
+      tags.insert(tags.begin() + target + 1, tc);
+      return;
+    }
+    if (!p.contains("tools") || p.at("tools").empty()) throw FeatureError("pick the bodies to " + kind + " with");
+    std::vector<int> tools;
+    for (auto& t : p["tools"]) {
+      int b = bodyRef(t);
+      if (b == target) throw FeatureError("a body cannot be combined with itself");
+      if (std::find(tools.begin(), tools.end(), b) == tools.end()) tools.push_back(b);
+    }
+    bool keep = p.value("keep", false);
+    TopoDS_Shape acc = bodies[target];
+    FaceTags accTags = tags[target];
+    for (int b : tools) {
+      FaceTags merged = accTags;
+      for (FaceTags::Iterator it(tags[b]); it.More(); it.Next()) merged.Bind(it.Key(), it.Value());
+      std::unique_ptr<BRepAlgoAPI_BooleanOperation> op;
+      if (kind == "combine") op = std::make_unique<BRepAlgoAPI_Fuse>(acc, bodies[b]);
+      else if (kind == "subtract") op = std::make_unique<BRepAlgoAPI_Cut>(acc, bodies[b]);
+      else if (kind == "intersect") op = std::make_unique<BRepAlgoAPI_Common>(acc, bodies[b]);
+      else throw FeatureError("unknown body tool '" + kind + "'");
+      if (!op->IsDone() || op->HasErrors()) throw FeatureError(kind + " failed");
+      TopoDS_Shape r = op->Shape();
+      if (!hasSolid(r)) throw FeatureError(kind + " leaves nothing of the body");
+      accTags = remap(*op, merged, r, self);
+      acc = r;
+    }
+    bodies[target] = acc;
+    tags[target] = accTags;
+    if (!keep || kind == "combine") {
+      std::sort(tools.rbegin(), tools.rend());
+      for (int b : tools) {
+        bodies.erase(bodies.begin() + b);
+        tags.erase(tags.begin() + b);
+      }
+    }
+  }
+
   void applyEdgeFeature(const Feature& f, int self) {
     if (f.params.contains("picks")) return applyPickedEdges(f, self);
     std::string target = f.params.value("target", std::string());
@@ -1362,6 +1603,10 @@ struct PartModel::Impl {
         else if (f.type == "plane" || f.type == "axis" || f.type == "point" || f.type == "csys") applyReference(f);
         else if (f.type == "fillet" || f.type == "chamfer") applyEdgeFeature(f, self);
         else if (f.type == "shell") applyShell(f, self);
+        else if (f.type == "pattern") applyPattern(f, self);
+        else if (f.type == "mirror") applyMirror(f, self);
+        else if (f.type == "draft") applyDraft(f, self);
+        else if (f.type == "body") applyBodyTool(f, self);
         else applyBoolean(f, toolShape(f), self);
       } catch (const Standard_Failure& e) {
         st.ok = false;
