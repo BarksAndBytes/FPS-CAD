@@ -12,6 +12,7 @@
 #include <miniz.h>
 
 #include "fpcad/Assembly.h"
+#include "fpcad/Drawing.h"
 #include "fpcad/Export.h"
 #include "fpcad/Expression.h"
 #include "fpcad/FileIO.h"
@@ -1435,6 +1436,68 @@ int main() {
     std::string model = zipEntry((out / "pavilion.3mf").string(), "3D/3dmodel.model");
     CHECK(model.find("unit=\"millimeter\"") != std::string::npos);
     CHECK(count(model, "<item ") == 1);
+  });
+
+  run("0.9: standard views with hidden lines and dimensions, flat views, DXF, PDF, .fpdrw", [&] {
+    // A 100 x 60 x 40 mm block with a 20 mm hole down through it.
+    PartDocument d;
+    d.name = "Block";
+    d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.06}, {"h", 0.04}}));
+    d.add(feature("cylinder", {{"x", 0.02}, {"y", 0}, {"z", -0.01}, {"r", 0.01}, {"h", 0.06}}, BodyOp::Cut));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    DrawingInfo info;
+    info.partName = "Block";
+    Sheet s = standardViews(m, info);
+    CHECK(s.width == 420 && s.height == 297 && s.scale == 1);  // fits A3 at 1:1
+    int visible = 0, hidden = 0;
+    double minx = 1e9, maxx = -1e9;
+    for (auto& l : s.lines) {
+      if (l.layer == DrawLayer::Visible) ++visible;
+      if (l.layer == DrawLayer::Hidden) ++hidden;
+      CHECK(l.x1 >= 0 && l.x1 <= 420 && l.y1 >= 0 && l.y1 <= 297);
+      if (l.layer == DrawLayer::Visible) {
+        minx = std::min({minx, l.x1, l.x2});
+        maxx = std::max({maxx, l.x1, l.x2});
+      }
+    }
+    CHECK(visible > 20 && hidden > 0);  // the hole shows hidden in the front and right views
+    bool width = false, dia = false, scale = false;
+    for (auto& t : s.texts) {
+      width = width || t.text == "100";
+      dia = dia || t.text == "Ø20";
+      scale = scale || t.text == "SCALE 1:1";
+    }
+    CHECK(width && dia && scale);
+    if (!(width && dia && scale)) {
+      std::printf("    scale %g:", s.scale);
+      for (auto& t : s.texts) std::printf(" [%s]", t.text.c_str());
+      std::printf("\n");
+    }
+    auto out = std::filesystem::temp_directory_path() / "fpcad-drawing";
+    std::filesystem::create_directories(out);
+    std::string dxf = (out / "block.dxf").string(), pdf = (out / "block.pdf").string();
+    CHECK(writeDxf(s, dxf).empty() && writePdf(s, pdf).empty());
+    std::ifstream fd(dxf);
+    std::string dx((std::istreambuf_iterator<char>(fd)), {});
+    CHECK(dx.find("AC1009") != std::string::npos && dx.find("HIDDEN") != std::string::npos && dx.find("%%c20") != std::string::npos);
+    std::ifstream fp(pdf, std::ios::binary);
+    std::string pd((std::istreambuf_iterator<char>(fp)), {});
+    CHECK(pd.rfind("%PDF-1.4", 0) == 0 && pd.find("%%EOF") != std::string::npos && pd.find("(\\33020) Tj") != std::string::npos);
+    // A flat view is true size.
+    Sheet flat = flatView({{{0, 0}, {0.05, 0}, {0.05, 0.03}, {0, 0.03}, {0, 0}}}, "Plate", "mm");
+    CHECK(flat.trueSize && std::abs(flat.width - 50) < 1e-9 && std::abs(flat.height - 30) < 1e-9);
+    CHECK(writeDxf(flat, (out / "flat.dxf").string()).empty() && writePdf(flat, (out / "flat.pdf").string()).empty());
+    // The drawing file names its part.
+    DrawingDocument dd;
+    dd.name = "Block drawing";
+    dd.partPath = "Block.fpprt";
+    dd.partFileId = d.fileId;
+    std::string drw = (out / "block.fpdrw").string();
+    saveDrawing(drw, dd);
+    CHECK(fileKind(drw) == FileKind::Drawing);
+    DrawingDocument back = loadDrawing(drw);
+    CHECK(back.partPath == "Block.fpprt" && back.partFileId == d.fileId && back.name == "Block drawing");
   });
 
   run("0.8: mates solve, constrained drag, interference", [&] {

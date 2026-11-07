@@ -66,6 +66,8 @@ var yaw := 0.0
 var board_scale := 1.0
 var notes: Array = []      # kind "notes": the player's notes, one per line
 var video_url := ""        # kind "video"
+var drawing_options := {hidden = true, dimensions = true}  # kind "drawing"
+var _sheet_canvas: Control = null
 var video_state := ""      # "", "ready", "loading", "copying", "converting", "playing", "paused" or "error"
 var video_message := ""    # the error screen's reason
 var video_title := ""      # what the library calls it: the page's title, else the file's name
@@ -248,7 +250,62 @@ func to_dict() -> Dictionary:
 		d.notes = notes.duplicate()
 	if kind == "video":
 		d.url = video_url
+	if kind == "drawing":
+		d.hidden = drawing_options.hidden
+		d.dimensions = drawing_options.dimensions
 	return d
+
+
+## Kind "drawing": shows a sheet from CadPart.drawing_sheet (millimetres, y up) on the board.
+func set_sheet(sheet: Dictionary) -> void:
+	if _sheet_canvas == null:
+		return
+	_sheet_canvas.sheet = sheet
+	_sheet_canvas.queue_redraw()
+	_dirty = true
+
+
+class SheetCanvas extends Control:
+	var sheet := {}
+	var font: Font = null
+
+	func _draw() -> void:
+		if sheet.is_empty():
+			return
+		var w: float = sheet.width
+		var h: float = sheet.height
+		var k := minf((size.x - 40.0) / w, (size.y - 40.0) / h)
+		var off := Vector2((size.x - w * k) / 2.0, (size.y - h * k) / 2.0)
+		var to := func(p: Vector2) -> Vector2: return Vector2(off.x + p.x * k, size.y - off.y - p.y * k)
+		var layers := [["border", Color("0f1a36"), 2.0], ["hidden", Color(0.06, 0.1, 0.21, 0.55), 1.0],
+			["visible", Color("0f1a36"), 2.0], ["dimensions", Color("1f5fb4"), 1.0]]
+		for layer in layers:
+			var segs: PackedVector2Array = sheet.get(layer[0], PackedVector2Array())
+			var pts := PackedVector2Array()
+			for i in range(0, segs.size() - 1, 2):
+				var a: Vector2 = to.call(segs[i])
+				var b: Vector2 = to.call(segs[i + 1])
+				if layer[0] == "hidden":
+					# Dashes: 6 px on, 4 off.
+					var d := a.distance_to(b)
+					var t := 0.0
+					while t < d:
+						pts.append(a.lerp(b, t / d))
+						pts.append(a.lerp(b, minf(t + 6.0, d) / d))
+						t += 10.0
+				else:
+					pts.append(a)
+					pts.append(b)
+			if pts.size() >= 2:
+				draw_multiline(pts, layer[1], layer[2])
+		var f := font if font != null else ThemeDB.fallback_font
+		for t in sheet.get("texts", []):
+			var px := maxi(10, int(float(t.height) * k * 1.4))
+			var p: Vector2 = to.call(t.position)
+			var tw := f.get_string_size(String(t.text), HORIZONTAL_ALIGNMENT_LEFT, -1, px).x
+			draw_set_transform(p, -float(t.angle))
+			draw_string(f, Vector2(-tw / 2.0, px * 0.35), String(t.text), HORIZONTAL_ALIGNMENT_LEFT, -1, px, Color("0f1a36"))
+			draw_set_transform(Vector2.ZERO)
 
 
 # ---------- video ----------
@@ -1371,6 +1428,11 @@ func _build_writing() -> void:
 		_notices.append(l)
 	_readout = _ink(26, INK_SOFT)
 	col.add_child(_readout)
+	if kind == "drawing":
+		_sheet_canvas = SheetCanvas.new()
+		_sheet_canvas.font = UiTheme.body_font
+		_sheet_canvas.size = Vector2(TEX)
+		_view.add_child(_sheet_canvas)
 	if kind == "video":
 		_video_back.color = Color(0.02, 0.02, 0.03)
 		_video_back.size = Vector2(TEX)

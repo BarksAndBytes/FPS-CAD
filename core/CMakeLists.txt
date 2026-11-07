@@ -9,7 +9,8 @@ add_library(fpcad_core STATIC
   src/Compare.cpp
   src/Challenges.cpp
   src/Export.cpp
-  src/Materials.cpp)
+  src/Materials.cpp
+  src/Drawing.cpp)
 
 target_include_directories(fpcad_core PUBLIC include)
 target_include_directories(fpcad_core SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
@@ -17,7 +18,7 @@ target_include_directories(fpcad_core SYSTEM PRIVATE ${OpenCASCADE_INCLUDE_DIR})
 # Open CASCADE toolkits the core uses. They stay shared libraries (LGPL relinking).
 set(FPCAD_OCCT_LIBS
   TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKBool
-  TKFillet TKOffset TKMesh TKShHealing TKXSBase TKDE TKDESTEP TKDEIGES TKDESTL TKLCAF TKCAF TKCDF
+  TKHLR TKFillet TKOffset TKMesh TKShHealing TKXSBase TKDE TKDESTEP TKDEIGES TKDESTL TKLCAF TKCAF TKCDF
   TKXCAF TKService TKV3d TKVCAF)
 
 target_link_libraries(fpcad_core

@@ -1107,6 +1107,7 @@ func _references(main: Node) -> void:
 	await _history(main)
 	await _check_design(main)
 	await _assemblies(main)
+	await _drawings(main)
 
 
 ## 0.4: fillet and chamfer on picked edges, holes of each kind, shell, extrude end conditions.
@@ -1571,6 +1572,59 @@ func _assemblies(main: Node) -> void:
 		"…and loads again with its parts and mates (%s · %s · %s · %s)" % [lf, str(rb), str(again.mates()), str(again.mate_status())])
 	for path in [plate_path, peg_path, ProjectSettings.globalize_path(main.current_path)]:
 		DirAccess.remove_absolute(path)
+
+
+## 0.9: the drawing board, PDF and DXF of the standard views, true-size face and sketch exports,
+## and the .fpdrw file.
+func _drawings(main: Node) -> void:
+	main._start_mode("new")
+	main.player.set_size_now(1.0)
+	await _frames(2)
+	var doc: RefCounted = main.doc
+	doc.set_part_name("Smoke drawn")
+	doc.add_primitive("box", Vector3(0, 0, 0), {w = 1.0, d = 0.6, h = 0.4}, "add")
+	doc.add_primitive("cylinder", Vector3(0.2, -0.1, 0), {r = 0.1, h = 0.6}, "cut")
+	main._on_model_changed()
+	var tools: Node = main.tools
+	tools.set_tool_id("board_drawing")
+	tools._act(true, false)
+	await _frames(2)
+	var boards: Array = main.boards.extra.filter(func(b): return b.kind == "drawing")
+	_check(boards.size() == 1, "Drawing board sets up a board")
+	var sheet: Dictionary = boards[0]._sheet_canvas.sheet if boards.size() == 1 else {}
+	_check(not sheet.is_empty() and (sheet.visible as PackedVector2Array).size() > 20 and (sheet.hidden as PackedVector2Array).size() > 0,
+		"it shows the views with hidden lines")
+	_check((sheet.texts as Array).any(func(t): return String(t.text).begins_with("Ø")), "…and the hole's diameter")
+	var files: Array = main.export_drawing_or_face({board = boards[0]})
+	_check(files.size() == 2 and FileAccess.get_file_as_string(files[0]).begins_with("%PDF") and FileAccess.file_exists(files[1]),
+		"the secondary action on it exports PDF and DXF (%s)" % str(files))
+	tools.aim = doc.pick(Vector3(-0.3, 5, 0.1), Vector3(0, -1, 0), 20.0)
+	var face: Array = main.export_drawing_or_face({})
+	_check(face.size() == 2 and FileAccess.get_file_as_string(face[0]).contains("LINE"), "…and on a flat face exports it true size")
+	var drw: String = main.save_drawing()
+	_check(drw.ends_with(".fpdrw") and FileAccess.file_exists(drw), "Save drawing writes a .fpdrw beside the part")
+	var FB = load("res://scripts/file_browser.gd")
+	_check(FB.saved_files().any(func(e): return e.kind == "Drawing"), "the Open browser lists drawings")
+	main._start_mode("new")
+	await _frames(1)
+	main.open_file(drw)
+	await _frames(2)
+	_check(main.doc.get_part_name() == "Smoke drawn" and main.boards.extra.any(func(b): return b.kind == "drawing"),
+		"opening the drawing opens its part with a drawing board")
+	# A sketch, true size.
+	tools.set_tool_id("sketch")
+	tools.options["sketch"] = 1
+	tools._act(true, false)
+	await _frames(2)
+	main.player.set_size_now(1.0)
+	main.sketcher.set_tool_id("rect")
+	main.sketcher.click_at(Vector2(1.5, 1.5))
+	main.sketcher.click_at(Vector2(1.75, 2.0))
+	var sk: Array = main.export_sketch_flat()
+	_check(sk.size() == 2 and FileAccess.get_file_as_string(sk[0]).contains("LINE"), "Export sketch writes it true size as DXF and PDF")
+	main.sketcher.discard()
+	for path in files + face + sk + [drw, main.current_path]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 
 ## 0.3: Save, Save as, the Open browser, opening a file, STEP import, New part in other units.

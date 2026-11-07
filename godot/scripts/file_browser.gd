@@ -7,7 +7,7 @@ extends CanvasLayer
 
 const UiTheme := preload("res://scripts/ui_theme.gd")
 const PROJECTS := "user://projects"
-const KINDS := {"fpprt": "Part", "fpasm": "Assembly"}
+const KINDS := {"fpprt": "Part", "fpasm": "Assembly", "fpdrw": "Drawing"}
 
 var game: Node  # main.gd
 var _panel := PanelContainer.new()

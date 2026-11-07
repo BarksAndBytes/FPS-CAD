@@ -354,6 +354,28 @@ what it uses…**.
 - The model panel lists the components (Ground / Float, Remove) and the mates (⚠ when not met,
   Delete), with the solver's status. Assemblies undo and redo.
 
+## Drawings (0.9)
+
+- **Standard views**: front, top and right in third-angle projection, plus an isometric, made
+  with Open Cascade's hidden-line removal (`HLRBRep`): visible edges and silhouettes solid,
+  hidden ones dashed. They are laid out on A3 at the largest standard scale that fits (50:1 …
+  1:1000), with a border and a title block (part name, material, scale, units, projection).
+  **Model dimensions**: each view's overall width and height, and the diameter of each full
+  circle it shows (with a centre mark), in the part's units.
+- **Drawing board** (Boards group): a whiteboard showing the part's drawing, which follows the
+  part as it changes; pressing the primary action on it turns hidden lines on or off. The
+  secondary action on it exports PDF and DXF to the exports folder; on a flat face of the part it
+  exports that face's outline true size (DXF for cutting, PDF at 1:1 on the smallest A-size page
+  that fits, else scaled to A0 with the scale printed).
+- **File page**: *Drawing: PDF and DXF of the standard views* and *Save drawing (.fpdrw)*. While
+  sketching, the pause menu has *Export sketch: DXF and PDF, true size* (construction geometry
+  left out).
+- **DXF**: R12 (AC1009) in millimetres, layers VISIBLE, HIDDEN (dashed line type), DIMENSIONS,
+  BORDER; text with `%%c` for Ø. **PDF**: one vector page, Helvetica text (WinAnsi).
+- **`.fpdrw`**: a zip with a manifest (`kind: drawing`) and `drawing.json` naming the part
+  (`part.path` relative to the drawing, `part.fileId`) and the options. Opening it opens the part
+  and sets up a drawing board in front of you.
+
 ## Native file layout (`.fpprt`)
 
 ```

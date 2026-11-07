@@ -1,4 +1,5 @@
 #include "fpcad/FileIO.h"
+#include "fpcad/Drawing.h"
 
 #include <chrono>
 #include <cstdio>
@@ -146,6 +147,7 @@ FileKind fileKind(const std::string& path) {
     std::string k = z.json("manifest.json").value("kind", std::string());
     if (k == "part") return FileKind::Part;
     if (k == "assembly") return FileKind::Assembly;
+    if (k == "drawing") return FileKind::Drawing;
   } catch (...) {
   }
   return FileKind::Unknown;
@@ -269,6 +271,31 @@ AssemblyDocument loadAssembly(const std::string& path) {
   } catch (const std::exception& e) {
     throw FileError(path + ": assembly structure is damaged (" + e.what() + ")");
   }
+  return d;
+}
+
+void saveDrawing(const std::string& path, const DrawingDocument& d) {
+  atomicWrite(path, [&](ZipWriter& z) {
+    Json m = manifest("drawing", newId(), d.name, "mm");
+    z.add("manifest.json", m.dump(2));
+    Json body = {{"part", {{"path", d.partPath}, {"fileId", d.partFileId}}},
+                 {"views", Json::array({{{"kind", "standard"}, {"sheet", "A3"}, {"projection", "third-angle"}}})},
+                 {"hidden", d.hidden},
+                 {"dimensions", d.dimensions}};
+    z.add("drawing.json", body.dump(2));
+  });
+}
+
+DrawingDocument loadDrawing(const std::string& path) {
+  ZipReader z(path);
+  Json m = checkManifest(z, path, "drawing");
+  DrawingDocument d;
+  d.name = m.value("name", std::string("Drawing"));
+  Json body = z.json("drawing.json");
+  d.partPath = body["part"].value("path", std::string());
+  d.partFileId = body["part"].value("fileId", std::string());
+  d.hidden = body.value("hidden", true);
+  d.dimensions = body.value("dimensions", true);
   return d;
 }
 

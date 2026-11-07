@@ -395,7 +395,8 @@ func _after_part_settings() -> void:
 func _menu_items() -> Array:
 	var items := [["Resume", "resume"]]
 	if sketcher != null and sketcher.active:
-		items += [["Finish sketch", "finish_sketch"], ["Discard sketch", "discard_sketch"]]
+		items += [["Finish sketch", "finish_sketch"], ["Discard sketch", "discard_sketch"],
+			["Export sketch: DXF and PDF, true size", "export_sketch_flat"]]
 	items.append(["Controls", "controls"])
 	items.append(["Interface size: " + UiTheme.scale_label(UiTheme.saved_scale_choice()), "ui_scale"])
 	if updater != null and updater.supported():
@@ -420,7 +421,10 @@ func _file_items() -> Array:
 	if not is_assembly:
 		items.append(["Import STEP…", "import_step"])
 	items += [["Export STEP", "export_step"], ["Export IGES", "export_iges"], ["Export STL", "export_stl"],
-		["Export 3MF", "export_3mf"], ["Back", "menu_back"]]
+		["Export 3MF", "export_3mf"]]
+	if not is_assembly:
+		items += [["Drawing: PDF and DXF of the standard views", "export_drawing"], ["Save drawing (.fpdrw)", "save_drawing"]]
+	items.append(["Back", "menu_back"])
 	return items
 
 
@@ -719,6 +723,27 @@ func _save_as() -> void:
 
 ## Opens a saved part or assembly: a path, or (Android) a content:// file from the picker, which
 ## is copied into the projects folder first.
+## A drawing opens its part with a drawing board in front of the player.
+func _open_drawing(path: String) -> void:
+	var probe: RefCounted = ClassDB.instantiate(&"CadPart")
+	var d: Dictionary = probe.load_drawing(ProjectSettings.globalize_path(path))
+	if not d.get("ok", false):
+		hud.toast(String(d.get("message", "That drawing cannot be read")))
+		return
+	if not FileAccess.file_exists(String(d.part_path)):
+		hud.toast("The drawing's part is missing: %s" % String(d.part_path).get_file())
+		return
+	open_file(String(d.part_path))
+	if doc == null or is_assembly:
+		return
+	var existing: Array = boards.extra.filter(func(b): return b.kind == "drawing")
+	if existing.is_empty():
+		var b: Node3D = boards.add("drawing", boards.spot_ahead(), 0.0, boards.new_scale())
+		b.drawing_options = {hidden = bool(d.hidden), dimensions = bool(d.dimensions)}
+		boards._face_player(b)
+		boards.refresh_drawings()
+
+
 func open_file(path: String) -> void:
 	var local := path
 	if path.begins_with("content://"):
@@ -733,6 +758,9 @@ func open_file(path: String) -> void:
 		var f := FileAccess.open(local, FileAccess.WRITE)
 		f.store_buffer(data)
 		f.close()
+	if local.get_extension() == "fpdrw":
+		_open_drawing(local)
+		return
 	var asm := local.get_extension() == "fpasm"
 	var d: RefCounted = ClassDB.instantiate(&"CadAssembly" if asm else &"CadPart")
 	var err: String = d.load_file(ProjectSettings.globalize_path(local))
@@ -811,6 +839,73 @@ func _export(ext: String) -> void:
 	await get_tree().process_frame
 	var r: Dictionary = doc.export_file(path, "in" if hud.units == "ft" else hud.units if hud.units in ["mm", "cm", "m", "in"] else "mm")
 	hud.toast(("Exported %s · %s" % [path, r.message]) if r.ok else ("Export failed: " + r.message))
+
+
+## The standard views as PDF and DXF in the exports folder.
+func export_drawing(options: Dictionary) -> Array:
+	DirAccess.make_dir_recursive_absolute(EXPORTS)
+	var out := []
+	for ext in ["pdf", "dxf"]:
+		var path := ProjectSettings.globalize_path("%s/%s drawing.%s" % [EXPORTS, _doc_name(), ext])
+		var r: Dictionary = doc.export_drawing(path, options)
+		if not r.ok:
+			hud.toast("Drawing not exported: " + String(r.message))
+			return []
+		out.append(path)
+	hud.toast("Exported %s and .dxf" % out[0])
+	return out
+
+
+## The sketch being edited, true size, as DXF (for cutting) and PDF.
+func export_sketch_flat() -> Array:
+	if not sketcher.active:
+		return []
+	DirAccess.make_dir_recursive_absolute(EXPORTS)
+	var out := []
+	for ext in ["dxf", "pdf"]:
+		var path := ProjectSettings.globalize_path("%s/%s sketch.%s" % [EXPORTS, _doc_name(), ext])
+		var r: Dictionary = doc.export_sketch_flat(sketcher.sketch, path)
+		if not r.ok:
+			hud.toast("Sketch not exported: " + String(r.message))
+			return []
+		out.append(path)
+	hud.toast("Exported %s and .pdf (true size)" % out[0])
+	return out
+
+
+## Board tool, secondary: export the drawing board aimed at, or the flat face aimed at.
+func export_drawing_or_face(aimed: Dictionary) -> Array:
+	var b: Node3D = aimed.get("board", null)
+	if b != null and b.kind == "drawing":
+		return export_drawing(b.drawing_options)
+	var hit: Dictionary = tools.aim
+	if is_assembly or hit.is_empty() or hit.get("ground", false) or String(hit.get("feature_id", "")) == "":
+		hud.toast("Aim at a drawing board, or at a flat face of the part to export it true size")
+		return []
+	DirAccess.make_dir_recursive_absolute(EXPORTS)
+	var out := []
+	for ext in ["dxf", "pdf"]:
+		var path := ProjectSettings.globalize_path("%s/%s face.%s" % [EXPORTS, _doc_name(), ext])
+		var r: Dictionary = doc.export_face_flat(hit, path)
+		if not r.ok:
+			hud.toast(String(r.message))
+			return []
+		out.append(path)
+	hud.toast("Exported the face true size: %s and .pdf" % out[0])
+	return out
+
+
+## Saves a .fpdrw beside the part (saving the part first so the drawing can find it).
+func save_drawing() -> String:
+	if is_assembly:
+		return ""
+	_save()
+	if current_path == "":
+		return ""
+	var path := FileBrowser.free_path(_display_name() + " drawing", "fpdrw")
+	var err: String = doc.save_drawing(ProjectSettings.globalize_path(path), ProjectSettings.globalize_path(current_path), {hidden = true, dimensions = true})
+	hud.toast(err if err != "" else "Drawing saved: %s · open it to see the drawing board" % path.get_file())
+	return "" if err != "" else path
 
 
 func _autosave() -> void:
@@ -1369,6 +1464,15 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			items.append(["Back", "menu_back"])
 			hud.set_menu_items(items, "NEW PART")
 			hud.focus_menu_action("new:MMGS")
+		"export_drawing":
+			hud.set_menu(false)
+			export_drawing({hidden = true, dimensions = true})
+		"save_drawing":
+			hud.set_menu(false)
+			save_drawing()
+		"export_sketch_flat":
+			hud.set_menu(false)
+			export_sketch_flat()
 		"export_step":
 			_export("step")
 		"export_iges":

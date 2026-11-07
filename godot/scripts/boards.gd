@@ -61,8 +61,10 @@ func load_from(doc: RefCounted) -> void:
 		if kind == "messages":
 			game.board.set_pose(at, float(d.get("yaw", 0.0)), s)
 			messages_saved = true
-		elif kind in ["properties", "notes", "video"]:
+		elif kind in ["properties", "notes", "video", "drawing"]:
 			var b := add(kind, at, float(d.get("yaw", 0.0)), s, String(d.get("id", "")))
+			if kind == "drawing":
+				b.drawing_options = {hidden = bool(d.get("hidden", true)), dimensions = bool(d.get("dimensions", true))}
 			if kind == "notes":
 				b.set_notes(d.get("notes", []))
 			elif kind == "video":
@@ -96,7 +98,7 @@ func add(kind: String, feet: Vector3, yaw: float, s: float, id := "") -> Node3D:
 	elif kind == "video":
 		b.set_video("")
 	extra.append(b)
-	if kind == "properties":
+	if kind in ["properties", "drawing"]:
 		refresh_properties()
 	return b
 
@@ -143,12 +145,28 @@ func cast_extra(origin: Vector3, dir: Vector3, max_distance: float) -> Dictionar
 # ---------- what the properties boards say ----------
 
 func refresh_properties() -> void:
+	refresh_drawings()
 	var props := extra.filter(func(b): return b.kind == "properties")
 	if props.is_empty():
 		return
 	var lines := properties_text(game.doc, game.hud.units)
 	for b in props:
 		b.set_card("PART PROPERTIES", lines[0], lines[1])
+
+
+## Drawing boards show the part's standard views; they follow the part as it changes.
+func refresh_drawings() -> void:
+	var boards := extra.filter(func(b): return b.kind == "drawing")
+	if boards.is_empty():
+		return
+	var doc: RefCounted = game.doc
+	for b in boards:
+		if doc == null or not doc.has_method("drawing_sheet"):
+			b.set_card("DRAWING", "", "Drawings show parts")
+			b.set_sheet({})
+			continue
+		b.set_card("", "", "")
+		b.set_sheet(doc.drawing_sheet(b.drawing_options) if doc.body_count() > 0 else {})
 
 
 ## [heading, body] for a properties board: the part's name, then its properties line by line.
@@ -213,6 +231,23 @@ func act(id: String, primary: bool) -> void:
 			cancel()
 		return
 	match id:
+		"board_drawing":
+			if primary:
+				if b != null and b.kind == "drawing":
+					b.drawing_options.hidden = not b.drawing_options.hidden
+					refresh_drawings()
+					save()
+					game.hud.toast("Hidden lines %s" % ("shown" if b.drawing_options.hidden else "off"))
+					return
+				if not game.doc.has_method("drawing_sheet"):
+					game.hud.toast("Drawings show parts: open a part")
+					return
+				var nb := add("drawing", spot_ahead(), 0.0, new_scale())
+				_face_player(nb)
+				save()
+				game.hud.toast("Drawing board: front, top, right and isometric views · %s on it exports PDF and DXF" % Actions.prompt(&"secondary"))
+			else:
+				game.export_drawing_or_face(aimed)
 		"board_props":
 			if primary:
 				add("properties", spot_ahead(), 0.0, new_scale())

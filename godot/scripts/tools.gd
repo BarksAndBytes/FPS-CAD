@@ -31,7 +31,7 @@ const WHEEL := [
 		["measure", "bbox", "mass", "section", "interference"]],
 	["Assembly", "Place saved parts, mate them, explode the view, list the parts", ["insert_part", "mate", "explode", "bom"]],
 	["Boards", "Whiteboards in the room: part properties, your notes; carry, turn and resize them",
-		["board_props", "board_notes", "board_video", "board_arrange"]],
+		["board_props", "board_notes", "board_video", "board_drawing", "board_arrange"]],
 ]
 const TOOLS := [
 	{id = "select", name = "Select", pri = "select feature", alt = "match my size to it", opt = []},
@@ -81,13 +81,15 @@ const TOOLS := [
 	{id = "board_props", name = "Properties board", pri = "set up a board of the part's properties", alt = "remove the board you aim at", opt = []},
 	{id = "board_notes", name = "Notes board", pri = "add a note (here, or to the board you aim at)", alt = "edit the note you aim at", opt = []},
 	{id = "board_video", name = "Video board", pri = "set up a video board / play or pause the one you aim at", alt = "choose its video: a link, a downloaded video or a file", opt = []},
+	{id = "board_drawing", name = "Drawing board", pri = "set up a drawing of the part / hidden lines on or off",
+		alt = "export the drawing you aim at (PDF, DXF), or the flat face you aim at", opt = []},
 	{id = "board_arrange", name = "Arrange boards", pri = "pick up / set down a board", alt = "put it back / remove the board you aim at", opt = []},
 ]
 const PART_ONLY := ["section", "repick", "fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
 	"combine", "split", "delete_body", "push", "box", "cylinder", "sphere", "delete", "sketch", "extrude", "revolve", "sweep", "loft",
-	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_arrange"]
+	"ref_plane", "ref_axis", "ref_point", "ref_csys", "bbox", "mass", "board_props", "board_notes", "board_video", "board_drawing", "board_arrange"]
 const ASSEMBLY_ONLY := ["insert_part", "mate", "explode", "bom"]
-const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_arrange"]
+const BOARD_TOOLS := ["board_props", "board_notes", "board_video", "board_drawing", "board_arrange"]
 const REF_TOOLS := ["ref_plane", "ref_axis", "ref_point", "ref_csys"]
 const FEATURE_TOOLS := ["extrude", "revolve", "sweep", "loft"]
 const PICK_TOOLS := ["fillet", "chamfer", "hole", "shell", "draft", "linear_pattern", "circular_pattern", "mirror",
@@ -411,7 +413,7 @@ func _act(primary: bool, repeat: bool) -> void:
 			_act_assembly(primary, hit)
 		"ref_plane", "ref_axis", "ref_point", "ref_csys":
 			_act_reference(primary, hit)
-		"board_props", "board_notes", "board_video", "board_arrange":
+		"board_props", "board_notes", "board_video", "board_drawing", "board_arrange":
 			board_tool.emit(tool().id, primary)
 		"section":
 			if not primary:

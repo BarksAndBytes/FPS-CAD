@@ -64,6 +64,14 @@ public:
   // 0.6: the history. The rollback bar (index of the first feature not built; -1 at the end),
   // moving a feature (refused when it would break a feature that builds now), suppressing.
   int get_rollback() const;
+  // 0.9: drawings. Standard views of the part as a sheet (for the drawing board), written as PDF
+  // or DXF by the path's extension; true-size flat views of a sketch or of the face a hit is on.
+  godot::Dictionary drawing_sheet(const godot::Dictionary& options) const;
+  godot::Dictionary export_drawing(const godot::String& path, const godot::Dictionary& options) const;
+  godot::Dictionary export_sketch_flat(const godot::Dictionary& sketch, const godot::String& path) const;
+  godot::Dictionary export_face_flat(const godot::Dictionary& hit, const godot::String& path) const;
+  godot::String save_drawing(const godot::String& path, const godot::String& part_path, const godot::Dictionary& options) const;
+  godot::Dictionary load_drawing(const godot::String& path) const;
   // 0.7: a section view ({origin, normal}, the side the normal points to is cut away; {} clears),
   // a face's measurements, and overlapping bodies.
   void set_section(const godot::Dictionary& plane);

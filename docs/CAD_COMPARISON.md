@@ -33,7 +33,7 @@ names as **SOLIDWORKS / Fusion / Inventor**. A single name means all three use i
 | Surfacing, freeform, mesh | Full surface toolsets, T-splines, mesh repair | None | None |
 | Sheet metal, weldments, plastics, mold | Dedicated environments | None | None |
 | Assemblies | Mates/joints solved, motion, interference, BOM, standard parts | Insert saved parts, solved mates (coincident, concentric, distance, angle, lock), constrained drag, interference, BOM, exploded view | Medium |
-| Drawings and MBD | 2D drawings, GD&T, BOM tables, 3D annotations | None (`.fpdrw` planned after 1.0) | None |
+| Drawings and MBD | 2D drawings, GD&T, BOM tables, 3D annotations | Standard views with hidden lines and overall/hole dimensions, true-size sketch and face views, PDF and DXF, `.fpdrw` | Low–medium |
 | Inspection and analysis | Measure, mass properties, section, interference, draft, curvature | Measure distance, angle, length, radius, area; bounding box; mass properties; walkable section view; body interference | Medium |
 | Simulation and generative | FEA, motion, CFD, topology, generative | None | None |
 | Manufacturing | CAM, additive prep, nesting, costing | STL/3MF export only | Low |
@@ -308,17 +308,17 @@ UI work rather than a kernel limitation.
 
 | Capability | Professional | FPS-CAD |
 | --- | --- | --- |
-| Standard views: projected, auxiliary, section, detail, broken, break-out, crop | All three | ✗ |
-| Dimensions from the model, ordinate, chain, baseline | All three | ✗ |
-| Annotations: notes, balloons, centre marks, centrelines, hole callouts | All three | ✗ |
+| Standard views: projected, auxiliary, section, detail, broken, break-out, crop | All three | ◐ Front, top, right, isometric with hidden lines (0.9); no auxiliary, section or detail views |
+| Dimensions from the model, ordinate, chain, baseline | All three | ◐ Overall sizes and hole diameters per view (0.9) |
+| Annotations: notes, balloons, centre marks, centrelines, hole callouts | All three | ◐ Centre marks and diameter callouts (0.9) |
 | GD&T, datums, surface finish, weld symbols, edge symbols | All three (Inventor edge and weld symbols) | ✗ |
 | Tables: BOM, hole, revision, bend, cut list | All three; Fusion revision table auto-fills zone and sheet (Oct 2026) | ✗ |
-| Sheet formats and title blocks | All three | ✗ |
-| Export PDF, DWG, DXF | All three | ✗ |
+| Sheet formats and title blocks | All three | ◐ A3 with a border and title block (0.9) |
+| Export PDF, DWG, DXF | All three | ◐ PDF and DXF (0.9); no DWG |
 | 3D annotations (MBD / PMI) | MBD, DimXpert / — / Model-Based Definition | ✗ |
 
-The spec plans a `.fpdrw` drawing file after 1.0. A first useful step would be DXF/PDF export of a
-flat view (a sketch or a face), long before full drawings.
+0.9 added the first `.fpdrw` drawing file, standard views on a drawing board in the room, and
+true-size DXF/PDF of a sketch or a face.
 
 ---
 
@@ -421,8 +421,8 @@ spec).
 | ACIS (SAT), JT | All three | ✗ | ✗ |
 | Native files of other CAD (CATIA, NX, Creo, SW, Inventor) | Import in all three (3D Interconnect, AnyCAD, translators) | — | ✗ |
 | OBJ, FBX | Fusion, Inventor, SW | ✗ | ✗ |
-| DWG, DXF | All three | ✗ | ✗ |
-| PDF, 3D PDF | All three | ✗ | — |
+| DWG, DXF | All three | DXF (0.9) | ✗ |
+| PDF, 3D PDF | All three | PDF drawings (0.9) | — |
 | Images and screenshots | All three | ✓ screenshot (F12 / Share) | — |
 
 STEP import is the biggest gap here: it lets players bring parts in from other tools, and Open
@@ -509,7 +509,7 @@ release leaves the game usable on its own; earlier ones unblock later ones.
 3. Interference between components; bill of materials.
 4. A walkable exploded view.
 
-### 0.9 Drawings
+### 0.9 Drawings (done)
 1. DXF and PDF of a flat view: a sketch, a face, a projection.
 2. Standard views with model dimensions: the first `.fpdrw`.
 

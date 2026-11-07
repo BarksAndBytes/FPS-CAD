@@ -17,6 +17,7 @@
 #include "fpcad/Compare.h"
 #include "fpcad/Expression.h"
 #include "fpcad/Export.h"
+#include "fpcad/Drawing.h"
 #include "fpcad/FileIO.h"
 #include "fpcad/Materials.h"
 
@@ -496,6 +497,175 @@ Dictionary CadPart::delete_feature(const String& id) {
 }
 
 int CadPart::get_rollback() const { return model_->document().rollback; }
+
+namespace {
+
+fpcad::DrawingInfo drawingInfo(const fpcad::PartModel& m, const Dictionary& options) {
+  fpcad::DrawingInfo info;
+  info.partName = m.document().name;
+  info.units = m.document().units;
+  info.material = m.document().material;
+  info.hidden = bool(options.get("hidden", true));
+  info.dimensions = bool(options.get("dimensions", true));
+  return info;
+}
+
+Dictionary writeSheet(const fpcad::Sheet& sheet, const String& path) {
+  std::string p = str(path);
+  std::string ext = p.size() > 4 ? p.substr(p.size() - 4) : "";
+  for (auto& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+  std::string err;
+  if (ext == ".dxf") err = fpcad::writeDxf(sheet, p);
+  else if (ext == ".pdf") err = fpcad::writePdf(sheet, p);
+  else err = "drawings are written as .pdf or .dxf";
+  Dictionary d;
+  d["ok"] = err.empty();
+  d["message"] = str(err.empty() ? "Saved " + std::filesystem::path(p).filename().string() : err);
+  d["path"] = path;
+  return d;
+}
+
+}  // namespace
+
+Dictionary CadPart::drawing_sheet(const Dictionary& options) const {
+  fpcad::Sheet s = fpcad::standardViews(*model_, drawingInfo(*model_, options));
+  Dictionary d;
+  d["width"] = s.width;
+  d["height"] = s.height;
+  d["scale"] = s.scale;
+  PackedVector2Array vis, hid, dim, border;
+  for (auto& l : s.lines) {
+    PackedVector2Array* to = l.layer == fpcad::DrawLayer::Hidden ? &hid
+                             : l.layer == fpcad::DrawLayer::Dimension ? &dim
+                             : l.layer == fpcad::DrawLayer::Border ? &border : &vis;
+    to->push_back(Vector2(float(l.x1), float(l.y1)));
+    to->push_back(Vector2(float(l.x2), float(l.y2)));
+  }
+  d["visible"] = vis;
+  d["hidden"] = hid;
+  d["dimensions"] = dim;
+  d["border"] = border;
+  Array texts;
+  for (auto& t : s.texts) {
+    Dictionary e;
+    e["position"] = Vector2(float(t.x), float(t.y));
+    e["height"] = t.height;
+    e["angle"] = t.angle;
+    e["text"] = str(t.text);
+    texts.push_back(e);
+  }
+  d["texts"] = texts;
+  return d;
+}
+
+Dictionary CadPart::export_drawing(const String& path, const Dictionary& options) const {
+  if (model_->bodyCount() == 0) {
+    Dictionary d;
+    d["ok"] = false;
+    d["message"] = "There is nothing to draw yet";
+    return d;
+  }
+  return writeSheet(fpcad::standardViews(*model_, drawingInfo(*model_, options)), path);
+}
+
+Dictionary CadPart::export_sketch_flat(const Dictionary& sketch, const String& path) const {
+  std::vector<std::vector<std::array<double, 2>>> polys;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    for (auto& c : fpcad::sketchCurves(s))
+      if (!c.construction) polys.push_back(std::vector<std::array<double, 2>>(c.points.begin(), c.points.end()));
+  } catch (const std::exception& e) {
+    Dictionary d;
+    d["ok"] = false;
+    d["message"] = str(e.what());
+    return d;
+  }
+  if (polys.empty()) {
+    Dictionary d;
+    d["ok"] = false;
+    d["message"] = "The sketch has no geometry to export";
+    return d;
+  }
+  return writeSheet(fpcad::flatView(polys, str(String(sketch.get("planeName", "Sketch"))), model_->document().units), path);
+}
+
+Dictionary CadPart::export_face_flat(const Dictionary& hit, const String& path) const {
+  Dictionary d;
+  d["ok"] = false;
+  std::string name;
+  auto plane = model_->planeFromHit(dictToHit(hit), &name);
+  if (!plane) {
+    d["message"] = "Aim at a flat face";
+    return d;
+  }
+  fpcad::PickHit h = dictToHit(hit);
+  std::vector<std::vector<std::array<double, 2>>> polys;
+  for (auto& c : model_->projectFace(h.body, h.face, *plane)) {
+    std::vector<std::array<double, 2>> poly;
+    if (c.kind == "circle" && !c.pts.empty()) {
+      for (int i = 0; i <= 96; ++i) {
+        double a = 2 * Math_PI * i / 96;
+        poly.push_back({c.pts[0][0] + c.r * std::cos(a), c.pts[0][1] + c.r * std::sin(a)});
+      }
+    } else if (c.kind == "arc" && c.pts.size() == 3) {
+      // Centre, start, end: the arc runs anticlockwise from start to end.
+      auto& o = c.pts[0];
+      double r = std::hypot(c.pts[1][0] - o[0], c.pts[1][1] - o[1]);
+      double a0 = std::atan2(c.pts[1][1] - o[1], c.pts[1][0] - o[0]);
+      double a1 = std::atan2(c.pts[2][1] - o[1], c.pts[2][0] - o[0]);
+      while (a1 <= a0 + 1e-12) a1 += 2 * Math_PI;
+      int n = std::max(4, int((a1 - a0) / (2 * Math_PI) * 96));
+      for (int i = 0; i <= n; ++i) {
+        double a = a0 + (a1 - a0) * i / n;
+        poly.push_back({o[0] + r * std::cos(a), o[1] + r * std::sin(a)});
+      }
+    } else {
+      poly.assign(c.pts.begin(), c.pts.end());
+      if (c.closed && !poly.empty()) poly.push_back(poly.front());
+    }
+    polys.push_back(std::move(poly));
+  }
+  if (polys.empty()) {
+    d["message"] = "That face has no outline to export";
+    return d;
+  }
+  return writeSheet(fpcad::flatView(polys, model_->document().name + " · " + name, model_->document().units), path);
+}
+
+String CadPart::save_drawing(const String& path, const String& part_path, const Dictionary& options) const {
+  try {
+    fpcad::DrawingDocument dd;
+    dd.name = model_->document().name + " drawing";
+    std::filesystem::path pp(str(part_path)), dp(str(path));
+    dd.partPath = pp.parent_path() == dp.parent_path() ? pp.filename().string() : pp.string();
+    dd.partFileId = model_->document().fileId;
+    dd.hidden = bool(options.get("hidden", true));
+    dd.dimensions = bool(options.get("dimensions", true));
+    fpcad::saveDrawing(str(path), dd);
+    return "";
+  } catch (const std::exception& e) {
+    return str(e.what());
+  }
+}
+
+Dictionary CadPart::load_drawing(const String& path) const {
+  Dictionary d;
+  try {
+    fpcad::DrawingDocument dd = fpcad::loadDrawing(str(path));
+    std::filesystem::path pp(dd.partPath);
+    if (pp.is_relative()) pp = std::filesystem::path(str(path)).parent_path() / pp;
+    d["ok"] = true;
+    d["name"] = str(dd.name);
+    d["part_path"] = str(pp.string());
+    d["part_file_id"] = str(dd.partFileId);
+    d["hidden"] = dd.hidden;
+    d["dimensions"] = dd.dimensions;
+  } catch (const std::exception& e) {
+    d["ok"] = false;
+    d["message"] = str(e.what());
+  }
+  return d;
+}
 
 void CadPart::set_section(const Dictionary& plane) {
   if (plane.is_empty()) {
@@ -1197,6 +1367,12 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("move_feature", "id", "delta"), &CadPart::move_feature);
   ClassDB::bind_method(D_METHOD("delete_feature", "id"), &CadPart::delete_feature);
   ClassDB::bind_method(D_METHOD("get_rollback"), &CadPart::get_rollback);
+  ClassDB::bind_method(D_METHOD("drawing_sheet", "options"), &CadPart::drawing_sheet);
+  ClassDB::bind_method(D_METHOD("export_drawing", "path", "options"), &CadPart::export_drawing);
+  ClassDB::bind_method(D_METHOD("export_sketch_flat", "sketch", "path"), &CadPart::export_sketch_flat);
+  ClassDB::bind_method(D_METHOD("export_face_flat", "hit", "path"), &CadPart::export_face_flat);
+  ClassDB::bind_method(D_METHOD("save_drawing", "path", "part_path", "options"), &CadPart::save_drawing);
+  ClassDB::bind_method(D_METHOD("load_drawing", "path"), &CadPart::load_drawing);
   ClassDB::bind_method(D_METHOD("set_section", "plane"), &CadPart::set_section);
   ClassDB::bind_method(D_METHOD("has_section"), &CadPart::has_section);
   ClassDB::bind_method(D_METHOD("face_measure", "hit"), &CadPart::face_measure);
