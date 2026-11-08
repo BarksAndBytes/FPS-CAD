@@ -55,9 +55,6 @@ const BuildInfo := preload("res://scripts/build_info.gd")
 const PROJECT_URL := "https://github.com/BarksAndBytes/FPS-CAD"
 const RETRIES := 3        # a busy server (HTTP 429 / 503) is asked again up to this many times
 const RETRY_MAX := 60.0   # seconds; a longer Retry-After gives up instead
-## Sites that show their videos inside web pages, which the board can't display.
-const VIDEO_SITES := ["youtube.com", "youtu.be", "vimeo.com", "twitch.tv", "tiktok.com", "dailymotion.com",
-	"facebook.com", "instagram.com", "twitter.com", "x.com/"]
 
 var active := false
 var kind := "messages"     # "messages", "properties" or "notes"
@@ -315,10 +312,6 @@ static func url_problem(url: String) -> String:
 	var u := url.strip_edges().to_lower()
 	if not (u.begins_with("https://") or u.begins_with("http://")):
 		return "That isn't a web link: it should start with https://"
-	for site in VIDEO_SITES:
-		if site in u:
-			return "%s streams its videos in a protected player, so the whiteboard can't take the video from the page. Link to a page with an ordinary video, or to the video file itself." % [
-				String(site).trim_suffix("/")]
 	return ""
 
 
@@ -558,9 +551,6 @@ static func _video_file(url: String, strict := false) -> bool:
 			return true
 	if strict:
 		return false
-	for site in VIDEO_SITES:
-		if site in u:
-			return true  # kept, so the board can say why it can't play
 	return not (u.ends_with(".html") or u.ends_with(".htm") or u.ends_with(".php") or "/embed/" in u or u.ends_with("/"))
 
 
@@ -1004,11 +994,7 @@ func _on_video_downloaded(result: int, code: int, headers: PackedStringArray, _b
 		if video_title == "":
 			video_title = page_title(html)
 		if found == "":
-			_video_error("Couldn't find a video on that page. Pages whose video appears only through scripts or a protected player can't be used: link the video file itself.")
-			return
-		var problem := url_problem(found)
-		if problem != "":
-			_video_error("The video on that page is from " + problem.get_slice(" streams", 0) + ", which streams its videos in a protected player, so the whiteboard can't play it.")
+			_video_error("Couldn't find a video file on that page. Pages that build their player with scripts don't show one: link the video file itself.")
 			return
 		if is_stream(found):
 			_convert(found, path, "The stream on that page couldn't be read.", false)

@@ -1697,8 +1697,9 @@ func _files(main: Node) -> void:
 ## A video board: what can play, the error screen for what can't, pause, and saving the link.
 func _video_board(main: Node) -> void:
 	var WB = load("res://scripts/whiteboard.gd")
-	_check(WB.url_problem("https://www.youtube.com/watch?v=abc").contains("youtube.com") and WB.url_problem("ftp://x/v.ogv").contains("web link")
-		and WB.url_problem("https://example.com/clip.ogv") == "", "links to video sites and non-web links are turned away before downloading")
+	_check(WB.url_problem("ftp://x/v.ogv").contains("web link") and WB.url_problem("https://example.com/clip.ogv") == ""
+		and WB.url_problem("https://www.youtube.com/watch?v=abc") == "" and WB.url_problem("https://www.dropbox.com/s/a/clip.mp4") == "",
+		"only non-web links are turned away before downloading: no site is blocked")
 	var ogv := FileAccess.get_file_as_bytes("res://tests/tiny.ogv")
 	var mp4 := PackedByteArray([0, 0, 0, 32]) + "ftypisom".to_ascii_buffer() + PackedByteArray([0, 0, 2, 0])
 	var webm := PackedByteArray([0x1A, 0x45, 0xDF, 0xA3, 1, 0, 0, 0])
@@ -1731,8 +1732,8 @@ func _video_board(main: Node) -> void:
 		"on a Wikipedia page the 720p version is taken, not the 4K original (%s)" % WB.find_page_video(wiki, "https://en.wikipedia.org/wiki/Video").get_file())
 	_check(WB.find_page_video('<video><source src="a.webm" type="video/webm" data-height="720"><source src="a.ogv" type="video/ogg"></video>', page).ends_with("/a.ogv"),
 		"an Ogg source is preferred: it plays without converting")
-	_check(WB.find_page_video('<meta property="og:video" content="https://www.youtube.com/embed/abc">', page).contains("youtube.com"),
-		"an embedded YouTube video is found, so the board can say why it can't play it")
+	_check(WB.find_page_video('<meta property="og:video" content="https://player.example.com/embed/abc">', page) == "",
+		"an embedded player page is not taken for a video file")
 	_check(WB.user_agent().begins_with("FPS-CAD/") and WB.user_agent().contains("https://github.com/BarksAndBytes/FPS-CAD") and WB.user_agent().contains("Godot/"),
 		"downloads name the game and where to find out about it, as Wikimedia asks (%s)" % WB.user_agent())
 	_check(WB.retry_delay(PackedStringArray(["Retry-After: 3"]), 0) == 3.0 and WB.retry_delay(PackedStringArray(), 0) == 5.0
@@ -1876,8 +1877,8 @@ func _video_board(main: Node) -> void:
 		WB.forget_video(copied_to)
 	else:
 		print("SKIP FFmpeg conversion: no ffmpeg on this machine")
-	vb.play_url("https://youtu.be/abc")
-	_check(vb.video_state == "error" and String(vb.text_lines()[2]).contains("youtu.be"), "a YouTube link gets the error screen at once")
+	vb.play_url("ftp://example.com/abc.ogv")
+	_check(vb.video_state == "error" and String(vb.text_lines()[2]).contains("web link"), "a link that isn't a web link gets the error screen at once")
 	vb.set_video("https://example.com/tiny.ogv")
 	main.boards.save()
 	var saved: Array = main.doc.get_boards().filter(func(d): return d.kind == "video")

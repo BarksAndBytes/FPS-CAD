@@ -177,9 +177,9 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
   comes as its 720p version rather than the original upload.
   HLS and DASH playlists (`.m3u8`, `.mpd`) go straight to FFmpeg, which reads the stream. Only one
   hop: a page whose video link leads to another page is an error. What can't play gets an error
-  screen saying why: YouTube, Vimeo and similar sites (linked, or embedded in the page) are turned
-  away, since their pages hold no video file and taking one means working around their stream
-  protection and terms; pages with no video found, failed downloads (HTTP status, no
+  screen saying why. No site is blocked; pages whose player is built by scripts (YouTube, Vimeo
+  and the like) hold no video file, so they end at "couldn't find a video file on that page";
+  pages with no video found, failed downloads (HTTP status, no
   connection, TLS), files FFmpeg can't read (with its last message) and, on Android, which has no
   FFmpeg yet, anything that needs converting, with the ffmpeg line to convert it on a computer.
   Downloads name the game (`FPS-CAD/<version> (<project link>; whiteboard video) Godot/<version>`,
