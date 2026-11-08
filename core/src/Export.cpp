@@ -11,6 +11,9 @@
 #include <unordered_map>
 
 #include <BRepBndLib.hxx>
+#include <BinTools.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <gp_Trsf.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepGProp.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -543,6 +546,53 @@ ExportResult exportAssembly(const AssemblyModel& model, const std::string& path,
     sc.instances.push_back({pc.name, remap[static_cast<size_t>(pc.part)], toTrsf(pc.placement, sc.scale)});
   }
   return writeScene(sc, path, o);
+}
+
+ImportResult importStep(const std::string& path) {
+  ImportResult r;
+  try {
+    STEPControl_Reader rd;
+    if (rd.ReadFile(path.c_str()) != IFSelect_RetDone) {
+      r.message = "that file can't be read as STEP";
+      return r;
+    }
+    rd.TransferRoots();
+    TopoDS_Shape shape = rd.OneShape();
+    if (shape.IsNull()) {
+      r.message = "the STEP file holds no shapes";
+      return r;
+    }
+    // The reader returns millimetres whatever the file's unit; the part works in metres.
+    gp_Trsf t;
+    t.SetScaleFactor(0.001);
+    shape = BRepBuilderAPI_Transform(shape, t, true).Shape();
+    TopoDS_Compound solids;
+    BRep_Builder bb;
+    bb.MakeCompound(solids);
+    for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+      bb.Add(solids, ex.Current());
+      ++r.solids;
+    }
+    if (r.solids == 0) {
+      r.message = "the STEP file has surfaces but no solid bodies";
+      return r;
+    }
+    TopoDS_Shape keep = r.solids == 1 ? TopoDS_Shape(TopoDS_Iterator(solids).Value()) : TopoDS_Shape(solids);
+    r.volume = volumeOf(keep);
+    Bnd_Box box;
+    BRepBndLib::Add(keep, box);
+    box.Get(r.min[0], r.min[1], r.min[2], r.max[0], r.max[1], r.max[2]);
+    std::ostringstream os(std::ios::binary);
+    BinTools::Write(keep, os);
+    r.brep = os.str();
+    r.ok = true;
+    r.message = std::to_string(r.solids) + (r.solids == 1 ? " solid" : " solids");
+  } catch (const Standard_Failure& e) {
+    r.message = std::string("STEP import failed: ") + e.GetMessageString();
+  } catch (const std::exception& e) {
+    r.message = std::string("STEP import failed: ") + e.what();
+  }
+  return r;
 }
 
 }  // namespace fpcad

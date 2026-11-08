@@ -1,4 +1,5 @@
 #include "fpcad/FileIO.h"
+#include "fpcad/Drawing.h"
 
 #include <chrono>
 #include <cstdio>
@@ -126,7 +127,9 @@ Json checkManifest(ZipReader& z, const std::string& path, const char* kind) {
 }
 
 std::string partHistory(const PartDocument& d) {
-  return d.featuresJson().dump() + d.variablesJson().dump() + d.units;
+  std::string imported;
+  for (auto& [id, data] : d.imports) imported += id + ":" + hashOf(data) + ";";
+  return d.featuresJson().dump() + d.variablesJson().dump() + d.units + imported + "|rollback:" + std::to_string(d.rollback);
 }
 
 Json viewpointsJson(const PartDocument& d) {
@@ -144,6 +147,7 @@ FileKind fileKind(const std::string& path) {
     std::string k = z.json("manifest.json").value("kind", std::string());
     if (k == "part") return FileKind::Part;
     if (k == "assembly") return FileKind::Assembly;
+    if (k == "drawing") return FileKind::Drawing;
   } catch (...) {
   }
   return FileKind::Unknown;
@@ -153,7 +157,9 @@ void savePart(const std::string& path, const PartDocument& doc, const PartModel*
   atomicWrite(path, [&](ZipWriter& z) {
     Json m = manifest("part", doc.fileId, doc.name, doc.units);
     m["material"] = doc.material;
+    if (!doc.massUnits.empty()) m["massUnits"] = doc.massUnits;
     m["density"] = doc.density;
+    m["rollback"] = doc.rollback;
     m["historyHash"] = hashOf(partHistory(doc));
     int bodies = 0;
     if (model && partHistory(model->document()) == partHistory(doc)) {
@@ -169,6 +175,13 @@ void savePart(const std::string& path, const PartDocument& doc, const PartModel*
     z.add("history/features.json", doc.featuresJson().dump(2));
     z.add("history/variables.json", doc.variablesJson().dump(2));
     z.add("views/viewpoints.json", viewpointsJson(doc).dump(2));
+    Json importIds = Json::array();
+    for (auto& [id, data] : doc.imports) {
+      z.add("imports/" + id + ".brep", data);
+      importIds.push_back(id);
+    }
+    z.add("imports/index.json", importIds.dump());
+    z.add("views/boards.json", (doc.boards.is_array() ? doc.boards : Json::array()).dump(2));
   });
 }
 
@@ -180,7 +193,9 @@ PartDocument loadPart(const std::string& path) {
   d.name = m.value("name", std::string("Part"));
   d.units = m.value("units", std::string("mm"));
   d.material = m.value("material", d.material);
+  d.massUnits = m.value("massUnits", std::string());
   d.density = m.value("density", d.density);
+  d.rollback = m.value("rollback", -1);
   try {
     d.loadFeatures(z.json("history/features.json"));
     d.loadVariables(z.has("history/variables.json") ? z.json("history/variables.json") : Json::array());
@@ -188,6 +203,21 @@ PartDocument loadPart(const std::string& path) {
     throw;
   } catch (const std::exception& e) {
     throw FileError(path + ": feature history is damaged (" + e.what() + ")");
+  }
+  if (z.has("imports/index.json")) {
+    for (auto& id : z.json("imports/index.json")) {
+      std::string name = "imports/" + id.get<std::string>() + ".brep";
+      if (!z.has(name)) throw FileError(path + ": " + name + " is missing");
+      d.imports[id.get<std::string>()] = z.read(name);
+    }
+  }
+  if (z.has("views/boards.json")) {
+    try {
+      Json b = z.json("views/boards.json");
+      if (b.is_array()) d.boards = b;
+    } catch (const std::exception&) {
+      // A damaged layout only loses the boards, never the part.
+    }
   }
   if (z.has("views/viewpoints.json")) {
     for (auto& v : z.json("views/viewpoints.json")) {
@@ -241,6 +271,31 @@ AssemblyDocument loadAssembly(const std::string& path) {
   } catch (const std::exception& e) {
     throw FileError(path + ": assembly structure is damaged (" + e.what() + ")");
   }
+  return d;
+}
+
+void saveDrawing(const std::string& path, const DrawingDocument& d) {
+  atomicWrite(path, [&](ZipWriter& z) {
+    Json m = manifest("drawing", newId(), d.name, "mm");
+    z.add("manifest.json", m.dump(2));
+    Json body = {{"part", {{"path", d.partPath}, {"fileId", d.partFileId}}},
+                 {"views", Json::array({{{"kind", "standard"}, {"sheet", "A3"}, {"projection", "third-angle"}}})},
+                 {"hidden", d.hidden},
+                 {"dimensions", d.dimensions}};
+    z.add("drawing.json", body.dump(2));
+  });
+}
+
+DrawingDocument loadDrawing(const std::string& path) {
+  ZipReader z(path);
+  Json m = checkManifest(z, path, "drawing");
+  DrawingDocument d;
+  d.name = m.value("name", std::string("Drawing"));
+  Json body = z.json("drawing.json");
+  d.partPath = body["part"].value("path", std::string());
+  d.partFileId = body["part"].value("fileId", std::string());
+  d.hidden = body.value("hidden", true);
+  d.dimensions = body.value("dimensions", true);
   return d;
 }
 

@@ -16,7 +16,7 @@ public:
   using std::runtime_error::runtime_error;
 };
 
-enum class FileKind { Part, Assembly, Unknown };
+enum class FileKind { Part, Assembly, Drawing, Unknown };
 
 FileKind fileKind(const std::string& path);  // reads the manifest, not the extension
 

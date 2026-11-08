@@ -6,7 +6,8 @@ name: Android APK
 # Every build is signed with the same key (repository secrets ANDROID_KEYSTORE_BASE64 and
 # ANDROID_KEYSTORE_PASSWORD, alias "fpscad"), and its version code is the workflow's run number,
 # so a new build installs over the old one as an update. The release also carries latest.json,
-# which the app reads to offer updates (godot/scripts/updater.gd).
+# which Android builds of the app read to offer updates (godot/scripts/updater.gd). Windows builds
+# read their own file from windows-dev instead.
 
 on:
   push:
@@ -31,7 +32,51 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+        run: sudo apt-get update && sudo apt-get install -y ninja-build autoconf automake libtool pkg-config zlib1g-dev nasm
+
+      - name: Cache FFmpeg (Android, and its Linux twin for testing)
+        id: ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/ffmpeg-android
+            ${{ runner.temp }}/ffmpeg-linux
+          key: ffmpeg-${{ hashFiles('tools/build_ffmpeg.sh') }}-v1
+
+      - name: Build FFmpeg for the video board
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" tools/ci_run.sh tools/build_ffmpeg.sh "${{ runner.temp }}/ffmpeg-android" android
+          tools/ci_run.sh tools/build_ffmpeg.sh "${{ runner.temp }}/ffmpeg-linux" linux
+          rm -rf "${{ runner.temp }}"/ffmpeg-*/.build "${{ runner.temp }}"/ffmpeg-*/deps
+
+      - name: Test the FFmpeg build on real clips
+        run: |
+          # The Linux twin has the same codecs, so it shows what the phone's copy can convert.
+          FF="${{ runner.temp }}/ffmpeg-linux/bin/ffmpeg"
+          "$FF" -hide_banner -encoders | grep -E "libtheora|libvorbis"
+          for clip in godot/tests/tiny.mp4 godot/tests/tiny.webm; do
+            "$FF" -hide_banner -loglevel error -nostdin -y -i "$clip" -map 0:v:0 -map "0:a:0?" \
+              -vf "scale=w='min(854,iw)':h=-2" -c:v libtheora -q:v 7 -c:a libvorbis -q:a 4 -f ogg "$RUNNER_TEMP/out.ogv"
+            python3 -c "import sys; d=open(sys.argv[1],'rb').read(4096); sys.exit(0 if d[:4]==b'OggS' and b'\\x80theora' in d else 1)" "$RUNNER_TEMP/out.ogv" \
+              || { echo "::error::$clip did not convert to Ogg Theora"; exit 1; }
+            echo "$clip -> Ogg Theora, $(stat -c %s "$RUNNER_TEMP/out.ogv") bytes"
+          done
+          # The board's parallel path: slices cut on frames, the sound, then a join without
+          # re-encoding (whiteboard.gd slice_args / audio_args / join_args).
+          T="$RUNNER_TEMP/split"; mkdir -p "$T"; CLIP=godot/tests/ten_seconds.mp4
+          "$FF" -hide_banner -loglevel error -nostdin -y -ss 0 -i $CLIP -map 0:v:0 -an -vf "scale=w='min(854,iw)':h=-2" -c:v libtheora -q:v 7 -frames:v 50 -f ogg "$T/v0.ogv"
+          "$FF" -hide_banner -loglevel error -nostdin -y -ss 5 -i $CLIP -map 0:v:0 -an -vf "scale=w='min(854,iw)':h=-2" -c:v libtheora -q:v 7 -f ogg "$T/v1.ogv"
+          "$FF" -hide_banner -loglevel error -nostdin -y -i $CLIP -vn -map 0:a:0 -c:a libvorbis -q:a 4 -f ogg "$T/a.oga"
+          printf "file '%s'\nfile '%s'\n" "$T/v0.ogv" "$T/v1.ogv" > "$T/list.txt"
+          "$FF" -hide_banner -loglevel error -nostdin -y -f concat -safe 0 -i "$T/list.txt" -i "$T/a.oga" -map 0:v -map 1:a -c copy -progress pipe:1 -nostats -f ogg "$T/joined.ogv" > /dev/null \
+            || { echo "::error::the FFmpeg build can't join slices (the video board's parallel conversion)"; exit 1; }
+          python3 -c "import sys; d=open(sys.argv[1],'rb').read(4096); sys.exit(0 if d[:4]==b'OggS' and b'\\x80theora' in d else 1)" "$T/joined.ogv"
+          echo "split + join -> $(stat -c %s "$T/joined.ogv") bytes"
+          A="${{ runner.temp }}/ffmpeg-android/bin/ffmpeg"
+          file "$A"
+          file "$A" | grep -q "ARM aarch64" || { echo "::error::the Android FFmpeg is not an arm64 program"; exit 1; }
+          "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$A" | grep NEEDED
 
       - name: Cache Open CASCADE (Android)
         id: occt
@@ -58,7 +103,10 @@ jobs:
       - name: Stage Open CASCADE and libc++ beside the extension
         run: |
           LIBCXX=$(find "$ANDROID_NDK_LATEST_HOME" -path "*aarch64-linux-android/libc++_shared.so" | head -1)
-          python3 tools/stage_occt.py --occt "${{ runner.temp }}/occt-android" --platform android --extra "$LIBCXX"
+          # FFmpeg rides along as lib/arm64-v8a/libffmpeg.so: Android unpacks native libraries to a
+          # folder the app may run programs from (whiteboard.gd finds it there).
+          cp "${{ runner.temp }}/ffmpeg-android/bin/ffmpeg" "$RUNNER_TEMP/libffmpeg.so"
+          python3 tools/stage_occt.py --occt "${{ runner.temp }}/occt-android" --platform android --extra "$LIBCXX" --extra "$RUNNER_TEMP/libffmpeg.so"
           ls -la godot/bin
 
       - name: Install Godot and its export templates
@@ -116,15 +164,17 @@ jobs:
           fi
           BUILD=${{ github.run_number }}
           echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+          RELEASE=$(tr -d '[:space:]' < VERSION)
+          echo "RELEASE=$RELEASE" >> "$GITHUB_ENV"
           # Android installs a build over another only when its version code is not lower.
-          sed -i "s|^version/code=.*|version/code=$BUILD|; s|^version/name=.*|version/name=\"0.2.$BUILD\"|" godot/export_presets.cfg
+          sed -i "s|^version/code=.*|version/code=$BUILD|; s|^version/name=.*|version/name=\"$RELEASE.$BUILD\"|" godot/export_presets.cfg
           cat > godot/scripts/build_info.gd <<EOF
           extends RefCounted
           ## Written by CI for each published build.
           const BUILD := $BUILD
           const COMMIT := "${GITHUB_SHA::7}"
           const BRANCH := "${GITHUB_REF_NAME}"
-          const VERSION := "0.2.$BUILD"
+          const VERSION := "$RELEASE.$BUILD"
           EOF
           sed -i 's/^          //' godot/scripts/build_info.gd
           cat godot/scripts/build_info.gd
@@ -150,15 +200,16 @@ jobs:
           echo "CERT_SHA256=$(grep -m1 'SHA-256 digest' export/android/certs.txt | awk '{print $NF}')" >> "$GITHUB_ENV"
           unzip -l export/android/FPS-CAD.apk | grep -E "lib/arm64-v8a/.*\.so" | tee export/android/libs.txt
           grep -q libfpcad export/android/libs.txt || { echo "::error::the APK is missing the CAD extension"; exit 1; }
+          grep -q "lib/arm64-v8a/libffmpeg.so" export/android/libs.txt || { echo "::error::the APK is missing FFmpeg"; exit 1; }
           cp export/android/FPS-CAD.apk "export/android/FPS-CAD-${GITHUB_SHA::7}.apk"
           APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/android-dev/FPS-CAD-${GITHUB_SHA::7}.apk"
           python3 - "$APK_URL" > export/android/latest.json <<'PY'
           import json, os, sys
           import hashlib
           apk = open("export/android/FPS-CAD.apk", "rb").read()
-          print(json.dumps({"build": int(os.environ["BUILD"]), "version": "0.2." + os.environ["BUILD"],
+          print(json.dumps({"platform": "android", "build": int(os.environ["BUILD"]), "version": os.environ["RELEASE"] + "." + os.environ["BUILD"],
                             "commit": os.environ["GITHUB_SHA"][:7], "branch": os.environ["GITHUB_REF_NAME"],
-                            "signing": os.environ["SIGN_KIND"], "apk": sys.argv[1],
+                            "signing": os.environ["SIGN_KIND"], "url": sys.argv[1], "apk": sys.argv[1],
                             "size": len(apk), "sha256": hashlib.sha256(apk).hexdigest()}, indent=2))
           PY
           cat export/android/latest.json
@@ -181,7 +232,7 @@ jobs:
           gh release create android-dev "export/android/FPS-CAD-${GITHUB_SHA::7}.apk" export/android/latest.json \
             --prerelease --target "$GITHUB_SHA" \
             --title "Android build ${BUILD} (${GITHUB_SHA::7})" \
-            --notes "Build ${BUILD} (version 0.2.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a phone.
+            --notes "Build ${BUILD} (version ${RELEASE}.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a phone.
 
           Install: open this page on the phone, download the APK, and allow installs from your browser when Android asks. Android 10 or newer, 64-bit (arm64). Pair an Xbox controller over Bluetooth first, or use the on-screen controls.
 

@@ -91,10 +91,11 @@ func start(i: int) -> void:
 	_heading.text = info.name
 	_brief.text = info.brief
 	_hint.text = "Hint: " + String(info.hint)
-	_status.text = "Build your copy beside the hologram. Position and orientation don't matter."
+	_status.text = "Build your copy beside the target. Position and orientation don't matter."
 	_status.add_theme_color_override("font_color", UiTheme.MUTED)
-	_card.visible = true
+	_card.visible = false  # the card is written on the whiteboard
 	_end.visible = false
+	_to_board()
 
 
 ## Where the player starts: full size, on the floor, walking up to the front of the table.
@@ -202,15 +203,19 @@ func on_model_changed() -> void:
 		return
 	var msg: String = last.get("message", "")
 	if last.get("empty", false):
-		msg = "Build your copy beside the hologram. Position and orientation don't matter."
+		msg = "Build your copy beside the target. Position and orientation don't matter."
 	_status.text = msg
 	_status.add_theme_color_override("font_color", Color("e0a35f") if last.get("mirrored", false) else UiTheme.FG)
+	_to_board()
 
 
 func _complete() -> void:
 	solved = true
 	var better := _record(_t)
 	_card.visible = false
+	if game.board != null:
+		game.board.set_card("CHALLENGE  %d / %d   ·   %s" % [index + 1, int(info.count), time_text(_t)],
+			"✓  " + String(info.name), "Matched. Any orientation, any method.", Color("23855a"), 1.0)
 	_end.visible = true
 	var last_one: bool = index + 1 >= int(info.count)
 	_end_title.text = "MATCHED" if not last_one else "ALL CHALLENGES DONE"
@@ -228,10 +233,21 @@ func _process(dt: float) -> void:
 		return
 	if not solved and not game.modal_open():
 		_t += dt
-	var blocked: bool = game.hud.menu_open or game.hud.panel_open or game.cmap.visible or game.numpad.visible
-	_card.visible = not solved and not blocked
-	if _card.visible:
-		_count.text = "CHALLENGE  %d / %d   ·   %s" % [index + 1, int(info.count), time_text(_t)]
+	_card.visible = false
+	if not solved:
+		var count := "CHALLENGE  %d / %d   ·   %s" % [index + 1, int(info.count), time_text(_t)]
+		if count != _count.text:  # once a second, for the timer
+			_count.text = count
+			_to_board()
+
+
+## The challenge card, written on the whiteboard: its name, brief, hint and the last comparison.
+func _to_board() -> void:
+	if game == null or game.board == null:
+		return
+	var mirrored: bool = last.get("mirrored", false)
+	game.board.set_card(_count.text, _heading.text, "%s\n%s\n\n%s" % [_brief.text, _hint.text, _status.text],
+		Color("c0392b") if mirrored else Color("0f1a36"))
 
 
 ## A ray against the hologram, for measuring the target. Hits carry no feature, so modelling

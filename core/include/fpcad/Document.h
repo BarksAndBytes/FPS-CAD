@@ -5,6 +5,8 @@
 // own axes. Feature parameters are JSON values: a number (SI units) or an expression string.
 
 #include <array>
+#include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <vector>
@@ -32,6 +34,7 @@ BodyOp bodyOpFromString(const std::string& s);
 //   extrude   plane {origin[3], normal[3], xdir[3]}, profile, depth, symmetric
 //             profile = {"kind":"rect","cx","cy","w","h"} | {"kind":"circle","cx","cy","r"}
 //                     | {"kind":"polyline","points":[[x,y],...]}
+//   import    shape (id in PartDocument::imports), x y z (where its origin goes), file (name shown)
 //   fillet    target (feature id), edges ("all"|"vertical"|"top"|"bottom"), r
 //   chamfer   target (feature id), edges, d
 struct Feature {
@@ -59,16 +62,44 @@ struct PartDocument {
   std::string fileId = newId();
   std::string name = "Part";
   std::string units = "mm";  // display and bare-number unit
-  std::string material = "Aluminium 6061";
+  std::string massUnits;      // "g", "kg" or "lb"; empty: the usual one for the length unit
+  std::string material = "Aluminium 6061-T6";  // a library name (Materials.h) or "Custom"
   double density = 2700;  // kg/m^3
   std::vector<Variable> variables;
   std::vector<Feature> features;
   std::vector<Viewpoint> viewpoints;
+  // Whiteboards standing in the room (the game's own layout data: kind, where, notes). Not part
+  // of the history: undo and redo leave them where they are.
+  Json boards = Json::array();
+  // Shapes brought in by import features (STEP), by id, in OCCT's binary BRep format. Saved in
+  // the part file as imports/<id>.brep.
+  std::map<std::string, std::string> imports;
+  // The rollback bar: features from this index on are not built (-1: the bar is at the end).
+  // New features go in at the bar.
+  int rollback = -1;
 
   Feature* find(const std::string& id);
+  int indexOf(const std::string& id) const;  // -1 when absent
+  // Index where new features go: the rollback bar, or the end.
+  size_t insertionPoint() const;
+  // Inserts at the rollback bar (moving the bar down past it), filling id and name like add().
+  Feature& insert(Feature f);
+  // Moves a feature to index to (in the list without it); the rollback bar keeps its place
+  // between the same neighbours. False when id is absent or to is out of range.
+  bool moveTo(const std::string& id, size_t to);
+  // Removes features by id, keeping the rollback bar between the same neighbours.
+  void erase(const std::set<std::string>& ids);
   const Feature* find(const std::string& id) const;
   std::string uniqueName(const std::string& base) const;
   Feature& add(Feature f);  // fills id and name when empty
+
+  // The mass unit shown with this part: massUnits, or g for mm and cm, kg for m, lb for in and ft.
+  std::string massUnit() const;
+
+  // Changes the length unit, keeping every size as it is: plain numbers in expressions that were
+  // read in the old unit get that unit written after them ("width + 5" → "width + 5 mm").
+  // Returns false (and changes nothing) for an unknown unit.
+  bool changeUnits(const std::string& to);
 
   Json featuresJson() const;
   Json variablesJson() const;

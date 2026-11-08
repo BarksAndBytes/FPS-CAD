@@ -87,6 +87,7 @@ func _ready() -> void:
 	_levels.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_levels_scroll.add_child(_levels)
 	col.add_child(_levels_scroll)
+	UiTheme.scroll_everywhere(_levels_scroll)
 	_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(_spacer)
 	_footer = UiTheme.text("", 15, UiTheme.MUTED)
@@ -95,8 +96,10 @@ func _ready() -> void:
 	var version := UiTheme.text("v%s · %s · files stay on this device" % [
 		preload("res://scripts/build_info.gd").VERSION, preload("res://scripts/updater.gd").version_text()], 13, UiTheme.MUTED.darkened(0.25))
 	col.add_child(version)
-	# CC BY 4.0 attribution for the table model.
-	col.add_child(UiTheme.text("Table: “Old Wooden Table” by carlcapu9 (sketchfab.com), CC BY 4.0", 12, UiTheme.MUTED.darkened(0.3)))
+	# CC BY 4.0 attribution for the table and whiteboard models.
+	var credit := UiTheme.text("Table: “Old Wooden Table” by carlcapu9 · Whiteboard: “Whiteboards +” by Michael V (sketchfab.com), CC BY 4.0", 12, UiTheme.MUTED.darkened(0.3))
+	credit.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(credit)
 	visible = false
 	get_viewport().size_changed.connect(_fit)
 

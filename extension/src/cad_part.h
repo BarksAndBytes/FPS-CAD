@@ -26,6 +26,19 @@ public:
   void make_training();
   void make_desk_sample();
   void new_blank(const godot::String& name, const godot::String& units);
+  godot::String get_material() const;
+  godot::String get_mass_units() const;
+  godot::Dictionary import_step(const godot::String& path);
+  godot::Dictionary edge_near(const godot::Vector3& point, double tolerance) const;
+  void set_part_name(const godot::String& name);
+  godot::String native_library_dir() const;
+  godot::Array material_library() const;
+  godot::Dictionary material_info() const;
+  godot::Dictionary set_material(const godot::String& name, double density = 0.0);
+  godot::Dictionary set_units(const godot::String& length, const godot::String& mass);
+  double get_density() const;
+  godot::Array get_boards() const;
+  void set_boards(const godot::Array& boards);
   godot::String load_file(const godot::String& path);  // "" on success, else the reason
   godot::String save_file(const godot::String& path);
   godot::String get_part_name() const;
@@ -48,6 +61,26 @@ public:
                               const godot::String& op);
   godot::Dictionary move_feature(const godot::String& id, const godot::Vector3& delta);
   godot::Dictionary delete_feature(const godot::String& id);
+  // 0.6: the history. The rollback bar (index of the first feature not built; -1 at the end),
+  // moving a feature (refused when it would break a feature that builds now), suppressing.
+  int get_rollback() const;
+  // 0.9: drawings. Standard views of the part as a sheet (for the drawing board), written as PDF
+  // or DXF by the path's extension; true-size flat views of a sketch or of the face a hit is on.
+  godot::Dictionary drawing_sheet(const godot::Dictionary& options) const;
+  godot::Dictionary export_drawing(const godot::String& path, const godot::Dictionary& options) const;
+  godot::Dictionary export_sketch_flat(const godot::Dictionary& sketch, const godot::String& path) const;
+  godot::Dictionary export_face_flat(const godot::Dictionary& hit, const godot::String& path) const;
+  godot::String save_drawing(const godot::String& path, const godot::String& part_path, const godot::Dictionary& options) const;
+  godot::Dictionary load_drawing(const godot::String& path) const;
+  // 0.7: a section view ({origin, normal}, the side the normal points to is cut away; {} clears),
+  // a face's measurements, and overlapping bodies.
+  void set_section(const godot::Dictionary& plane);
+  bool has_section() const;
+  godot::Dictionary face_measure(const godot::Dictionary& hit) const;
+  godot::Array interference() const;
+  godot::Dictionary set_rollback(int index);
+  godot::Dictionary reorder_feature(const godot::String& id, int index);
+  godot::Dictionary set_suppressed(const godot::String& id, bool suppressed);
   godot::String duplicate_feature(const godot::String& id, const godot::Vector3& offset);
   godot::Dictionary feature_dims(const godot::String& id) const;
   godot::Dictionary set_param(const godot::String& id, const godot::String& key, const godot::Variant& value);
@@ -67,6 +100,23 @@ public:
   godot::Vector2 plane_uv(const godot::Dictionary& plane, const godot::Vector3& world) const;
   godot::Dictionary solve_sketch(const godot::Dictionary& sketch) const;  // {ok, dof, message, conflicts, sketch}
   godot::PackedVector2Array sketch_fill(const godot::Dictionary& sketch) const;  // shaded regions, plane (u, v) triangles
+  godot::Array sketch_curves(const godot::Dictionary& sketch) const;  // [{id, construction, points}] in plane (u, v)
+  // A face's edges flattened onto a sketch plane: [{kind, pts, r, closed}] (see PartModel::projectFace).
+  godot::Array project_face(int body, int face, const godot::Dictionary& plane) const;
+
+  // Reference geometry (see PartModel). Views in Godot space: [{id, name, kind, ok, message,
+  // origin, xdir, ydir, normal, size}].
+  godot::Array reference_views() const;
+  godot::Dictionary reference_plane(const godot::String& id) const;  // {plane, name} or {}
+  godot::PackedVector3Array straight_edge_near(const godot::Dictionary& hit, double tolerance) const;
+  bool is_cylinder(const godot::Dictionary& hit) const;
+  godot::Dictionary bounding_box() const;  // {ok, min, max (Godot), size (CAD x, y, z extents)}
+  // A hit as a face reference for reference features: {probe, normal, feature} in CAD space.
+  godot::Dictionary face_ref(const godot::Dictionary& hit) const;
+  godot::Array cad_point(const godot::Vector3& p) const;  // Godot position as CAD [x, y, z]
+  // Converts a face's edges into the sketch, linked so they follow the model: {ok, message, sketch}.
+  // probe: a point on the face (Godot space), e.g. where the player aimed.
+  godot::Dictionary convert_face(const godot::Dictionary& sketch, int body, int face, const godot::Vector3& probe);
   godot::String add_sketch(const godot::Dictionary& sketch);             // new feature id ("" on failure)
   godot::Dictionary set_sketch(const godot::String& id, const godot::Dictionary& sketch);
   godot::Dictionary get_sketch(const godot::String& id) const;

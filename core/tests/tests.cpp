@@ -12,12 +12,14 @@
 #include <miniz.h>
 
 #include "fpcad/Assembly.h"
+#include "fpcad/Drawing.h"
 #include "fpcad/Export.h"
 #include "fpcad/Expression.h"
 #include "fpcad/FileIO.h"
 #include <chrono>
 
 #include "fpcad/Model.h"
+#include "fpcad/Materials.h"
 #include "fpcad/Sketch.h"
 #include "fpcad/Challenges.h"
 #include "fpcad/Compare.h"
@@ -223,6 +225,374 @@ int main() {
     SolveResult cr = solveSketch(circ, noVars);
     CHECK(cr.ok && cr.dof == 2);
     CHECK_NEAR(circ.entities[0].r, 0.2, 1e-9);
+  });
+
+  run("sketch relations: symmetric, collinear, concentric, tangent curves, distances", [] {
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    auto P = [](const char* id, double x, double y, bool fixed = false) {
+      Json p = {{"id", id}, {"x", x}, {"y", y}};
+      if (fixed) p["fixed"] = true;
+      return p;
+    };
+    auto E = [](const char* id, const char* kind, std::vector<std::string> pts, double r = 0) {
+      Json e = {{"id", id}, {"kind", kind}, {"pts", pts}};
+      if (r > 0) e["r"] = r;
+      return e;
+    };
+    auto C = [](const char* kind, std::vector<std::string> refs, Json value = Json()) {
+      Json c = {{"id", std::string("c_") + kind}, {"kind", kind}, {"refs", refs}};
+      if (!value.is_null()) c["value"] = value;
+      return c;
+    };
+    Json base = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+
+    // Symmetric about a vertical axis through the origin.
+    Json j = base;
+    j["points"] = Json::array({P("a0", 0, 0, true), P("a1", 0, 1, true), P("p", -0.3, 0.2, true), P("q", 0.25, 0.3)});
+    j["entities"] = Json::array({E("ax", "line", {"a0", "a1"})});
+    j["constraints"] = Json::array({C("symmetric", {"p", "q", "ax"})});
+    Sketch s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(s.point("q")->x, 0.3, 1e-9);
+    CHECK_NEAR(s.point("q")->y, 0.2, 1e-9);
+
+    // Collinear lines, a point square-distance from a line, and two points level.
+    j = base;
+    j["points"] = Json::array({P("a", 0, 0, true), P("b", 1, 0, true), P("c", 2, 0.1), P("d", 3, -0.2), P("e", 0.5, 0.9),
+                   P("f", 4, 1.1)});
+    j["entities"] = Json::array({E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})});
+    j["constraints"] = Json::array({C("collinear", {"l1", "l2"}), C("distance", {"e", "l1"}, 0.75),
+                        C("horizontal", {"e", "f"})});
+    s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(s.point("c")->y, 0.0, 1e-9);
+    CHECK_NEAR(s.point("d")->y, 0.0, 1e-9);
+    CHECK_NEAR(s.point("e")->y, 0.75, 1e-9);
+    CHECK_NEAR(s.point("f")->y, 0.75, 1e-9);
+
+    // Distance between two parallel lines.
+    j = base;
+    j["points"] = Json::array({P("a", 0, 0, true), P("b", 1, 0, true), P("c", 0, 0.4), P("d", 1, 0.45)});
+    j["entities"] = Json::array({E("l1", "line", {"a", "b"}), E("l2", "line", {"c", "d"})});
+    j["constraints"] = Json::array({C("parallel", {"l1", "l2"}), C("distance", {"l1", "l2"}, 0.5)});
+    s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(s.point("c")->y, 0.5, 1e-9);
+    CHECK_NEAR(s.point("d")->y, 0.5, 1e-9);
+
+    // Concentric circles, and circles tangent outside and inside.
+    j = base;
+    j["points"] = Json::array({P("o1", 0, 0, true), P("o2", 0.05, 0.02), P("o3", 1.1, 0), P("o4", 0.2, 0.1)});
+    j["entities"] = Json::array({E("k1", "circle", {"o1"}, 0.5), E("k2", "circle", {"o2"}, 0.2), E("k3", "circle", {"o3"}, 0.4),
+                     E("k4", "circle", {"o4"}, 0.2)});
+    j["constraints"] = Json::array({C("concentric", {"k1", "k2"}), C("tangent", {"k1", "k3"}), C("tangent", {"k1", "k4"}),
+                        C("radius", {"k1"}, 0.5), C("radius", {"k3"}, 0.4), C("radius", {"k4"}, 0.2)});
+    j["constraints"][1]["id"] = "t1";
+    j["constraints"][2]["id"] = "t2";
+    j["constraints"][3]["id"] = "r1";
+    j["constraints"][4]["id"] = "r3";
+    j["constraints"][5]["id"] = "r4";
+    s = Sketch::fromJson(j);
+    CHECK(solveSketch(s, noVars).ok);
+    CHECK_NEAR(std::hypot(s.point("o2")->x, s.point("o2")->y), 0.0, 1e-9);
+    CHECK_NEAR(std::hypot(s.point("o3")->x, s.point("o3")->y), 0.9, 1e-9);  // outside: 0.5 + 0.4
+    CHECK_NEAR(std::hypot(s.point("o4")->x, s.point("o4")->y), 0.3, 1e-9);  // inside: 0.5 − 0.2
+
+    // Tangent where a line and an arc share an end: one freedom taken, no more, no less.
+    j = base;
+    j["points"] = Json::array({P("a", 0, 0, true), P("jn", 1, 0), P("c", 1, 0.5), P("e", 1.5, 0.5)});
+    j["entities"] = Json::array({E("l", "line", {"a", "jn"}), E("arc", "arc", {"c", "jn", "e"})});
+    j["constraints"] = Json::array({C("tangent", {"l", "arc"})});
+    s = Sketch::fromJson(j);
+    SolveResult tr = solveSketch(s, noVars);
+    CHECK(tr.ok && tr.dof == 4);
+    // Two arcs joined end to end and tangent: their centres stay in line with the joint.
+    j["points"].push_back(P("c2", 1.5, 1.0));
+    j["points"].push_back(P("f", 2.0, 0.5));
+    j["entities"].push_back(E("arc2", "arc", {"c2", "f", "e"}));
+    j["constraints"].push_back({{"id", "t2"}, {"kind", "tangent"}, {"refs", {"arc", "arc2"}}});
+    s = Sketch::fromJson(j);
+    tr = solveSketch(s, noVars);
+    CHECK(tr.ok && tr.dof == 6);
+  });
+
+  run("ellipses and splines make profiles; faces project onto sketches", [] {
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    PartDocument d;
+    Json el = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    el["points"] = Json::array({{{"id", "c"}, {"x", 0}, {"y", 0}}, {{"id", "m"}, {"x", 0.0}, {"y", 0.3}}});
+    el["entities"] = Json::array({{{"id", "e"}, {"kind", "ellipse"}, {"pts", {"c", "m"}}, {"r", 0.5}}});
+    std::string sid = d.add(feature("sketch", el)).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok && m.bodyCount() == 1);
+    CHECK_NEAR(m.massProperties().volume, kPiT * 0.5 * 0.3 * 0.1, 1e-6);
+
+    // An open spline closed by a line is a profile; a closed spline is one on its own.
+    Json sp = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    sp["points"] = Json::array({{{"id", "a"}, {"x", 0}, {"y", 0}}, {{"id", "b"}, {"x", 0.5}, {"y", 0.4}},
+                    {{"id", "c"}, {"x", 1.0}, {"y", 0.0}}});
+    sp["entities"] = Json::array({{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c"}}},
+                      {{"id", "l"}, {"kind", "line"}, {"pts", {"c", "a"}}}});
+    Sketch open = Sketch::fromJson(sp);
+    CHECK(solveSketch(open, noVars).ok);
+    CHECK(!sketchFill(open).empty());
+    auto curves = sketchCurves(open);
+    CHECK(curves.size() == 2 && curves[0].points.size() > 10);
+    Json ring = sp;
+    ring["points"].push_back({{"id", "d"}, {"x", 0.5}, {"y", -0.4}});
+    ring["entities"] = Json::array({{{"id", "s"}, {"kind", "spline"}, {"pts", {"a", "b", "c", "d", "a"}}}});
+    Sketch closed = Sketch::fromJson(ring);
+    CHECK(!sketchFill(closed).empty());
+    PartDocument d2;
+    std::string rid = d2.add(feature("sketch", ring)).id;
+    d2.add(feature("extrude", {{"sketch", rid}, {"depth", 0.1}}));
+    PartModel m2(d2);
+    CHECK(m2.rebuild().ok && m2.bodyCount() == 1);
+    CHECK(m2.massProperties().volume > 0.02 && m2.massProperties().volume < 0.1);
+
+    // Project: a box's top face gives four lines; the ellipse's top face one spline.
+    PartModel box(PartDocument::sample());
+    CHECK(box.rebuild().ok);
+    auto hit = box.pick({0, 0, 50}, {0, 0, -1});
+    CHECK(hit.has_value());
+    if (hit) {
+      SketchPlane top = standardPlane("top");
+      auto pc = box.projectFace(hit->body, hit->face, top);
+      CHECK(!pc.empty());
+    }
+    auto ehit = m.pick({0, 0, 5}, {0, 0, -1});
+    CHECK(ehit.has_value());
+    if (ehit) {
+      auto pc = m.projectFace(ehit->body, ehit->face, standardPlane("top"));
+      CHECK(pc.size() == 1 && pc[0].kind == "spline" && pc[0].closed);
+    }
+    // A cylinder's flat end projects to a true circle.
+    PartDocument cyl;
+    Json ck = circleSketch(standardPlane("top"), 0.2, 0.1, 0.25);
+    std::string kid = cyl.add(feature("sketch", ck)).id;
+    cyl.add(feature("extrude", {{"sketch", kid}, {"depth", 0.3}}));
+    PartModel cm(cyl);
+    CHECK(cm.rebuild().ok);
+    auto chit = cm.pick({0.2, 0.1, 5}, {0, 0, -1});
+    if (chit) {
+      auto pc = cm.projectFace(chit->body, chit->face, standardPlane("front"));
+      // Seen edge-on from the front the circle flattens into a line.
+      CHECK(pc.size() == 1 && pc[0].kind == "line");
+      pc = cm.projectFace(chit->body, chit->face, standardPlane("top"));
+      CHECK(pc.size() == 1 && pc[0].kind == "circle");
+      CHECK(pc.size() == 1 && std::abs(pc[0].r - 0.25) < 1e-9 && std::abs(pc[0].pts[0][0] - 0.2) < 1e-9);
+    }
+  });
+
+  run("sketch patterns regenerate and follow their sources; spline end tangency; text", [] {
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    Json j = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    j["points"] = Json::array({{{"id", "c"}, {"x", 1.0}, {"y", 0.0}}});
+    j["entities"] = Json::array({{{"id", "k"}, {"kind", "circle"}, {"pts", {"c"}}, {"r", 0.1}}});
+    j["constraints"] = Json::array({{{"id", "r"}, {"kind", "radius"}, {"refs", {"k"}}, {"value", 0.1}}});
+    j["patterns"] = Json::array({{{"id", "pt1"}, {"kind", "circular"}, {"entities", {"k"}}, {"count", 4}, {"centre", "o"}}});
+    Sketch s = Sketch::fromJson(j);
+    SolveResult r = solveSketch(s, noVars);
+    CHECK(r.ok && s.entities.size() == 4);
+    const SketchPoint* q = static_cast<const Sketch&>(s).point("pt1.1.c");
+    CHECK(q && std::abs(q->x) < 1e-9 && std::abs(q->y - 1.0) < 1e-9);
+    CHECK(r.dof == 2);  // only the source circle's centre is free; the copies follow
+    // Moving the source moves the copies; a bigger radius grows them; fewer copies are removed.
+    s.point("c")->x = 2.0;
+    s.constraints[0].value = 0.2;
+    s.patterns[0].count = 3;
+    r = solveSketch(s, noVars);
+    CHECK(r.ok && s.entities.size() == 3);
+    const SketchPoint* q2 = static_cast<const Sketch&>(s).point("pt1.1.c");
+    CHECK(q2 && std::abs(std::hypot(q2->x, q2->y) - 2.0) < 1e-9);
+    CHECK(std::abs(s.entities.back().r - 0.2) < 1e-9);
+    // A linear pattern of a square, three across: the profiles extrude as three blocks.
+    Json sq = rectSketch(standardPlane("top"), 0, 0, 0.1, 0.1);
+    std::vector<std::string> sides;
+    for (auto& e : sq["entities"]) sides.push_back(e["id"].get<std::string>());
+    sq["patterns"] = Json::array({{{"id", "pl"}, {"kind", "linear"}, {"entities", sides}, {"count", 3}, {"spacing", 0.25}, {"angle", 0.0}}});
+    PartDocument d;
+    std::string sid = d.add(feature("sketch", sq)).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    CHECK_NEAR(m.massProperties().volume, 3 * 0.001, 1e-9);
+
+    // A spline leaving a line's end carries on in the line's direction.
+    Json sp = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    sp["points"] = Json::array({{{"id", "a"}, {"x", 0}, {"y", 0}}, {{"id", "b"}, {"x", 1}, {"y", 0}},
+                                {{"id", "m"}, {"x", 1.5}, {"y", 0.8}}, {{"id", "e"}, {"x", 2}, {"y", 0}}});
+    sp["entities"] = Json::array({{{"id", "l"}, {"kind", "line"}, {"pts", {"a", "b"}}},
+                                  {{"id", "s"}, {"kind", "spline"}, {"pts", {"b", "m", "e"}}}});
+    sp["constraints"] = Json::array({{{"id", "t"}, {"kind", "tangent"}, {"refs", {"s", "l"}}}});
+    Sketch ts = Sketch::fromJson(sp);
+    CHECK(solveSketch(ts, noVars).ok);
+    auto curves = sketchCurves(ts);
+    CHECK(curves.size() == 2 && curves[1].points.size() > 2);
+    if (curves.size() == 2 && curves[1].points.size() > 2) {
+      auto p0 = curves[1].points[0], p1 = curves[1].points[1];
+      CHECK(std::abs(p1[1] - p0[1]) < 0.15 * std::abs(p1[0] - p0[0]));  // leaves heading along +x (untangent: ~3)
+    }
+
+    // Text: a square letter with a square hole, 20 mm cap height, as a profile with a hole.
+    Json tx = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+    tx["points"] = Json::array({{{"id", "t0"}, {"x", 0}, {"y", 0}}});
+    Json outer = Json::array({{0, 0}, {1, 0}, {1, 1}, {0, 1}}), inner = Json::array({{0.25, 0.25}, {0.25, 0.75}, {0.75, 0.75}, {0.75, 0.25}});
+    tx["entities"] = Json::array({{{"id", "x"}, {"kind", "text"}, {"pts", {"t0"}}, {"r", 0.02}, {"text", "O"},
+                                   {"contours", Json::array({outer, inner})}}});
+    tx["constraints"] = Json::array({{{"id", "h"}, {"kind", "distance"}, {"refs", {"x"}}, {"value", 0.02}}});
+    PartDocument d3;
+    std::string tid = d3.add(feature("sketch", tx)).id;
+    d3.add(feature("extrude", {{"sketch", tid}, {"depth", 0.01}}));
+    PartModel m3(d3);
+    CHECK(m3.rebuild().ok);
+    CHECK_NEAR(m3.massProperties().volume, (0.02 * 0.02 - 0.01 * 0.01) * 0.01, 1e-12);
+  });
+
+  run("converted edges follow the model when it changes", [] {
+    // A plate from a sketch, then a sketch on its top face with the face's edges converted.
+    PartDocument d;
+    d.variables = {{"w", "200 mm"}};
+    Json plate = rectSketch(standardPlane("top"), 0, 0, 0.2, 0.1);
+    plate["constraints"][4]["value"] = "w";
+    std::string pid = d.add(feature("sketch", plate)).id;
+    d.add(feature("extrude", {{"sketch", pid}, {"depth", 0.02}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    auto top = m.pick({0.05, 0.05, 5}, {0, 0, -1});
+    CHECK(top.has_value());
+    if (!top) return;
+    SketchPlane pl = standardPlane("top");
+    pl.origin = {0, 0, 0.02};
+    Sketch s;
+    s.plane = pl;
+    CHECK(m.convertFace(s, top->body, top->face, top->point));
+    CHECK(s.entities.size() == 4 && s.links.size() == 1 && s.links[0].entities.size() == 4);
+    Json sj = s.toJson();
+    std::string ids0 = s.links[0].entities[0];
+    m.document().add(feature("sketch", sj));
+    CHECK(m.rebuild().ok);
+    // Widen the plate: the converted outline widens with it, keeping its entity ids.
+    for (auto& v : m.document().variables) v.expr = "300 mm";
+    CHECK(m.rebuild().ok);
+    Sketch after = Sketch::fromJson(m.document().features.back().params);
+    double maxX = 0;
+    for (auto& p : after.points) maxX = std::max(maxX, p.x);
+    CHECK_NEAR(maxX, 0.3, 1e-9);
+    CHECK(after.entities.size() == 4 && after.entity(ids0) != nullptr);
+  });
+
+  run("push/pull adds or removes stock on faces with no driving dimension", [] {
+    PartDocument d;
+    d.variables = {{"w", "1000 mm"}};
+    Json sk = rectSketch(standardPlane("top"), 0, 0, 1.0, 0.5);
+    sk["constraints"][4]["value"] = "w";
+    std::string sid = d.add(feature("sketch", sk)).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", 0.5}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    // The side face at x = 1 is the sketch's, not the extrude's: nothing drives it.
+    auto side = m.pick({5, 0.25, 0.25}, {-1, 0, 0});
+    CHECK(side && !m.faceDrive(*side));
+    if (!side) return;
+    CHECK(m.pushPull(*side, 0.1));
+    CHECK_NEAR(m.massProperties().volume, 0.25 + 0.1 * 0.25, 1e-9);
+    CHECK(m.document().features.size() == 3 && m.document().features.back().type == "face_offset");
+    CHECK(m.document().features.back().name == "Push/Pull 1");
+    // Holding on the same spot grows the same push.
+    CHECK(m.pushPull(*side, 0.1));
+    CHECK(m.document().features.size() == 3);
+    CHECK_NEAR(m.massProperties().volume, 0.25 + 0.2 * 0.25, 1e-9);
+    // The pushed face now drives its distance; pushing it back past the start removes stock.
+    auto moved = m.pick({5, 0.25, 0.25}, {-1, 0, 0});
+    auto drv = moved ? m.faceDrive(*moved) : std::nullopt;
+    CHECK(drv && drv->param == "distance" && std::abs(drv->value - 0.2) < 1e-9);
+    if (moved) CHECK(m.pushPull(*moved, -0.3));
+    CHECK_NEAR(m.massProperties().volume, 0.25 - 0.1 * 0.25, 1e-9);
+    // Widening the sketch moves the face; the push follows it.
+    for (auto& v : m.document().variables) v.expr = "1500 mm";
+    CHECK(m.rebuild().ok);
+    CHECK_NEAR(m.massProperties().volume, 1.5 * 0.25 - 0.1 * 0.25, 1e-9);
+    // A curved face grows round: a cylinder from a circle sketch, its side pushed out 50 mm.
+    PartDocument c;
+    std::string kid = c.add(feature("sketch", circleSketch(standardPlane("top"), 0, 0, 0.25))).id;
+    c.add(feature("extrude", {{"sketch", kid}, {"depth", 0.3}}));
+    PartModel cm(c);
+    CHECK(cm.rebuild().ok);
+    auto round = cm.pick({5, 0, 0.15}, {-1, 0, 0});
+    CHECK(round && !cm.faceDrive(*round));
+    if (round) CHECK(cm.pushPull(*round, 0.05));
+    CHECK_NEAR(cm.massProperties().volume, kPiT * 0.3 * 0.3 * 0.3, 1e-6);
+  });
+
+  run("reference planes, axes, points and coordinate systems follow the model", [] {
+    PartDocument d;
+    d.variables = {{"h", "500 mm"}};
+    std::string sid = d.add(feature("sketch", rectSketch(standardPlane("top"), 0, 0, 1.0, 0.5))).id;
+    d.add(feature("extrude", {{"sketch", sid}, {"depth", "h"}}));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    auto top = m.pick({0.5, 0.25, 5}, {0, 0, -1});
+    CHECK(top.has_value());
+    if (!top) return;
+    Json face = {{"probe", top->point}, {"normal", top->normal}, {"feature", top->featureId}};
+    auto add = [&](const char* type, Json params) { return m.document().add(feature(type, params)).id; };
+    std::string off = add("plane", {{"kind", "offset"}, {"base", {{"face", face}}}, {"distance", 0.2}});
+    std::string ang = add("plane", {{"kind", "angle"}, {"base", "top"}, {"axis", "x"}, {"angle", kPiT / 2}});
+    std::string mid = add("plane", {{"kind", "midplane"}, {"base", {{"face", face}}}, {"other", "top"}});
+    Json corners = Json::array({{{"vertex", {{"probe", {0, 0, 0.5}}}}}, {{"vertex", {{"probe", {1, 0, 0.5}}}}},
+                                {{"vertex", {{"probe", {1, 0.5, 0.5}}}}}});
+    std::string thru = add("plane", {{"kind", "points"}, {"points", corners}});
+    std::string edge = add("axis", {{"kind", "ref"}, {"ref", {{"edge", {{"probe", {1.0, 0.0, 0.25}}}}}}});
+    std::string meet = add("axis", {{"kind", "planes"}, {"base", "front"}, {"other", "right"}});
+    std::string ctr = add("point", {{"kind", "centre"}, {"face", face}});
+    std::string xyzp = add("point", {{"kind", "xyz"}, {"x", 0.1}, {"y", 0.2}, {"z", 0.3}});
+    std::string cs = add("csys", {{"origin", {{"feature", ctr}}}, {"z", {0, 0, 1}}, {"x", {1, 0, 0}}});
+    auto r = m.rebuild();
+    for (auto& st : r.features) if (!st.ok) std::fprintf(stderr, "    %s: %s\n", st.featureId.c_str(), st.message.c_str());
+    CHECK(r.ok);
+    std::map<std::string, ReferenceView> v;
+    for (auto& rv : m.referenceViews()) v[rv.featureId] = rv;
+    CHECK(v.size() == 9);
+    CHECK_NEAR(v[off].origin[2], 0.7, 1e-9);
+    CHECK_NEAR(v[off].normal[2], 1.0, 1e-9);
+    CHECK_NEAR(std::abs(v[ang].normal[1]), 1.0, 1e-9);
+    CHECK_NEAR(v[mid].origin[2], 0.25, 1e-9);
+    CHECK_NEAR(std::abs(v[thru].normal[2]), 1.0, 1e-9);
+    CHECK_NEAR(std::abs(v[edge].xdir[2]), 1.0, 1e-9);
+    CHECK_NEAR(v[edge].origin[0], 1.0, 1e-9);
+    CHECK_NEAR(v[edge].origin[1], 0.0, 1e-9);
+    CHECK_NEAR(std::abs(v[meet].xdir[2]), 1.0, 1e-9);
+    CHECK_NEAR(v[ctr].origin[0], 0.5, 1e-9);
+    CHECK_NEAR(v[ctr].origin[2], 0.5, 1e-9);
+    CHECK_NEAR(v[xyzp].origin[1], 0.2, 1e-9);
+    CHECK_NEAR(v[cs].origin[1], 0.25, 1e-9);
+    // A sketch on the offset plane, extruded: it sits 200 mm above the block and follows it.
+    Json k = circleSketch(*m.referencePlane(off), 0.5, 0.25, 0.1);
+    k["planeRef"] = off;
+    std::string ks = add("sketch", k);
+    add("extrude", {{"sketch", ks}, {"depth", 0.1}});
+    CHECK(m.rebuild().ok);
+    CHECK(m.bodyCount() == 1 || m.bodyCount() == 2);
+    CHECK_NEAR(m.massProperties().volume, 0.25 + kPiT * 0.01 * 0.1, 1e-6);
+    auto bb = m.boundingBox();
+    CHECK(bb && std::abs(bb->max[2] - 0.8) < 1e-6);
+    for (auto& var : m.document().variables) var.expr = "600 mm";
+    CHECK(m.rebuild().ok);
+    bb = m.boundingBox();
+    CHECK(bb && std::abs(bb->max[2] - 0.9) < 1e-6);  // block 600 + gap 200 + disc 100
+    for (auto& rv : m.referenceViews()) v[rv.featureId] = rv;
+    CHECK_NEAR(v[mid].origin[2], 0.3, 1e-9);
+
+    // A revolve about an axis feature: the world Z axis.
+    PartDocument t;
+    std::string zax = t.add(feature("axis", {{"kind", "ref"}, {"ref", "z"}})).id;
+    std::string ring = t.add(feature("sketch", rectSketch(standardPlane("front"), 0.5, 0, 0.5, 1.0))).id;
+    t.add(feature("revolve", {{"sketch", ring}, {"axis", zax}}));
+    PartModel tm(t);
+    CHECK(tm.rebuild().ok);
+    CHECK_NEAR(tm.massProperties().volume, kPiT * (1.0 - 0.25) * 1.0, 1e-6);
   });
 
   run("sketch extrude follows its dimensions and variables", [] {
@@ -596,10 +966,415 @@ int main() {
     CHECK(failed == 1);
   });
 
+  run("changing units keeps every size, pinning plain numbers to the old unit", [&] {
+    PartModel m(PartDocument::deskSample());
+    m.document().variables.push_back({"lip", "wall + 2"});      // 2 mm, written without a unit
+    m.document().variables.push_back({"half", "width / 2"});    // a plain factor: not a length
+    m.document().features[0].params["h"] = "wall * 2 + 1";      // the 1 is a length; the 2 is not
+    m.rebuild();
+    CHECK(m.lastReport().ok);
+    double vol = m.massProperties().volume;
+    auto bb = m.boundingBox();
+    CHECK(m.document().changeUnits("in"));
+    m.rebuild();
+    CHECK(m.lastReport().ok);
+    CHECK(std::abs(m.massProperties().volume - vol) < 1e-12);
+    CHECK(std::abs(m.boundingBox()->max[0] - bb->max[0]) < 1e-12);
+    auto expr = [&](const std::string& name) {
+      for (auto& v : m.document().variables)
+        if (v.name == name) return v.expr;
+      return std::string();
+    };
+    CHECK(expr("lip") == "wall + 2 mm");
+    CHECK(expr("half") == "width / 2");
+    CHECK(expr("width") == "240 mm");  // already had a unit
+    CHECK(m.document().features[0].params["h"] == "wall * 2 + 1 mm");
+    CHECK(m.document().units == "in" && m.document().massUnit() == "lb");
+    CHECK(!m.document().changeUnits("furlong"));
+    // An angle keeps its plain number in degrees.
+    PartDocument d;
+    d.features.push_back({});
+    d.features[0].params = {{"angle", "90"}, {"r", "5"}};
+    CHECK(d.changeUnits("cm"));
+    CHECK(d.features[0].params["angle"] == "90" && d.features[0].params["r"] == "5 mm");
+  });
+
+  run("the material library has densities, strengths and appearances", [&] {
+    CHECK(materialLibrary().size() >= 12);
+    const Material* steel = findMaterial("Steel AISI 1020");
+    CHECK(steel && steel->density == 7870 && steel->youngsModulus == 200e9 && steel->yieldStrength && steel->metallic == 1.0);
+    const Material* old = findMaterial("Aluminium 6061");  // what older files call it
+    CHECK(old && old->name == "Aluminium 6061-T6" && old->density == 2700);
+    CHECK(findMaterial("Grey cast iron") && !findMaterial("Grey cast iron")->yieldStrength);  // brittle
+    CHECK(!findMaterial("Unobtainium"));
+    for (auto& mat : materialLibrary()) CHECK(mat.density > 0 && mat.youngsModulus > 0 && mat.color.size() == 7);
+    PartModel m(PartDocument::deskSample());
+    m.rebuild();
+    m.document().density = steel->density;
+    CHECK(std::abs(m.massProperties().mass - m.massProperties().volume * 7870) < 1e-9);
+  });
+
+  run("0.4: picked-edge fillet and chamfer, holes, shell, up-to-face and two-way extrudes", [&] {
+    // A 100 x 60 x 40 mm block on the ground, centred on the origin.
+    auto block = [] {
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.06}, {"h", 0.04}}));
+      return d;
+    };
+    const double V = 0.1 * 0.06 * 0.04;
+    // The top front edge (along X) by a point near it.
+    PartModel probe(block());
+    probe.rebuild();
+    auto e = probe.edgeNear({0.01, -0.03, 0.0401}, 0.005);
+    CHECK(e && std::abs(e->length - 0.1) < 1e-9 && std::abs(e->mid[1] + 0.03) < 1e-9 && std::abs(e->mid[2] - 0.04) < 1e-9);
+    auto arcProbe = probe.edgeNear({1, 1, 1}, 0.005);
+    CHECK(!arcProbe);  // nothing that far away
+    Json pick = Json::array({Json::array({e->mid[0], e->mid[1], e->mid[2]})});
+    {
+      PartDocument d = block();
+      d.add(feature("fillet", {{"picks", pick}, {"r", 0.005}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 0.005 * 0.005 * (1 - kPiT / 4) * 0.1, 1e-10);
+      // The fillet's quarter circle on the block's end face reports its radius.
+      auto arc = m.edgeNear({0.05, -0.03 + 0.005 - 0.005 * std::cos(0.7), 0.04 - 0.005 + 0.005 * std::sin(0.7)}, 0.001);
+      CHECK(arc && std::abs(arc->radius - 0.005) < 1e-9);
+    }
+    {
+      PartDocument d = block();
+      d.add(feature("chamfer", {{"picks", pick}, {"d", 0.004}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 0.004 * 0.004 / 2 * 0.1, 1e-10);
+    }
+    {
+      PartDocument d = block();
+      d.add(feature("chamfer", {{"picks", Json::array({Json::array({5, 5, 5})})}, {"d", 0.004}}));
+      PartModel m(d);
+      CHECK(!m.rebuild().ok);  // a pick far from every edge fails clearly
+    }
+    auto hole = [&](Json p) {
+      PartDocument d = block();
+      p["point"] = Json::array({0.0, 0.0, 0.04});
+      p["normal"] = Json::array({0.0, 0.0, 1.0});
+      d.add(feature("hole", p, BodyOp::Cut));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      return m.massProperties().volume;
+    };
+    double r = 0.005;
+    CHECK_NEAR(hole({{"d", 0.01}, {"depth", 0.02}}), V - kPiT * r * r * 0.02, 1e-10);
+    CHECK_NEAR(hole({{"d", 0.01}, {"end", "through_all"}}), V - kPiT * r * r * 0.04, 1e-10);
+    CHECK_NEAR(hole({{"d", 0.01}, {"depth", 0.02}, {"kind", "counterbore"}, {"cbore_d", 0.016}, {"cbore_depth", 0.005}}),
+               V - kPiT * r * r * 0.02 - kPiT * (0.008 * 0.008 - r * r) * 0.005, 1e-10);
+    // A 90° countersink from 16 mm down to 10 mm: a 3 mm deep frustum around the hole.
+    double h = 0.003;
+    double frustum = kPiT * h / 3 * (0.008 * 0.008 + 0.008 * r + r * r) - kPiT * r * r * h;
+    CHECK_NEAR(hole({{"d", 0.01}, {"depth", 0.02}, {"kind", "countersink"}, {"csink_d", 0.016}, {"csink_angle", kPiT / 2}}),
+               V - kPiT * r * r * 0.02 - frustum, 1e-9);
+    {
+      PartDocument d = block();
+      d.add(feature("shell", {{"t", 0.002}, {"faces", Json::array({{{"probe", {0.0, 0.0, 0.04}}, {"normal", {0.0, 0.0, 1.0}}}})}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 0.096 * 0.056 * 0.038, 1e-9);  // open at the top
+    }
+    {
+      // A 20 mm square sketched on the ground beside the block, extruded up to the block's top.
+      PartDocument d = block();
+      Json sk = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}};
+      sk["points"] = Json::array({{{"id", "a"}, {"x", 0.1}, {"y", 0.0}}, {{"id", "b"}, {"x", 0.12}, {"y", 0.0}},
+                                  {{"id", "c"}, {"x", 0.12}, {"y", 0.02}}, {{"id", "dd"}, {"x", 0.1}, {"y", 0.02}}});
+      sk["entities"] = Json::array({{{"id", "l1"}, {"kind", "line"}, {"pts", {"a", "b"}}}, {{"id", "l2"}, {"kind", "line"}, {"pts", {"b", "c"}}},
+                                    {{"id", "l3"}, {"kind", "line"}, {"pts", {"c", "dd"}}}, {{"id", "l4"}, {"kind", "line"}, {"pts", {"dd", "a"}}}});
+      std::string sid = d.add(feature("sketch", sk)).id;
+      d.add(feature("extrude", {{"sketch", sid}, {"end", "up_to_face"}, {"depth", 0.01},
+                                {"face", {{"probe", {0.0, 0.0, 0.04}}, {"normal", {0.0, 0.0, 1.0}}}}}, BodyOp::NewBody));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V + 0.02 * 0.02 * 0.04, 1e-10);
+      d.features.back().params = {{"sketch", sid}, {"direction", "two"}, {"depth", 0.03}, {"depth2", 0.01}};
+      PartModel two(d);
+      CHECK(two.rebuild().ok);
+      CHECK_NEAR(two.massProperties().volume, V + 0.02 * 0.02 * 0.04, 1e-10);
+      CHECK(std::abs(two.boundingBox()->min[2] + 0.01) < 1e-9);  // 10 mm below the sketch, 30 above
+    }
+  });
+
+  run("0.7: section view, face measurements, interference, driven dimensions, free geometry", [&] {
+    PartDocument d;
+    d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 1.0}, {"d", 1.0}, {"h", 1.0}}));
+    d.add(feature("cylinder", {{"x", 0.5}, {"y", 0}, {"z", 0}, {"r", 0.2}, {"h", 0.5}}, BodyOp::NewBody));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    // Interference: the cylinder's half inside the box.
+    auto ix = m.interference();
+    CHECK(ix.size() == 1);
+    if (!ix.empty()) CHECK_NEAR(ix[0].volume, kPiT * 0.04 * 0.5 / 2, 1e-9);
+    // Face measurements.
+    auto top = m.pick({-0.3, 0.0, 5}, {0, 0, -1});
+    CHECK(top.has_value());
+    auto fm = m.faceMeasure(top->body, top->face);
+    CHECK(fm.ok && fm.kind == "plane" && std::abs(fm.area - 1.0) < 1e-9 && std::abs(fm.normal[2] - 1) < 1e-12);
+    auto side = m.pick({5, 0, 0.25}, {-1, 0, 0});
+    CHECK(side.has_value());
+    auto cm = m.faceMeasure(side->body, side->face);
+    CHECK(cm.kind == "cylinder" && std::abs(cm.radius - 0.2) < 1e-12 && std::abs(std::abs(cm.axis[2]) - 1) < 1e-12);
+    // Section at half height: from above, the cut face is hit (no feature), and it is meshed.
+    size_t faces0 = m.mesh(0, 0.01, 0.5).faces.size();
+    m.setSection(std::make_pair(Vec3{0, 0, 0.6}, Vec3{0, 0, 1}));
+    CHECK(m.hasSection());
+    auto cut = m.pick({-0.3, 0.0, 5}, {0, 0, -1});
+    CHECK(cut && std::abs(cut->point[2] - 0.6) < 1e-9 && cut->face == -1 && cut->featureId.empty());
+    BodyMesh bm = m.mesh(0, 0.01, 0.5);
+    CHECK(bm.faces.size() == faces0 + 1 && bm.faces.back().kind == "section");
+    bool capTris = false;
+    for (int t : bm.triangleFace) capTris = capTris || t == static_cast<int>(faces0);
+    CHECK(capTris);
+    auto through = m.pick({5, 0.3, 0.3}, {-1, 0, 0});  // a side face below the cut keeps its feature
+    CHECK(through && through->face >= 0 && !through->featureId.empty());
+    CHECK(m.rebuild().ok && m.hasSection());  // the section stays through rebuilds
+    m.setSection(std::nullopt);
+    auto back = m.pick({-0.3, 0.0, 5}, {0, 0, -1});
+    CHECK(back && std::abs(back->point[2] - 1.0) < 1e-9);
+    // Driven dimension: reads the size, does not drive it; free geometry is reported.
+    auto noVars = [](const Json& v, Quantity) { return v.get<double>(); };
+    Sketch s = Sketch::fromJson(rectSketch(standardPlane("top"), 0, 0, 0.3, 0.2));
+    SolveResult full = solveSketch(s, noVars);
+    CHECK(full.ok && full.dof == 0 && full.freePoints.empty());
+    s.constraints.push_back({"dd", "distance", {"rb", "rd"}, Json(), true});
+    SolveResult withDriven = solveSketch(s, noVars);
+    CHECK(withDriven.ok && withDriven.dof == 0);
+    CHECK_NEAR(s.constraints.back().value.get<double>(), std::hypot(0.3, 0.2), 1e-9);
+    Json round = s.toJson();
+    CHECK(round["constraints"].back().value("driven", false));
+    Sketch loose = Sketch::fromJson(rectSketch(standardPlane("top"), 0, 0, 0.3, 0.2));
+    loose.constraints.erase(std::remove_if(loose.constraints.begin(), loose.constraints.end(),
+                                           [](const SketchConstraint& c) { return c.id == "rw"; }),
+                            loose.constraints.end());
+    SolveResult lr = solveSketch(loose, noVars);
+    CHECK(lr.dof == 1);
+    CHECK(lr.freePoints == std::vector<std::string>({"rb", "rc"}));  // the right side can slide
+  });
+
+  run("0.6: rollback bar, insert at the bar, reorder, suppress, faces found again by role", [&] {
+    PartDocument d;
+    std::string a = d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}})).id;
+    std::string b = d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0.1}, {"w", 0.05}, {"d", 0.05}, {"h", 0.05}})).id;
+    std::string c = d.add(feature("cylinder", {{"x", 0}, {"y", 0}, {"z", 0}, {"r", 0.01}, {"h", 1.0}}, BodyOp::Cut)).id;
+    {
+      PartModel m(d);
+      m.document().rollback = 1;
+      auto r = m.rebuild();
+      CHECK(r.ok && r.features.size() == 3 && r.features[1].rolledBack && r.features[2].rolledBack);
+      CHECK_NEAR(m.massProperties().volume, 0.001, 1e-12);  // only the first box is built
+      // New features go in at the bar, and the bar moves down past them.
+      std::string e = m.document().insert(feature("sphere", {{"x", 0.3}, {"y", 0}, {"z", 0}, {"r", 0.01}}, BodyOp::NewBody)).id;
+      CHECK(m.document().indexOf(e) == 1 && m.document().rollback == 2);
+      // Moving the cut above the bar builds it; the bar stays in front of the second box.
+      CHECK(m.document().moveTo(c, 1));
+      CHECK(m.document().indexOf(c) == 1 && m.document().rollback == 3 && m.document().features[3].id == b);
+      m.document().erase({e});
+      CHECK(m.document().rollback == 2 && m.document().features[2].id == b);
+      m.document().rollback = -1;
+      CHECK(m.rebuild().ok);
+    }
+    {
+      PartModel m(d);
+      m.document().find(b)->suppressed = true;
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, 0.001 - kPiT * 1e-4 * 0.1, 1e-12);
+    }
+    {
+      // Two rectangles extruded together: the +X face of the left one is pushed out. When the left
+      // one moves far to the left, the face is still the left one's (found by its role), not the
+      // right one's, which is now nearer the old spot.
+      Json ska = rectSketch(standardPlane("top"), 0.2, 0, 0.1, 0.2, "a");
+      Json skb = rectSketch(standardPlane("top"), 0.6, 0, 0.1, 0.5, "b");
+      for (const char* k : {"points", "entities", "constraints"})
+        for (auto& e : skb[k]) ska[k].push_back(e);
+      PartDocument t;
+      std::string sid = t.add(feature("sketch", ska)).id;
+      std::string ex = t.add(feature("extrude", {{"sketch", sid}, {"depth", 0.1}})).id;
+      PartModel m(t);
+      CHECK(m.rebuild().ok);
+      double base = m.massProperties().volume;
+      CHECK_NEAR(base, 0.1 * 0.2 * 0.1 + 0.1 * 0.5 * 0.1, 1e-12);
+      auto hit = m.pick({0.45, 0.1, 0.05}, {-1, 0, 0});
+      CHECK(hit.has_value());
+      if (!hit) return;
+      std::string role = m.faceRole(hit->body, hit->face);
+      CHECK(role.rfind("side", 0) == 0);
+      CHECK(m.faceRole(hit->body, m.pick({0.25, 0.1, 5}, {0, 0, -1})->face) == "end");
+      Json push = {{"probe", hit->point}, {"normal", hit->normal}, {"feature", ex}, {"role", role}, {"distance", 0.05}};
+      m.document().add(feature("face_offset", push));
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, base + 0.05 * 0.2 * 0.1, 1e-12);
+      for (auto& pt : m.document().features[0].params["points"]) {
+        std::string id = pt["id"];
+        if (id[0] == 'a') pt["x"] = pt["x"].get<double>() - 0.7;
+      }
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, base + 0.05 * 0.2 * 0.1, 1e-12);
+      // Without the role, the nearest face with that normal would be taken: the wrong one.
+      m.document().features.back().params.erase("role");
+      m.document().features.back().params["probe"] = hit->point;
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, base + 0.05 * 0.5 * 0.1, 1e-12);
+    }
+  });
+
+  run("0.5: linear and circular patterns, mirror, draft, body tools", [&] {
+    // A 200 x 200 x 20 mm plate with a 10 mm hole near one corner.
+    auto plate = [] {
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.2}, {"d", 0.2}, {"h", 0.02}}));
+      Feature& h = d.add(feature("hole", {{"point", {-0.08, -0.08, 0.02}}, {"normal", {0, 0, 1}}, {"d", 0.01}, {"end", "through_all"}}, BodyOp::Cut));
+      return std::make_pair(d, h.id);
+    };
+    const double V = 0.2 * 0.2 * 0.02, H = kPiT * 0.005 * 0.005 * 0.02;
+    {
+      auto [d, hid] = plate();
+      d.add(feature("pattern", {{"features", {hid}}, {"kind", "linear"}, {"dir", "x"}, {"count", 4}, {"spacing", 0.05},
+                                {"dir2", "y"}, {"count2", 3}, {"spacing2", 0.05}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 12 * H, 1e-10);  // a 4 x 3 grid of holes
+    }
+    {
+      auto [d, hid] = plate();
+      d.add(feature("pattern", {{"features", {hid}}, {"kind", "circular"}, {"axis", "z"}, {"count", 4}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 4 * H, 1e-10);  // one in each corner
+    }
+    {
+      // Copies that overlap fuse into one: bosses 30 mm wide every 20 mm along X.
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.2}, {"d", 0.2}, {"h", 0.02}}));
+      Feature& b = d.add(feature("box", {{"x", -0.05}, {"y", 0}, {"z", 0.02}, {"w", 0.03}, {"d", 0.03}, {"h", 0.01}}));
+      d.add(feature("pattern", {{"features", {b.id}}, {"kind", "linear"}, {"dir", "x"}, {"count", 3}, {"spacing", 0.02}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V + 0.07 * 0.03 * 0.01, 1e-10);
+    }
+    {
+      // Mirror the hole across the Right plane (X = 0); then the whole part across Front (Y = 0).
+      auto [d, hid] = plate();
+      d.add(feature("mirror", {{"features", {hid}}, {"plane", "right"}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK_NEAR(m.massProperties().volume, V - 2 * H, 1e-10);
+      PartDocument d2;
+      d2.add(feature("box", {{"x", 0.05}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.05}, {"h", 0.02}}));
+      d2.add(feature("mirror", {{"plane", "right"}}));
+      PartModel m2(d2);
+      CHECK(m2.rebuild().ok);
+      CHECK_NEAR(m2.massProperties().volume, 2 * 0.1 * 0.05 * 0.02, 1e-10);
+      CHECK(m2.bodyCount() == 1);
+    }
+    {
+      // A pattern can only repeat features before it, and only ones that make a shape.
+      auto [d, hid] = plate();
+      Feature& fl = d.add(feature("fillet", {{"r", 0.001}}));
+      d.add(feature("pattern", {{"features", {fl.id}}, {"kind", "linear"}, {"dir", "x"}, {"count", 2}, {"spacing", 0.05}}));
+      PartModel m(d);
+      CHECK(!m.rebuild().ok);
+    }
+    {
+      // Draft the four sides of a 100 mm cube 5° from its bottom face.
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}));
+      Json sides = Json::array();
+      for (auto n : {std::array<double, 3>{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}})
+        sides.push_back({{"probe", {0.05 * n[0], 0.05 * n[1], 0.05}}, {"normal", n}});
+      d.add(feature("draft", {{"faces", sides}, {"neutral", {{"probe", {0, 0, 0}}, {"normal", {0, 0, -1}}}}, {"angle", 5 * kPiT / 180}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      // A frustum: the top shrinks by tan 5° · 100 mm on each side.
+      double t = 0.1 - 2 * 0.1 * std::tan(5 * kPiT / 180);
+      double expect = 0.1 / 3 * (0.01 + t * t + 0.1 * t);
+      CHECK_NEAR(m.massProperties().volume, expect, 1e-9);
+    }
+    {
+      // Two overlapping bodies: combine, subtract (keeping or not), split, delete.
+      auto two = [] {
+        PartDocument d;
+        d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}));
+        d.add(feature("box", {{"x", 0.05}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}, BodyOp::NewBody));
+        return d;
+      };
+      Json a = {{"probe", {-0.05, 0, 0.05}}, {"normal", {-1, 0, 0}}};
+      Json b = {{"probe", {0.1, 0, 0.05}}, {"normal", {1, 0, 0}}};
+      const double C = 0.001;
+      auto run1 = [&](Json p, int bodies, double vol) {
+        PartDocument d = two();
+        d.add(feature("body", p));
+        PartModel m(d);
+        auto r = m.rebuild();
+        CHECK(r.ok);
+        CHECK(m.bodyCount() == bodies);
+        CHECK_NEAR(m.massProperties().volume, vol, 1e-10);
+      };
+      run1({{"kind", "combine"}, {"target", a}, {"tools", {b}}}, 1, 1.5 * C);
+      run1({{"kind", "subtract"}, {"target", a}, {"tools", {b}}}, 1, 0.5 * C);
+      run1({{"kind", "subtract"}, {"target", a}, {"tools", {b}}, {"keep", true}}, 2, 1.5 * C);
+      run1({{"kind", "intersect"}, {"target", a}, {"tools", {b}}}, 1, 0.5 * C);
+      {
+        PartDocument d = two();
+        d.add(feature("body", {{"kind", "split"}, {"target", a}, {"plane", "top"}}));  // the Top plane is the ground: misses
+        PartModel m(d);
+        CHECK(!m.rebuild().ok);
+      }
+      run1({{"kind", "delete"}, {"target", b}}, 1, C);
+    }
+    {
+      PartDocument d;
+      d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.1}}));
+      d.add(feature("body", {{"kind", "split"}, {"target", {{"probe", {0, 0, 0.1}}, {"normal", {0, 0, 1}}}}, {"plane", "right"}}));
+      PartModel m(d);
+      CHECK(m.rebuild().ok);
+      CHECK(m.bodyCount() == 2);
+      CHECK_NEAR(m.massProperties().volume, 0.001, 1e-10);
+    }
+  });
+
+  run("STEP import brings a part back as a solid that saves with the part", [&] {
+    PartModel src(PartDocument::deskSample());
+    src.rebuild();
+    std::string step = (out / "desk-for-import.step").string();
+    CHECK(exportPart(src, step).ok);
+    ImportResult im = importStep(step);
+    CHECK(im.ok && im.solids >= 1);
+    double v0 = src.massProperties().volume;
+    CHECK(std::abs(im.volume - v0) / v0 < 1e-4);  // metres, not millimetres
+    PartDocument d;
+    d.imports["shape1"] = im.brep;
+    Feature f;
+    f.type = "import";
+    f.params = {{"shape", "shape1"}, {"x", 1.0}, {"y", 0.0}, {"z", 0.0}};
+    d.add(f);
+    PartModel m(d);
+    m.rebuild();
+    CHECK(m.lastReport().ok && m.bodyCount() >= 1);
+    CHECK(std::abs(m.massProperties().volume - v0) / v0 < 1e-4);
+    CHECK(std::abs(m.boundingBox()->min[0] - (im.min[0] + 1.0)) < 1e-6);  // moved by x
+    std::string path = (out / "imported.fpprt").string();
+    savePart(path, m.document(), &m);
+    PartDocument back = loadPart(path);
+    CHECK(back.imports.size() == 1 && back.imports["shape1"] == im.brep);
+    CHECK(cachedBodyCount(path) >= 1);
+    back.imports["shape1"] += "x";  // a changed import makes the cached geometry stale
+    savePart(path, back, &m);
+    CHECK(cachedBodyCount(path) == 0);
+    CHECK(!importStep((out / "missing.step").string()).ok);
+  });
+
   run("native part file round-trips with cached geometry", [&] {
     PartModel m(PartDocument::sample());
     m.rebuild();
     std::string path = (out / "pavilion.fpprt").string();
+    m.document().boards = Json::array({Json{{"kind", "notes"}, {"yaw", 1.5}, {"notes", Json::array({"check the wall"})}}});
     savePart(path, m.document(), &m);
     CHECK(fileKind(path) == FileKind::Part);
     CHECK(!fs::exists(path + ".tmp"));
@@ -608,7 +1383,10 @@ int main() {
     CHECK(back.variablesJson() == m.document().variablesJson());
     CHECK(back.fileId == m.document().fileId);
     CHECK(back.viewpoints.size() == 1);
-    CHECK(cachedBodyCount(path) == 1);
+    CHECK(back.material == m.document().material && back.massUnits.empty());
+    CHECK(back.boards.size() == 1 && back.boards[0].value("kind", "") == "notes" &&
+          back.boards[0]["notes"][0] == "check the wall");
+    CHECK(cachedBodyCount(path) == 1);  // the boards are not history: the geometry cache still holds
     // Editing the history makes the cache stale.
     back.features[0].params["h"] = 0.5;
     savePart(path, back);
@@ -660,6 +1438,183 @@ int main() {
     CHECK(count(model, "<item ") == 1);
   });
 
+  run("1.0: a large part rebuilds in reasonable time", [&] {
+    // A 500 mm plate with a 12 x 12 grid of holes (a pattern of 144) and a row of 40 bosses.
+    PartDocument d;
+    d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.5}, {"d", 0.5}, {"h", 0.01}}));
+    std::string hole = d.add(feature("hole", {{"point", {-0.22, -0.22, 0.01}}, {"normal", {0, 0, 1}}, {"d", 0.008},
+                                              {"end", "through_all"}}, BodyOp::Cut)).id;
+    d.add(feature("pattern", {{"features", {hole}}, {"kind", "linear"}, {"dir", "x"}, {"count", 12}, {"spacing", 0.04},
+                              {"dir2", "y"}, {"count2", 12}, {"spacing2", 0.04}}));
+    std::string boss = d.add(feature("cylinder", {{"x", -0.2}, {"y", 0.245}, {"z", 0.01}, {"r", 0.003}, {"h", 0.01}})).id;
+    d.add(feature("pattern", {{"features", {boss}}, {"kind", "linear"}, {"dir", "x"}, {"count", 40}, {"spacing", 0.01}}));
+    PartModel m(d);
+    auto t0 = std::chrono::steady_clock::now();
+    auto r = m.rebuild();
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(r.ok);
+    CHECK_NEAR(m.massProperties().volume,
+               0.5 * 0.5 * 0.01 - 144 * kPiT * 0.004 * 0.004 * 0.01 + 40 * kPiT * 0.003 * 0.003 * 0.01, 1e-9);
+    std::printf("    large part: 144 holes + 40 bosses rebuilt in %.0f ms\n", ms);
+    CHECK(ms < 60000);
+    t0 = std::chrono::steady_clock::now();
+    BodyMesh bm = m.mesh(0, 0.0005, 0.3);
+    double mms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    meshed %zu triangles in %.0f ms\n", bm.indices.size() / 3, mms);
+    CHECK(!bm.indices.empty());
+    // A sketch of 60 circles extruded as one feature: every side face gets its role.
+    Json sk = {{"plane", standardPlane("top").toJson()}, {"planeName", "Top"}, {"points", Json::array()},
+               {"entities", Json::array()}, {"constraints", Json::array()}};
+    for (int i = 0; i < 60; ++i) {
+      std::string c = "c" + std::to_string(i);
+      sk["points"].push_back({{"id", c}, {"x", (i % 10) * 0.03}, {"y", (i / 10) * 0.03}});
+      sk["entities"].push_back({{"id", "k" + std::to_string(i)}, {"kind", "circle"}, {"pts", {c}}, {"r", 0.01}});
+    }
+    PartDocument t;
+    std::string sid = t.add(feature("sketch", sk)).id;
+    t.add(feature("extrude", {{"sketch", sid}, {"depth", 0.02}}));
+    PartModel tm(t);
+    t0 = std::chrono::steady_clock::now();
+    CHECK(tm.rebuild().ok);
+    ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("    60-circle extrude with face roles in %.0f ms\n", ms);
+    auto side = tm.pick({0.5, 0.0, 0.01}, {-1, 0, 0});
+    CHECK(side && tm.faceRole(side->body, side->face).rfind("side", 0) == 0);
+  });
+
+  run("0.9: standard views with hidden lines and dimensions, flat views, DXF, PDF, .fpdrw", [&] {
+    // A 100 x 60 x 40 mm block with a 20 mm hole down through it.
+    PartDocument d;
+    d.name = "Block";
+    d.add(feature("box", {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.06}, {"h", 0.04}}));
+    d.add(feature("cylinder", {{"x", 0.02}, {"y", 0}, {"z", -0.01}, {"r", 0.01}, {"h", 0.06}}, BodyOp::Cut));
+    PartModel m(d);
+    CHECK(m.rebuild().ok);
+    DrawingInfo info;
+    info.partName = "Block";
+    Sheet s = standardViews(m, info);
+    CHECK(s.width == 420 && s.height == 297 && s.scale == 1);  // fits A3 at 1:1
+    int visible = 0, hidden = 0;
+    double minx = 1e9, maxx = -1e9;
+    for (auto& l : s.lines) {
+      if (l.layer == DrawLayer::Visible) ++visible;
+      if (l.layer == DrawLayer::Hidden) ++hidden;
+      CHECK(l.x1 >= 0 && l.x1 <= 420 && l.y1 >= 0 && l.y1 <= 297);
+      if (l.layer == DrawLayer::Visible) {
+        minx = std::min({minx, l.x1, l.x2});
+        maxx = std::max({maxx, l.x1, l.x2});
+      }
+    }
+    CHECK(visible > 20 && hidden > 0);  // the hole shows hidden in the front and right views
+    bool width = false, dia = false, scale = false;
+    for (auto& t : s.texts) {
+      width = width || t.text == "100";
+      dia = dia || t.text == "Ø20";
+      scale = scale || t.text == "SCALE 1:1";
+    }
+    CHECK(width && dia && scale);
+    if (!(width && dia && scale)) {
+      std::printf("    scale %g:", s.scale);
+      for (auto& t : s.texts) std::printf(" [%s]", t.text.c_str());
+      std::printf("\n");
+    }
+    auto out = std::filesystem::temp_directory_path() / "fpcad-drawing";
+    std::filesystem::create_directories(out);
+    std::string dxf = (out / "block.dxf").string(), pdf = (out / "block.pdf").string();
+    CHECK(writeDxf(s, dxf).empty() && writePdf(s, pdf).empty());
+    std::ifstream fd(dxf);
+    std::string dx((std::istreambuf_iterator<char>(fd)), {});
+    CHECK(dx.find("AC1009") != std::string::npos && dx.find("HIDDEN") != std::string::npos && dx.find("%%c20") != std::string::npos);
+    std::ifstream fp(pdf, std::ios::binary);
+    std::string pd((std::istreambuf_iterator<char>(fp)), {});
+    CHECK(pd.rfind("%PDF-1.4", 0) == 0 && pd.find("%%EOF") != std::string::npos && pd.find("(\\33020) Tj") != std::string::npos);
+    // A flat view is true size.
+    Sheet flat = flatView({{{0, 0}, {0.05, 0}, {0.05, 0.03}, {0, 0.03}, {0, 0}}}, "Plate", "mm");
+    CHECK(flat.trueSize && std::abs(flat.width - 50) < 1e-9 && std::abs(flat.height - 30) < 1e-9);
+    CHECK(writeDxf(flat, (out / "flat.dxf").string()).empty() && writePdf(flat, (out / "flat.pdf").string()).empty());
+    // The drawing file names its part.
+    DrawingDocument dd;
+    dd.name = "Block drawing";
+    dd.partPath = "Block.fpprt";
+    dd.partFileId = d.fileId;
+    std::string drw = (out / "block.fpdrw").string();
+    saveDrawing(drw, dd);
+    CHECK(fileKind(drw) == FileKind::Drawing);
+    DrawingDocument back = loadDrawing(drw);
+    CHECK(back.partPath == "Block.fpprt" && back.partFileId == d.fileId && back.name == "Block drawing");
+  });
+
+  run("0.8: mates solve, constrained drag, interference", [&] {
+    AssemblyModel a(AssemblyDocument::sample(), ".");
+    CHECK(a.rebuild());
+    CHECK(a.mateReport().ok);
+    auto pinAt = [&](int k) { return a.document().components[static_cast<size_t>(k)].placement.t; };
+    Vec3 home = pinAt(1);
+    CHECK(std::abs(home[0] + 0.08) < 1e-9 && std::abs(home[2] + 0.02) < 1e-9);
+    // Knocked out of place, the pin goes back into its hole and onto the plate.
+    a.document().components[1].placement.t = {home[0] + 0.01, home[1] - 0.005, home[2] + 0.007};
+    auto r = a.solveMates();
+    CHECK(r.ok);
+    Vec3 back = pinAt(1);
+    CHECK(std::abs(back[0] - home[0]) < 1e-8 && std::abs(back[1] - home[1]) < 1e-8 && std::abs(back[2] - home[2]) < 1e-8);
+    // Dragged sideways it cannot leave the hole; with the rest mate gone it slides up the axis.
+    r = a.drag(a.document().components[1].id, {0.03, 0, 0});
+    CHECK(std::abs(pinAt(1)[0] - home[0]) < 1e-8);
+    a.document().mates[1].suppressed = true;
+    r = a.drag(a.document().components[1].id, {0, 0, 0.01});
+    CHECK(r.ok && std::abs(pinAt(1)[2] - (home[2] + 0.01)) < 1e-8 && std::abs(pinAt(1)[0] - home[0]) < 1e-8);
+    // A grounded component does not move.
+    r = a.drag(a.document().components[0].id, {0.1, 0, 0});
+    CHECK(!r.ok);
+    // No interference with pins in their holes; a pin pushed into the plate clashes.
+    CHECK(a.interference().empty());
+    a.document().mates[0].suppressed = true;
+    a.document().components[1].placement.t = {home[0] + 0.02, home[1], home[2] + 0.01};
+    a.updatePlacements();
+    auto clash = a.interference();
+    CHECK(clash.size() == 1 && clash[0].volume > 0);
+    // Distance and angle between two plates' faces, and a lock.
+    AssemblyDocument d;
+    PartDocument plate;
+    plate.name = "Plate";
+    Feature box;
+    box.type = "box";
+    box.params = {{"x", 0}, {"y", 0}, {"z", 0}, {"w", 0.1}, {"d", 0.1}, {"h", 0.01}};
+    std::string bid = plate.add(box).id;
+    Component c1;
+    c1.name = "Base";
+    c1.virtualPart = plate;
+    c1.grounded = true;
+    Component c2;
+    c2.name = "Top";
+    c2.virtualPart = plate;
+    c2.placement.t = {0.01, 0.02, 0.05};
+    d.components = {c1, c2};
+    Mate dist;
+    dist.type = "distance";
+    dist.params = {{"distance", 0.03}};
+    dist.refs = Json::array({{{"component", c1.id}, {"feature", bid}, {"role", "p+z"}, {"probe", {0, 0, 0.01}}, {"normal", {0, 0, 1}}},
+                             {{"component", c2.id}, {"feature", bid}, {"role", "p-z"}, {"probe", {0, 0, 0}}, {"normal", {0, 0, -1}}}});
+    d.mates = {dist};
+    AssemblyModel two(d, ".");
+    two.rebuild();
+    CHECK(two.mateReport().ok);
+    CHECK(std::abs(two.document().components[1].placement.t[2] - 0.04) < 1e-8);  // 30 mm gap above the 10 mm plate
+    Mate ang;
+    ang.type = "angle";
+    ang.params = {{"angle", kPiT / 2}};
+    ang.refs = Json::array({{{"component", c1.id}, {"feature", bid}, {"role", "p+x"}, {"probe", {0.05, 0, 0.005}}, {"normal", {1, 0, 0}}},
+                            {{"component", c2.id}, {"feature", bid}, {"role", "p+x"}, {"probe", {0.05, 0, 0.005}}, {"normal", {1, 0, 0}}}});
+    two.document().mates.push_back(ang);
+    CHECK(two.solveMates().ok);
+    Placement p2 = two.document().components[1].placement;
+    Placement rot = p2;
+    rot.t = {0, 0, 0};
+    Vec3 xdir = transformPoint(rot, {1, 0, 0});
+    CHECK(std::abs(xdir[0]) < 1e-6 && std::abs(xdir[2]) < 1e-6);  // turned a quarter about Z
+    CHECK(std::abs(p2.t[2] - 0.04) < 1e-8);  // still 30 mm above
+  });
+
   run("assembly saves, loads, instances parts and exports", [&] {
     std::string path = (out / "pins.fpasm").string();
     saveAssembly(path, AssemblyDocument::sample());
@@ -670,7 +1625,7 @@ int main() {
     CHECK(ok);
     CHECK(a.components().size() == 5);
     CHECK(a.parts().size() == 2);  // plate + one shared pin part
-    CHECK(a.document().mates.size() == 4);
+    CHECK(a.document().mates.size() == 8);
     auto mp = a.massProperties();
     CHECK(mp.bodies == 5);
     CHECK(mp.volume > 0.2 * 0.12 * 0.01 * 0.9);

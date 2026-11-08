@@ -7,8 +7,10 @@ FPS-CAD has three layers, built in this order:
 3. **The Godot extension** (`extension/`), which links the core and godot-cpp, then the Godot
    project (`godot/`) that loads it.
 
-CI builds all three for Linux, Windows and Android on every push; download the `godot/bin`
-artifacts from a run if you only want to play.
+CI builds all three for Linux, Windows and Android on every push. To play without building,
+download a packaged build from the repository's Releases page: `windows-dev` (a zip to unpack and
+run on a PC) or `android-dev` (an APK). See *Windows builds* and *Android builds and updates*
+below.
 
 ## Requirements
 
@@ -84,10 +86,30 @@ godot --headless --path godot --import
 godot --headless --path godot --script res://tests/smoke_test.gd
 ```
 
+## Windows builds
+
+The **Windows build** workflow (`.github/workflows/windows-build.yml`) exports the game on every
+push and publishes it as the `windows-dev` pre-release: `FPS-CAD-windows-<commit>.zip`. Unpack it
+and run `FPS-CAD.exe`; the DLLs beside it are the CAD extension, Open CASCADE and the MSVC runtime,
+so nothing else needs installing. `FPS-CAD.console.exe` runs the same game with a console window
+showing errors. The build isn't code-signed, so SmartScreen asks once (More info → Run anyway).
+Saved parts live in the user folder (`%APPDATA%\Godot\app_userdata\FPS-CAD`), not beside the exe.
+
+The release also carries `latest.json` (`"platform": "windows"`, build, zip link, size, SHA-256).
+A Windows build checks it at launch and from the pause menu; installing downloads the zip,
+verifies it, and unpacks it over the game folder. Windows won't overwrite a running exe or a loaded
+DLL but will rename one, so each replaced file is renamed to `*.old-<build>` first (removed on the
+next launch), then the game restarts into the new build. If the folder isn't writable (say, under
+Program Files) the game says so and links the zip instead.
+
+Each platform updates only from its own channel: Windows builds read `windows-dev/latest.json`,
+Android builds read `android-dev/latest.json`, and both refuse a file naming another platform.
+The two workflows number their builds separately (each uses its own run number).
+
 ## Android builds and updates
 
 The **Android APK** workflow publishes every push as the `android-dev` pre-release with the APK and
-`latest.json` (build number, commit, APK link). The version code is the workflow's run number,
+`latest.json` (`"platform": "android"`, build number, commit, APK link). The version code is the workflow's run number,
 and every build is signed with the same key, so a newer build installs over an older one as an
 update without uninstalling. The app reads `latest.json` at launch and offers newer builds on
 the title screen and in the pause menu (`godot/scripts/updater.gd`). Choosing one downloads the

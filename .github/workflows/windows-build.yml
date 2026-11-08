@@ -1,0 +1,206 @@
+name: Windows build
+
+# Builds a playable Windows (x86_64) build and publishes it as the "windows-dev" pre-release:
+# a zip you unpack and run, with the CAD extension, Open CASCADE and the MSVC runtime beside
+# FPS-CAD.exe, plus latest.json, which Windows builds read to update themselves. The build
+# number is the workflow's run number, shown on the title screen.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+env:
+  OCCT_TAG: V8_0_1
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache Open CASCADE
+        id: occt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/occt
+          key: occt-${{ env.OCCT_TAG }}-windows-v1
+
+      - name: Build Open CASCADE
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: tools/ci_run.sh tools/build_occt.sh "$(cygpath -m '${{ runner.temp }}')/occt" windows
+
+      - name: Build the extension
+        run: |
+          OCCT="$(cygpath -m '${{ runner.temp }}')/occt"
+          tools/ci_run.sh cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$OCCT" \
+            -DFPCAD_BUILD_TESTS=OFF -DFPCAD_BUILD_CLI=OFF \
+            -DFPCAD_BUILD_EXTENSION=ON -DGODOTCPP_TARGET=template_debug
+          tools/ci_run.sh cmake --build build -j
+
+      - name: Stage Open CASCADE beside the extension
+        run: |
+          python tools/stage_occt.py --occt "$(cygpath -m '${{ runner.temp }}')/occt" --platform windows
+          ls -la godot/bin
+
+      - name: Build number
+        run: |
+          BUILD=${{ github.run_number }}
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+          RELEASE=$(tr -d '[:space:]' < VERSION)
+          echo "RELEASE=$RELEASE" >> "$GITHUB_ENV"
+          printf '%s\n' \
+            'extends RefCounted' \
+            '## Written by CI for each published build.' \
+            "const BUILD := $BUILD" \
+            "const COMMIT := \"${GITHUB_SHA::7}\"" \
+            "const BRANCH := \"${GITHUB_REF_NAME}\"" \
+            "const VERSION := \"$RELEASE.$BUILD\"" > godot/scripts/build_info.gd
+          cat godot/scripts/build_info.gd
+
+      - name: Install Godot and its Windows export templates
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          curl -sSL -o godot.zip "$base/Godot_v${GODOT_VERSION}-stable_win64.exe.zip"
+          curl -sSL -o templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          DEST="$(cygpath -u "$APPDATA")/Godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$DEST" godot-bin
+          python - "$DEST" <<'PY'
+          import os, sys, zipfile
+          zipfile.ZipFile("godot.zip").extractall("godot-bin")
+          with zipfile.ZipFile("templates.tpz") as z:
+              for n in z.namelist():
+                  base = os.path.basename(n)
+                  if base.startswith("windows_") or base == "version.txt":
+                      with open(os.path.join(sys.argv[1], base), "wb") as fh:
+                          fh.write(z.read(n))
+          PY
+          ls godot-bin "$DEST"
+
+      - name: FFmpeg for converting videos (BtbN's LGPL build)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The newest release-branch build, else master. LGPL: no x264/x265; Theora and Vorbis
+          # encoders are what the video board needs, so check they are there.
+          NAME=$(gh api repos/BtbN/FFmpeg-Builds/releases/tags/latest --jq '[.assets[].name | select(test("^ffmpeg-n[0-9.]+-latest-win64-lgpl-[0-9.]+\\.zip$"))] | sort | last // ""')
+          [ -n "$NAME" ] || NAME=ffmpeg-master-latest-win64-lgpl.zip
+          echo "FFmpeg build: $NAME"
+          echo "FFMPEG_BUILD=$NAME" >> "$GITHUB_ENV"
+          curl -sSL -o ffmpeg.zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$NAME"
+          mkdir -p ffmpeg-bin
+          python - <<'PY'
+          import os, zipfile
+          with zipfile.ZipFile("ffmpeg.zip") as z:
+              for n in z.namelist():
+                  base = os.path.basename(n)
+                  if n.endswith("/bin/ffmpeg.exe") or base == "LICENSE.txt":
+                      with open(os.path.join("ffmpeg-bin", "FFmpeg-LICENSE.txt" if base == "LICENSE.txt" else base), "wb") as fh:
+                          fh.write(z.read(n))
+          PY
+          ls -la ffmpeg-bin
+          ./ffmpeg-bin/ffmpeg.exe -hide_banner -version | sed -n 1p
+          ENC=$(./ffmpeg-bin/ffmpeg.exe -hide_banner -encoders)
+          grep -q libtheora <<< "$ENC" || { echo "::error::$NAME has no libtheora encoder"; exit 1; }
+          grep -q libvorbis <<< "$ENC" || { echo "::error::$NAME has no libvorbis encoder"; exit 1; }
+
+      - name: Export FPS-CAD.exe
+        run: |
+          GODOT="$PWD/$(ls godot-bin/*_console.exe | head -1)"
+          OUT=export/windows
+          mkdir -p "$OUT"
+          timeout 300 "$GODOT" --headless --path godot --import || true
+          tools/ci_run.sh timeout 600 "$GODOT" --headless --path godot --export-debug "Windows Desktop" "$(cygpath -m "$PWD/$OUT/FPS-CAD.exe")"
+          test -s "$OUT/FPS-CAD.exe"
+          # The extension and Open CASCADE are built against the dynamic MSVC runtime; ship it
+          # beside the game so it runs on PCs without the Visual C++ Redistributable.
+          CRT="$(cygpath -u "$VCToolsRedistDir")/x64/Microsoft.VC143.CRT"
+          cp "$CRT"/vcruntime140.dll "$CRT"/vcruntime140_1.dll "$CRT"/msvcp140.dll "$OUT"/
+          ls -la "$OUT"
+          ls "$OUT" | grep -q "libfpcad" || { echo "::error::the build is missing the CAD extension"; exit 1; }
+          ls "$OUT" | grep -q "^TKernel.dll$" || { echo "::error::the build is missing Open CASCADE"; exit 1; }
+          # FFmpeg, a separate program the video board runs to convert videos to Ogg Theora.
+          cp ffmpeg-bin/ffmpeg.exe ffmpeg-bin/FFmpeg-LICENSE.txt "$OUT"/
+          printf '%s\r\n' "FFmpeg (ffmpeg.exe) converts videos for the whiteboard's video board." \
+            "It is FFmpeg, licensed under the LGPL 2.1 or later (FFmpeg-LICENSE.txt), built by BtbN:" \
+            "https://github.com/BtbN/FFmpeg-Builds (build $FFMPEG_BUILD)." \
+            "Its source: https://ffmpeg.org/download.html and https://github.com/FFmpeg/FFmpeg" \
+            "You may replace ffmpeg.exe with your own build; it needs the libtheora and libvorbis encoders." \
+            > "$OUT/FFmpeg-NOTICE.txt"
+          rm -f "$OUT"/*.pdb
+
+      - name: Smoke-run the exported game
+        run: |
+          # Starts the packaged game headless with --self-check: it loads the CAD extension and
+          # Open CASCADE from beside the exe, creates a part, prints SELF-CHECK OK and quits.
+          # Debug exports include FPS-CAD.console.exe, which keeps the console output.
+          cd export/windows
+          EXE=FPS-CAD.console.exe; [ -f "$EXE" ] || EXE=FPS-CAD.exe
+          timeout 60 "./$EXE" --headless -- --self-check > run.log 2>&1 || true
+          cat run.log
+          cp run.log ../smoke-run.log
+          grep -q "SELF-CHECK OK" run.log || { echo "::error::the exported game failed its self-check (see the log above)"; exit 1; }
+          grep -q "FFMPEG .*ffmpeg.exe" run.log || { echo "::error::the game did not find ffmpeg.exe beside it"; exit 1; }
+          rm -f run.log
+
+      - name: Zip
+        run: |
+          NAME="FPS-CAD-windows-${GITHUB_SHA::7}"
+          echo "ZIP=$NAME.zip" >> "$GITHUB_ENV"
+          # The self-checked game can hold its folder for a moment after it exits: wait and retry.
+          taskkill //F //IM FPS-CAD.exe > /dev/null 2>&1 || true
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            mv export/windows "export/$NAME" && break
+            echo "folder still in use, retrying ($i)"
+            sleep 3
+          done
+          test -d "export/$NAME"
+          (cd export && 7z a -tzip "$NAME.zip" "$NAME" > /dev/null)
+          ls -la export
+
+      - name: Update information
+        run: |
+          # latest.json is read by Windows builds only (Android reads android-dev's): the game
+          # offers this build when it is newer than its own, then downloads the zip, checks its
+          # size and SHA-256, and unpacks it over its folder (godot/scripts/updater.gd).
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/windows-dev/${ZIP}"
+          python - "export/$ZIP" "$URL" > export/latest.json <<'PY'
+          import hashlib, json, os, sys
+          data = open(sys.argv[1], "rb").read()
+          print(json.dumps({"platform": "windows", "build": int(os.environ["BUILD"]),
+                            "version": os.environ["RELEASE"] + "." + os.environ["BUILD"], "commit": os.environ["GITHUB_SHA"][:7],
+                            "branch": os.environ["GITHUB_REF_NAME"], "url": sys.argv[2],
+                            "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}, indent=2))
+          PY
+          cat export/latest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fps-cad-windows-game
+          path: export/${{ env.ZIP }}
+
+      - name: Publish the windows-dev pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete windows-dev --cleanup-tag --yes || true
+          gh release create windows-dev "export/$ZIP" export/latest.json \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Windows build ${BUILD} (${GITHUB_SHA::7})" \
+            --notes "Build ${BUILD} (version ${RELEASE}.${BUILD}) of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA::7}, for testing on a PC.
+
+          Run: download the zip, right-click it and choose Extract All, then open the folder and run FPS-CAD.exe. Keep every file together; the DLLs beside the exe are the CAD kernel, and ffmpeg.exe converts videos for the video board. Windows 10 or 11, 64-bit, with a GPU that supports Vulkan or Direct3D 12. If it closes straight away, run FPS-CAD.console.exe instead to see the error.
+
+          The build isn't code-signed, so Windows SmartScreen may say it protected your PC: choose More info, then Run anyway. The game checks for newer Windows builds when it starts and can install them itself (pause menu → Check for updates); if its folder isn't writable, download the newest zip instead. Your saved parts live in your user folder, not beside the exe."

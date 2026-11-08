@@ -19,17 +19,26 @@ const Tutorial := preload("res://scripts/tutorial.gd")
 const Sketcher := preload("res://scripts/sketcher.gd")
 const Challenge := preload("res://scripts/challenge.gd")
 const ToolWheel := preload("res://scripts/tool_wheel.gd")
+const Whiteboard := preload("res://scripts/whiteboard.gd")
+const Units := preload("res://scripts/units.gd")
+const Boards := preload("res://scripts/boards.gd")
+const FileBrowser := preload("res://scripts/file_browser.gd")
 
 var doc: RefCounted
 var is_assembly := false
 var state := "boot"
 var mode := ""
 var last_saved := ""
+var current_path := ""   # the file the open document was opened from or last saved to ("" if never)
+var _new_units := {length = "mm", mass = "g"}  # what New part starts in
 
 var player: Node3D
 var view: Node3D
 var tools: Node
 var hud: CanvasLayer
+var _menu_page := ""  # "", "units" or "material": which page of the pause menu shows
+var board: Node3D  # whiteboard.gd: the messages, standing in the room
+var boards: Node3D  # boards.gd: the whiteboards the player adds, and carrying any board
 var wheel: Control
 var touch: Control
 var cmap: CanvasLayer
@@ -41,6 +50,8 @@ var level := 0
 var sketcher: Node3D
 var dialog: CanvasLayer
 var numpad: CanvasLayer
+var video_menu: CanvasLayer  # video_menu.gd: what a video board plays
+var file_browser: CanvasLayer  # file_browser.gd: Open
 var updater: Node
 var _update_checked := false
 
@@ -52,6 +63,13 @@ var _cmap_from_menu := false
 
 
 func _ready() -> void:
+	if "--self-check" in OS.get_cmdline_user_args():
+		# Packaged-build check (CI): the CAD extension and Open CASCADE loaded and can build a part.
+		var ok := ClassDB.class_exists("CadPart") and ClassDB.instantiate("CadPart") != null
+		print("SELF-CHECK ", "OK" if ok else "FAIL: the CAD extension did not load")
+		print("FFMPEG ", Whiteboard.ffmpeg_path() if Whiteboard.ffmpeg_path() != "" else "none")
+		get_tree().quit(0 if ok else 1)
+		return
 	UiTheme.apply()
 	UiTheme.apply_scale(get_tree(), UiTheme.saved_scale_choice())
 	for dir in [PROJECTS, EXPORTS, RECOVERY.get_base_dir()]:
@@ -69,6 +87,12 @@ func _ready() -> void:
 
 	view = preload("res://scripts/model_view.gd").new()
 	add_child(view)
+	board = Whiteboard.new()
+	add_child(board)
+	hud.board = board
+	boards = preload("res://scripts/boards.gd").new()
+	boards.game = self
+	add_child(boards)
 	player = preload("res://scripts/player.gd").new()
 	add_child(player)
 	player.cast = _cast
@@ -80,9 +104,16 @@ func _ready() -> void:
 	tools.player = player
 	tools.hud = hud
 	tools.changed.connect(_on_model_changed)
-	tools.tool_switched.connect(func(_i): _show_tool())
+	tools.tool_switched.connect(func(_i):
+		boards.drop()  # changing tool sets a carried board down
+		_show_tool()
+	)
+	tools.board_tool.connect(boards.act)
 	tools.sketch_requested.connect(_on_sketch_requested)
 	tools.feature_requested.connect(_on_feature_requested)
+	tools.reference_requested.connect(_on_reference_requested)
+	tools.picked_feature_requested.connect(_on_picked_feature_requested)
+	tools.insert_requested.connect(_on_insert_requested)
 	sketcher = Sketcher.new()
 	sketcher.game = self
 	add_child(sketcher)
@@ -90,6 +121,12 @@ func _ready() -> void:
 	sketcher.changed.connect(_show_tool)
 	numpad = preload("res://scripts/number_pad.gd").new()
 	add_child(numpad)
+	video_menu = preload("res://scripts/video_menu.gd").new()
+	video_menu.game = self
+	add_child(video_menu)
+	file_browser = preload("res://scripts/file_browser.gd").new()
+	file_browser.game = self
+	add_child(file_browser)
 	dialog = preload("res://scripts/feature_dialog.gd").new()
 	dialog.game = self
 	add_child(dialog)
@@ -137,6 +174,23 @@ func _ready() -> void:
 
 # ---------- states and modes ----------
 
+## Stands the message board on the ground ahead of the player and a little to the left, turned
+## to face them, avoiding parts in the way. glide: slide it there from where it was.
+func place_board_ahead(glide: bool) -> void:
+	var fwd := Vector3(-sin(player.yaw), 0, -cos(player.yaw))
+	var left := Vector3(fwd.z, 0, -fwd.x)
+	board.active = false  # look past the board where it stands now
+	for spot in [[2.8, 1.6], [2.8, -1.6], [3.6, 0.0], [2.2, 2.4], [2.2, -2.4], [4.5, 1.6]]:
+		var at: Vector3 = player.feet + fwd * spot[0] + left * spot[1]
+		var down: Dictionary = _cast(Vector3(at.x, player.feet.y + 3.0, at.z), Vector3.DOWN, 50.0)
+		var y: float = down.point.y if not down.is_empty() and down.get("env", false) else player.feet.y
+		if not down.is_empty() and not down.get("env", false):
+			continue  # a part is there
+		board.place(Vector3(at.x, y, at.z), player.eye_position(), glide)
+		return
+	board.place(player.feet + fwd * 2.8 + left * 1.6, player.eye_position(), glide)
+
+
 ## The pavilion, seen from a slow orbit behind the splash and title screens.
 func _load_background() -> void:
 	var part = ClassDB.instantiate(&"CadPart")
@@ -159,6 +213,8 @@ func _show_title() -> void:
 	hud.set_menu(false)
 	hud.set_panel(false)
 	hud.visible = false
+	board.hide_board()
+	boards.clear()
 	wheel.close(false)
 	player.input_enabled = false
 	if doc == null or is_assembly or doc.get_part_name() != "Pavilion":
@@ -183,6 +239,8 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 		tutorial = null
 	# The wooden table is for free build and challenges; elsewhere parts stand on the room floor.
 	view.room.set_table(m == "free" or m == "challenge")
+	board.clear_card()
+	board.set_status("")
 	var d: RefCounted
 	match m:
 		"training":
@@ -209,8 +267,16 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 			_spawn(sp.feet, sp.yaw, sp.size, sp.pitch)
 		"new":
 			d = ClassDB.instantiate(&"CadPart")
-			d.new_blank("Part 1", "mm")
+			d.new_blank(FileBrowser.free_path("Part 1", "fpprt").get_file().get_basename(), _new_units.length)
+			if _new_units.length != "mm" or _new_units.mass != "g":
+				d.set_units(_new_units.length, _new_units.mass)
 			_open(d, false)
+			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
+		"new_assembly":
+			d = ClassDB.instantiate(&"CadAssembly")
+			d.new_blank(FileBrowser.free_path("Assembly 1", "fpasm").get_file().get_basename(),
+				ProjectSettings.globalize_path(FileBrowser.PROJECTS))
+			_open(d, true)
 			_spawn(Vector3(0, 0, 4), 0.0, 1.0)
 		"assembly":
 			d = ClassDB.instantiate(&"CadAssembly")
@@ -223,7 +289,18 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 			d.make_desk_sample()
 			_open(d, false)
 			_spawn(Vector3(0, view.room.floor_y(), view.room.top.end.y + 1.3), 0.0, 1.0, -0.5)
+	# The message board: beside the table when there is one, else set down ahead of the player
+	# (the training course moves it to each objective).
+	if view.room.has_table:
+		var fy: float = view.room.floor_y()
+		board.place(Vector3(-1.45, fy, -0.25), Vector3(0, fy, view.room.top.end.y + 1.3))
+	elif m != "training":
+		place_board_ahead(false)
+	boards.load_from(doc)  # the part's own boards, and the message board where it was left
 	tools.reset()
+	if m == "new_assembly":
+		tools.set_tool_id("insert_part")
+		hud.toast("A blank assembly. Aim at the floor and press %s to place a saved part" % Actions.prompt(&"primary"))
 	if m == "new" or m == "challenge":
 		tools.set_tool_id("sketch")
 		hud.toast("A blank part. Aim at the ground and press %s to start a sketch on the Top plane" % Actions.prompt(&"primary"))
@@ -232,10 +309,94 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+func _toggle_menu() -> void:
+	if not hud.menu_open and _menu_page != "":
+		_menu_page = ""
+		hud.set_menu_items(_menu_items())
+	hud.set_menu(not hud.menu_open)
+
+
+## From the Units or Material page back to the pause menu, on the entry that opened it.
+func _menu_back() -> void:
+	var was := _menu_page
+	_menu_page = ""
+	hud.set_menu_items(_menu_items())
+	hud.focus_menu_action("new_part" if was == "new" else was + "_menu")
+
+
+func _units_items() -> Array:
+	var items := []
+	var now := Units.system_of(hud.units, doc.get_mass_units())
+	for s in Units.SYSTEMS:
+		items.append(["%s%s  ·  %s" % [s.id, "  ✓" if s == now else "", s.name], "units:" + s.id])
+	items.append(["Back", "menu_back"])
+	return items
+
+
+func _material_items() -> Array:
+	var items := []
+	var mu: String = doc.get_mass_units()
+	var now: String = doc.get_material()
+	for m in doc.material_library():
+		items.append(["%s%s  ·  %s" % [m.name, "  ✓" if m.name == now else "", Units.density_text(float(m.density), hud.units, mu)],
+			"material:" + String(m.name)])
+	items.append(["Custom density…" + ("  ✓  " + Units.density_text(doc.get_density(), hud.units, mu) if now == "Custom" else ""),
+		"material_custom"])
+	items.append(["Back", "menu_back"])
+	return items
+
+
+func _apply_units(id: String) -> void:
+	var s := {}
+	for sys in Units.SYSTEMS:
+		if sys.id == id:
+			s = sys
+	if s.is_empty() or doc == null or not doc.has_method("set_units"):
+		return
+	if sketcher.active:
+		hud.toast("Finish the sketch before changing units")
+		return
+	var r: Dictionary = doc.set_units(s.length, s.mass)
+	if not r.ok:
+		hud.toast(r.message)
+		return
+	hud.units = s.length
+	_after_part_settings()
+	_menu_back()
+	hud.toast("Units: %s (%s) · sizes stay as they are" % [s.id, s.name])
+
+
+func _apply_material(name: String) -> void:
+	if doc == null or not doc.has_method("set_material"):
+		return
+	var r: Dictionary = doc.set_material(name, 0.0)
+	if not r.ok:
+		hud.toast(r.message)
+		return
+	_after_part_settings()
+	_menu_back()
+	var lines: PackedStringArray = Boards.material_lines(doc.material_info(), hud.units, doc.get_mass_units())
+	var parts := PackedStringArray()
+	for l in lines:
+		parts.append(l.trim_prefix("Material   ").replace("   ·   ", " · ").replace("   ", " · "))
+	hud.toast("Material: " + " · ".join(parts))
+
+
+## After the units or material change: redraw what shows them and save.
+func _after_part_settings() -> void:
+	view.set_appearance(doc.material_info())
+	hud.refresh_panel()
+	boards.refresh_properties()
+	tools.model_changed()
+	_show_tool()
+	_autosave()
+
+
 func _menu_items() -> Array:
 	var items := [["Resume", "resume"]]
 	if sketcher != null and sketcher.active:
-		items += [["Finish sketch", "finish_sketch"], ["Discard sketch", "discard_sketch"]]
+		items += [["Finish sketch", "finish_sketch"], ["Discard sketch", "discard_sketch"],
+			["Export sketch: DXF and PDF, true size", "export_sketch_flat"]]
 	items.append(["Controls", "controls"])
 	items.append(["Interface size: " + UiTheme.scale_label(UiTheme.saved_scale_choice()), "ui_scale"])
 	if updater != null and updater.supported():
@@ -247,12 +408,23 @@ func _menu_items() -> Array:
 		items.append(["Restart training", "restart_training"])
 	if mode == "challenge":
 		items += [["Restart challenge", "restart_challenge"], ["Challenge list", "challenge_list"]]
-	items += [
-		["Save", "save"], ["Open last saved", "open_saved"],
-		["Export STEP", "export_step"], ["Export IGES", "export_iges"],
-		["Export STL", "export_stl"], ["Export 3MF", "export_3mf"],
-		["Exit to title", "title"], ["Quit", "quit"],
-	]
+	if doc != null and doc.has_method("material_info") and not is_assembly:
+		items += [["Units: " + Units.system_label(hud.units, doc.get_mass_units()), "units_menu"],
+			["Material: " + doc.get_material(), "material_menu"]]
+	items += [["Save", "save"], ["File: new, open, save as, import, export…", "file_menu"], ["Exit to title", "title"], ["Quit", "quit"]]
+	return items
+
+
+## The File page of the pause menu.
+func _file_items() -> Array:
+	var items := [["New part…", "new_part"], ["New assembly", "new_assembly"], ["Open…", "open"], ["Save as…", "save_as"]]
+	if not is_assembly:
+		items.append(["Import STEP…", "import_step"])
+	items += [["Export STEP", "export_step"], ["Export IGES", "export_iges"], ["Export STL", "export_stl"],
+		["Export 3MF", "export_3mf"]]
+	if not is_assembly:
+		items += [["Drawing: PDF and DXF of the standard views", "export_drawing"], ["Save drawing (.fpdrw)", "save_drawing"]]
+	items.append(["Back", "menu_back"])
 	return items
 
 
@@ -260,8 +432,7 @@ func _spawn(feet: Vector3, yaw: float, size: float, pitch := -0.12) -> void:
 	player.feet = feet
 	player.yaw = yaw
 	player.pitch = pitch
-	player.size = size
-	player.target_size = size
+	player.set_size_now(size)
 
 
 func _on_growth_blocked() -> void:
@@ -325,6 +496,7 @@ func _on_cmap_closed() -> void:
 
 func _open(new_doc: RefCounted, assembly: bool) -> void:
 	doc = new_doc
+	current_path = ""
 	is_assembly = assembly
 	var report: Dictionary = doc.rebuild()
 	if not report.ok:
@@ -340,12 +512,16 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 	tools.selected = ""
 	hud.doc = doc
 	hud.units = doc.get_units() if doc.has_method("get_units") else "mm"
+	view.set_appearance(doc.material_info() if doc.has_method("material_info") else {})
 	hud.refresh_panel()
+	boards.load_from(doc)
 	_show_tool()
 
 
 func _on_model_changed() -> void:
 	view.refresh()
+	tools.model_changed()
+	boards.refresh_properties()
 	if hud.panel_open:
 		hud.refresh_panel()
 	if challenge != null:
@@ -389,6 +565,10 @@ func on_model_changed() -> void:
 func _close_editors() -> void:
 	if numpad != null and numpad.visible:
 		numpad.close()
+	if video_menu != null and video_menu.visible:
+		video_menu.close()
+	if file_browser != null and file_browser.visible:
+		file_browser.close()
 	if dialog != null and dialog.visible:
 		dialog.cancel()
 	if sketcher != null and sketcher.active:
@@ -426,6 +606,62 @@ func _on_sketch_ended(feature_id: String, committed: bool) -> void:
 		_show_tool()
 
 
+## A new plane, axis, point or coordinate system: the feature panel when it has sizes to set,
+## else straight into the history.
+func _on_reference_requested(type: String, params: Dictionary) -> void:
+	if dialog.wants_panel(type, params):
+		if dialog.open_reference(type, params):
+			_show_tool()
+	else:
+		tools.insert_reference(type, params)
+
+
+## Insert part: choose a saved part, then place it where the player aimed.
+func _on_insert_requested(at: Vector3) -> void:
+	file_browser.pick_part(func(path: String): insert_part_file(path, at))
+
+
+func insert_part_file(path: String, at: Vector3) -> void:
+	var r: Dictionary = doc.insert_part(ProjectSettings.globalize_path(path), Transform3D(Basis(), at))
+	hud.toast(r.message)
+	_on_model_changed()
+
+
+func _on_picked_feature_requested(type: String, base: Dictionary, op: String) -> void:
+	if not tools.repair.is_empty():
+		_apply_repair(base)
+		return
+	if dialog.open_feature(type, base, op):
+		_show_tool()
+
+
+## A failed feature's references picked again in the room (Re-pick in the model panel).
+func _apply_repair(base: Dictionary) -> void:
+	var fid: String = tools.repair.id
+	var name: String = tools.repair.name
+	var params := base.duplicate(true)
+	for f in doc.get_features():
+		if f.id == fid and f.params.has("kind"):
+			params.erase("kind")  # the picking tool's default kind must not replace the feature's own
+	tools.repair = {}
+	doc.checkpoint()
+	var r: Dictionary = doc.update_feature(fid, "", params)
+	if r.get("ok", false):
+		hud.toast("%s fixed" % name)
+	else:
+		hud.toast("%s still fails: %s · %s undoes" % [name, r.get("message", ""), Actions.prompt(&"undo")])
+	tools.set_tool_id("select")
+	_on_model_changed()
+
+
+## A reference to the model face under the crosshair (for "up to face"), or {} when none.
+func aimed_face_ref() -> Dictionary:
+	var hit: Dictionary = tools.aim
+	if tools.is_assembly or hit.is_empty() or hit.get("ground", false) or String(hit.get("feature_id", "")) == "":
+		return {}
+	return doc.face_ref(hit)
+
+
 func _on_feature_requested(type: String, sketch_id: String, op: String) -> void:
 	if dialog.open_new(type, sketch_id, op):
 		_show_tool()
@@ -449,23 +685,227 @@ func _doc_name() -> String:
 	return n.to_lower().replace(" ", "-").validate_filename()
 
 
+## Saves to the file the document came from; a document never saved gets a free name in the
+## projects folder (never another part's file).
 func _save(path: String = "") -> void:
 	if path == "":
-		path = "%s/%s.%s" % [PROJECTS, _doc_name(), "fpasm" if is_assembly else "fpprt"]
+		path = current_path if current_path != "" else FileBrowser.free_path(_display_name(), _ext())
+	DirAccess.make_dir_recursive_absolute(PROJECTS)
 	var err: String = doc.save_file(ProjectSettings.globalize_path(path))
 	if err == "":
 		last_saved = path
-		hud.toast("Saved to " + ProjectSettings.globalize_path(path))
+		current_path = path
+		hud.toast("Saved %s  ·  %s" % [path.get_file().get_basename(), ProjectSettings.globalize_path(path)])
 	else:
 		hud.toast("Not saved: " + err)
+
+
+func _display_name() -> String:
+	return doc.get_assembly_name() if is_assembly else doc.get_part_name()
+
+
+func _ext() -> String:
+	return "fpasm" if is_assembly else "fpprt"
+
+
+## Save as: asks for a name, renames the part to it and saves under it (a free file name).
+func _save_as() -> void:
+	hud.set_menu(false)
+	numpad.ask_text("Save as", _display_name(), "A name for this %s" % ("assembly" if is_assembly else "part"),
+		func(text: String) -> void:
+			var name := text.strip_edges()
+			if not is_assembly:
+				doc.set_part_name(name)
+			_save(FileBrowser.free_path(name, _ext(), current_path if current_path.get_file().get_basename() == name else ""))
+			hud.refresh_panel()
+	)
+
+
+## Opens a saved part or assembly: a path, or (Android) a content:// file from the picker, which
+## is copied into the projects folder first.
+## A drawing opens its part with a drawing board in front of the player.
+func _open_drawing(path: String) -> void:
+	var probe: RefCounted = ClassDB.instantiate(&"CadPart")
+	var d: Dictionary = probe.load_drawing(ProjectSettings.globalize_path(path))
+	if not d.get("ok", false):
+		hud.toast(String(d.get("message", "That drawing cannot be read")))
+		return
+	if not FileAccess.file_exists(String(d.part_path)):
+		hud.toast("The drawing's part is missing: %s" % String(d.part_path).get_file())
+		return
+	open_file(String(d.part_path))
+	if doc == null or is_assembly:
+		return
+	var existing: Array = boards.extra.filter(func(b): return b.kind == "drawing")
+	if existing.is_empty():
+		var b: Node3D = boards.add("drawing", boards.spot_ahead(), 0.0, boards.new_scale())
+		b.drawing_options = {hidden = bool(d.hidden), dimensions = bool(d.dimensions)}
+		boards._face_player(b)
+		boards.refresh_drawings()
+
+
+func open_file(path: String) -> void:
+	var local := path
+	if path.begins_with("content://"):
+		var data := FileAccess.get_file_as_bytes(path)
+		if data.is_empty():
+			hud.toast("Android didn't let the game read that file")
+			return
+		var name := path.uri_decode().get_file().get_slice(":", path.uri_decode().get_file().get_slice_count(":") - 1).get_file()
+		var ext := name.get_extension() if name.get_extension() in ["fpprt", "fpasm"] else "fpprt"
+		DirAccess.make_dir_recursive_absolute(PROJECTS)
+		local = FileBrowser.free_path(name.get_basename() if name.get_basename() != "" else "Opened", ext)
+		var f := FileAccess.open(local, FileAccess.WRITE)
+		f.store_buffer(data)
+		f.close()
+	if local.get_extension() == "fpdrw":
+		_open_drawing(local)
+		return
+	var asm := local.get_extension() == "fpasm"
+	var d: RefCounted = ClassDB.instantiate(&"CadAssembly" if asm else &"CadPart")
+	var err: String = d.load_file(ProjectSettings.globalize_path(local))
+	if err != "" and not asm:
+		var other: RefCounted = ClassDB.instantiate(&"CadAssembly")
+		if other.load_file(ProjectSettings.globalize_path(local)) == "":
+			d = other
+			asm = true
+			err = ""
+	if err != "":
+		hud.toast(err)
+		return
+	_close_editors()
+	hud.set_menu(false)
+	_open(d, asm)
+	current_path = local
+	last_saved = local
+	_frame_model()
+	hud.toast("Opened %s" % local.get_file().get_basename())
+
+
+## Stands the player where the whole model is in view, sized to it.
+func _frame_model() -> void:
+	if is_assembly or not doc.has_method("bounding_box"):
+		return
+	var b: Dictionary = doc.bounding_box()
+	if not b.get("ok", false):
+		return
+	var lo: Vector3 = b.min
+	var hi: Vector3 = b.max
+	var c := (lo + hi) / 2.0
+	var diag := (hi - lo).length()
+	var s := clampf(diag / 2.5, 0.02, 200.0)
+	_spawn(Vector3(c.x, view.room.floor_y(), hi.z + diag * 0.9 + 0.5 * s), 0.0, s, -0.35)
+
+
+## Import STEP: the system's file picker, then the shape comes in as a new body.
+func _import_step() -> void:
+	hud.set_menu(false)
+	if is_assembly:
+		hud.toast("Open a part to import into")
+		return
+	var filters := PackedStringArray(["*/*"]) if OS.has_feature("android") else PackedStringArray(["*.step, *.stp ; STEP files"])
+	var done := func(ok: bool, paths: PackedStringArray, _filter: int) -> void:
+		if ok and not paths.is_empty():
+			import_step_file(paths[0])
+	if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+		DisplayServer.file_dialog_show("Import a STEP file", "", "", false, DisplayServer.FILE_DIALOG_MODE_OPEN_FILE, filters, done)
+	else:
+		numpad.ask_url("STEP file to import", "", "Its full path on this computer", func(text: String) -> void: import_step_file(text))
+
+
+func import_step_file(path: String) -> void:
+	var local := path
+	if path.begins_with("content://"):
+		var data := FileAccess.get_file_as_bytes(path)
+		if data.is_empty():
+			hud.toast("Android didn't let the game read that file")
+			return
+		local = "user://import.step"
+		var f := FileAccess.open(local, FileAccess.WRITE)
+		f.store_buffer(data)
+		f.close()
+	hud.toast("Importing %s…" % path.uri_decode().get_file())
+	var r: Dictionary = doc.import_step(ProjectSettings.globalize_path(local))
+	if not r.ok:
+		hud.toast("Not imported: " + String(r.message))
+		return
+	_on_model_changed()
+	hud.toast("Imported %s  ·  Move it with the Move tool" % r.message)
 
 
 func _export(ext: String) -> void:
 	var path := ProjectSettings.globalize_path("%s/%s.%s" % [EXPORTS, _doc_name(), ext])
 	hud.toast("Exporting %s…" % ext.to_upper())
 	await get_tree().process_frame
-	var r: Dictionary = doc.export_file(path, hud.units if hud.units in ["mm", "cm", "m", "in"] else "mm")
+	var r: Dictionary = doc.export_file(path, "in" if hud.units == "ft" else hud.units if hud.units in ["mm", "cm", "m", "in"] else "mm")
 	hud.toast(("Exported %s · %s" % [path, r.message]) if r.ok else ("Export failed: " + r.message))
+
+
+## The standard views as PDF and DXF in the exports folder.
+func export_drawing(options: Dictionary) -> Array:
+	DirAccess.make_dir_recursive_absolute(EXPORTS)
+	var out := []
+	for ext in ["pdf", "dxf"]:
+		var path := ProjectSettings.globalize_path("%s/%s drawing.%s" % [EXPORTS, _doc_name(), ext])
+		var r: Dictionary = doc.export_drawing(path, options)
+		if not r.ok:
+			hud.toast("Drawing not exported: " + String(r.message))
+			return []
+		out.append(path)
+	hud.toast("Exported %s and .dxf" % out[0])
+	return out
+
+
+## The sketch being edited, true size, as DXF (for cutting) and PDF.
+func export_sketch_flat() -> Array:
+	if not sketcher.active:
+		return []
+	DirAccess.make_dir_recursive_absolute(EXPORTS)
+	var out := []
+	for ext in ["dxf", "pdf"]:
+		var path := ProjectSettings.globalize_path("%s/%s sketch.%s" % [EXPORTS, _doc_name(), ext])
+		var r: Dictionary = doc.export_sketch_flat(sketcher.sketch, path)
+		if not r.ok:
+			hud.toast("Sketch not exported: " + String(r.message))
+			return []
+		out.append(path)
+	hud.toast("Exported %s and .pdf (true size)" % out[0])
+	return out
+
+
+## Board tool, secondary: export the drawing board aimed at, or the flat face aimed at.
+func export_drawing_or_face(aimed: Dictionary) -> Array:
+	var b: Node3D = aimed.get("board", null)
+	if b != null and b.kind == "drawing":
+		return export_drawing(b.drawing_options)
+	var hit: Dictionary = tools.aim
+	if is_assembly or hit.is_empty() or hit.get("ground", false) or String(hit.get("feature_id", "")) == "":
+		hud.toast("Aim at a drawing board, or at a flat face of the part to export it true size")
+		return []
+	DirAccess.make_dir_recursive_absolute(EXPORTS)
+	var out := []
+	for ext in ["dxf", "pdf"]:
+		var path := ProjectSettings.globalize_path("%s/%s face.%s" % [EXPORTS, _doc_name(), ext])
+		var r: Dictionary = doc.export_face_flat(hit, path)
+		if not r.ok:
+			hud.toast(String(r.message))
+			return []
+		out.append(path)
+	hud.toast("Exported the face true size: %s and .pdf" % out[0])
+	return out
+
+
+## Saves a .fpdrw beside the part (saving the part first so the drawing can find it).
+func save_drawing() -> String:
+	if is_assembly:
+		return ""
+	_save()
+	if current_path == "":
+		return ""
+	var path := FileBrowser.free_path(_display_name() + " drawing", "fpdrw")
+	var err: String = doc.save_drawing(ProjectSettings.globalize_path(path), ProjectSettings.globalize_path(current_path), {hidden = true, dimensions = true})
+	hud.toast(err if err != "" else "Drawing saved: %s · open it to see the drawing board" % path.get_file())
+	return "" if err != "" else path
 
 
 func _autosave() -> void:
@@ -492,6 +932,12 @@ func _cast(origin: Vector3, dir: Vector3, max_distance: float) -> Dictionary:
 		var th: Dictionary = challenge.pick(origin, dir, max_distance)
 		if not th.is_empty() and (hit.is_empty() or th.distance < hit.distance):
 			hit = th
+	var bh: Dictionary = board.cast(origin, dir, max_distance)
+	if not bh.is_empty() and (hit.is_empty() or bh.distance < hit.distance) and bh.board != boards.carried():
+		hit = bh
+	var xh: Dictionary = boards.cast_extra(origin, dir, max_distance)
+	if not xh.is_empty() and (hit.is_empty() or xh.distance < hit.distance):
+		hit = xh
 	var env: Dictionary = view.room.cast(origin, dir, max_distance)
 	if not env.is_empty() and (hit.is_empty() or env.distance < hit.distance):
 		return env
@@ -517,7 +963,7 @@ func _aim_hit() -> Dictionary:
 ## True while something covers the view and should get the controller instead of the player.
 func modal_open() -> bool:
 	var tutorial_card: bool = (tutorial != null and tutorial.is_open_card()) or (challenge != null and challenge.is_open_card())
-	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or updater.busy()
+	return hud.menu_open or hud.panel_open or cmap.visible or tutorial_card or numpad.visible or video_menu.visible or file_browser.visible or updater.busy()
 
 
 func _process(dt: float) -> void:
@@ -533,6 +979,7 @@ func _process(dt: float) -> void:
 		return
 	var playing: bool = not modal_open()
 	player.input_enabled = playing and not wheel.visible
+	hud.set_crosshair_hidden(wheel.visible)
 	player.limited = dialog.visible
 	_aim = _aim_hit()
 	if playing and not dialog.visible:
@@ -543,6 +990,7 @@ func _process(dt: float) -> void:
 		hud.set_status(sketcher.status_text(), Color("f2f5f8") if sketcher.defined() else Color("7cc4ff"))
 	else:
 		tools.update(_aim if playing and not dialog.visible else {}, dt)
+		boards.update_carry()
 	hud.set_readout(player.size, player.grid_step(), player.snap_step(), player.fly, player.feet)
 	hud.set_measure(tools.measure_text())
 	touch.set_fly(player.fly)
@@ -569,6 +1017,10 @@ func _keep_focus() -> void:
 		return
 	if numpad.visible:
 		numpad.keep_focus()
+	elif video_menu.visible:
+		video_menu.keep_focus()
+	elif file_browser.visible:
+		file_browser.keep_focus()
 	elif hud.menu_open:
 		UiTheme.keep_focus(hud.menu_control())
 	elif tutorial != null and tutorial.is_open_card():
@@ -593,11 +1045,17 @@ func _wheel_current() -> int:
 func _open_wheel(from_button: bool, group := -1) -> void:
 	_wheel_from_button = from_button
 	var title := "SKETCH TOOLS" if sketcher.active else "TOOLS"
-	var how := "aim, then %s" % Actions.prompt(&"ui_accept")
-	if not from_button:
-		how = ("right stick: group · left stick: tool · let go to pick" if Actions.last_device == "controller"
-			else "mouse: group · WASD: tool · let go to pick")
-	wheel.setup(_wheel_tree(), title, how + "   ·   %s back" % Actions.prompt(&"ui_cancel"))
+	var how := ""
+	match Actions.last_device:
+		"touch":
+			how = "tap a group, then a tool   ·   tap outside to go back"
+		"controller":
+			how = ("right stick: group · left stick: tool · let go to pick" if not from_button
+				else "aim, then A") + "   ·   B back"
+		_:
+			how = ("mouse: group, then further out: tool · click or let go to pick" if not from_button
+				else "point, then click or Enter") + "   ·   Esc back"
+	wheel.setup(_wheel_tree(), title, how)
 	wheel.open(_wheel_current())
 	if group >= 0:
 		wheel.enter(group)
@@ -634,8 +1092,11 @@ func _gameplay_input() -> void:
 			wheel.close()
 			return
 		var released: bool = not _wheel_from_button and Input.is_action_just_released(&"tool_wheel")
+		# A click picks too while the mouse is captured (holding Q); with the pointer showing, the
+		# wheel's buttons take clicks themselves.
 		var pressed: bool = Input.is_action_just_pressed(&"ui_accept") \
-			or (Input.is_action_just_pressed(&"primary") and Actions.last_device != "keyboard")
+			or (Input.is_action_just_pressed(&"primary")
+				and (Actions.last_device != "keyboard" or Input.mouse_mode == Input.MOUSE_MODE_CAPTURED))
 		if released or pressed:
 			var r: int = wheel.commit(released)
 			if r == ToolWheel.ENTERED:
@@ -665,7 +1126,17 @@ func _gameplay_input() -> void:
 	for i in 9:
 		if Input.is_action_just_pressed(StringName("tool_%d" % (i + 1))):
 			_wheel_shortcut(i)
-	if Input.is_action_just_pressed(&"redo"):
+	if boards.carrying():
+		# Carrying a board: the D-pad (or +/- and the mouse wheel) turns and resizes it.
+		if Input.is_action_just_pressed(&"undo"):
+			boards.turn(1.0)
+		if Input.is_action_just_pressed(&"redo"):
+			boards.turn(-1.0)
+		if Input.is_action_just_pressed(&"grow"):
+			boards.rescale(1.0)
+		if Input.is_action_just_pressed(&"shrink"):
+			boards.rescale(-1.0)
+	elif Input.is_action_just_pressed(&"redo"):
 		if doc.has_method("redo") and doc.redo():
 			_on_model_changed()
 			hud.toast("Redo")
@@ -723,11 +1194,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			cmap.open()
 			get_viewport().set_input_as_handled()
 		return
-	if state != "play" or cmap.visible or numpad.visible or updater.busy():
+	if state != "play" or cmap.visible or numpad.visible or video_menu.visible or file_browser.visible or updater.busy():
 		return  # the splash, the controls map, the number pad and the updater handle their own input
 	if dialog.visible and not hud.menu_open:
 		if dialog.handle(event):
 			get_viewport().set_input_as_handled()
+		return
+	if boards.carrying() and event is InputEventMouseButton and event.pressed \
+			and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		boards.turn(1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1.0)
+		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed(&"controller_map"):
 		hud.set_panel(false)
@@ -739,7 +1215,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed(&"ui_cancel"):
 		var closed := true
-		if hud.menu_open:
+		if hud.menu_open and _menu_page != "":
+			_menu_back()  # from Units or Material back to the pause menu
+		elif hud.menu_open:
 			hud.set_menu(false)
 		elif hud.panel_open:
 			hud.set_panel(false)
@@ -758,16 +1236,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		if hud.panel_open:
 			hud.set_panel(false)
 		else:
-			hud.set_menu(not hud.menu_open)
+			_toggle_menu()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed(&"model_panel"):
 		hud.toggle_panel()
 		get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and wheel.visible and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		wheel.point(event.relative)
 	elif event is InputEventMouseButton and event.pressed and not modal_open() \
 			and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and Actions.last_device == "keyboard":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED  # first click on the view grabs the mouse
+		get_viewport().set_input_as_handled()
+
+
+## Holding Q, the mouse is captured and steers the wheel. This runs before the GUI: the wheel's
+## full-screen layer sits under the (hidden) pointer and would take the motion otherwise.
+func _input(event: InputEvent) -> void:
+	if wheel != null and wheel.visible and event is InputEventMouseMotion \
+			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and state == "play":
+		wheel.point(event.relative)
 		get_viewport().set_input_as_handled()
 
 
@@ -844,7 +1329,48 @@ func _on_touch_released(name: String) -> void:
 
 
 func _on_hud_request(action: String, arg: Variant) -> void:
+	if action.begins_with("new:"):
+		for s in Units.SYSTEMS:
+			if s.id == action.substr(4):
+				_new_units = {length = s.length, mass = s.mass}
+		_menu_page = ""
+		hud.set_menu(false)
+		_autosave()
+		_start_mode("new")
+		return
+	if action.begins_with("units:"):
+		_apply_units(action.substr(6))
+		return
+	if action.begins_with("material:"):
+		_apply_material(action.substr(9))
+		return
 	match action:
+		"units_menu":
+			_menu_page = "units"
+			hud.set_menu_items(_units_items(), "UNITS")
+			hud.focus_menu_action("units:" + Units.system_of(hud.units, doc.get_mass_units()).get("id", ""))
+		"material_menu":
+			_menu_page = "material"
+			hud.set_menu_items(_material_items(), "MATERIAL")
+			hud.focus_menu_action("material:" + doc.get_material())
+		"menu_back":
+			_menu_back()
+		"material_custom":
+			_menu_back()
+			hud.set_menu(false)
+			var mu: String = doc.get_mass_units()
+			var unit_text: String = Units.density_text(1.0, hud.units, mu).get_slice(" ", 1)
+			var now: String = Units.density_text(doc.get_density(), hud.units, mu).get_slice(" ", 0).replace(",", "")
+			numpad.ask("Density (%s)" % unit_text, now, "The part's mass uses it; other properties stay unknown",
+				func(text: String) -> void:
+					var v := text.replace(",", "").to_float()
+					var r: Dictionary = doc.set_material("Custom", Units.density_from(v, hud.units, mu))
+					if not r.ok:
+						hud.toast(r.message)
+						return
+					_after_part_settings()
+					hud.toast("Material: Custom · %s" % Units.density_text(doc.get_density(), hud.units, mu))
+			)
 		"open_wheel":
 			if state == "play" and not dialog.visible:
 				_open_wheel(true)
@@ -878,7 +1404,7 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 		"panel":
 			hud.toggle_panel()
 		"menu":
-			hud.set_menu(not hud.menu_open)
+			_toggle_menu()
 		"controls":
 			_cmap_from_menu = hud.menu_open
 			hud.set_menu(false)
@@ -921,18 +1447,39 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			_show_title()
 		"save":
 			_save()
-		"open_saved":
-			if last_saved == "":
-				hud.toast("Nothing saved yet in this session")
-				return
-			var d = ClassDB.instantiate(&"CadAssembly" if last_saved.ends_with(".fpasm") else &"CadPart")
-			var err: String = d.load_file(ProjectSettings.globalize_path(last_saved))
-			if err != "":
-				hud.toast(err)
-				return
-			_close_editors()
-			_open(d, last_saved.ends_with(".fpasm"))
+		"file_menu":
+			_menu_page = "file"
+			hud.set_menu_items(_file_items(), "FILE")
+			hud.focus_menu_action("open")
+		"open":
 			hud.set_menu(false)
+			file_browser.open()
+		"save_as":
+			_save_as()
+		"import_step":
+			_import_step()
+		"new_assembly":
+			_menu_page = ""
+			hud.set_menu(false)
+			_autosave()
+			_start_mode("new_assembly")
+		"new_part":
+			_menu_page = "new"
+			var items := []
+			for s in Units.SYSTEMS:
+				items.append(["New part in %s  ·  %s" % [s.id, s.name], "new:" + s.id])
+			items.append(["Back", "menu_back"])
+			hud.set_menu_items(items, "NEW PART")
+			hud.focus_menu_action("new:MMGS")
+		"export_drawing":
+			hud.set_menu(false)
+			export_drawing({hidden = true, dimensions = true})
+		"save_drawing":
+			hud.set_menu(false)
+			save_drawing()
+		"export_sketch_flat":
+			hud.set_menu(false)
+			export_sketch_flat()
 		"export_step":
 			_export("step")
 		"export_iges":
@@ -946,6 +1493,45 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			get_tree().quit()
 		"select_feature":
 			tools.selected = arg
+		"toggle_ground":
+			for c in doc.components():
+				if c.id == arg:
+					hud.toast(doc.set_grounded(arg, not c.grounded).message)
+			_on_model_changed()
+		"remove_component":
+			hud.toast(doc.remove_component(arg).message)
+			_on_model_changed()
+		"delete_mate":
+			hud.toast(doc.delete_mate(arg).message)
+			_on_model_changed()
+		"move_feature_up", "move_feature_down":
+			var feats: Array = doc.get_features()
+			var at := -1
+			for i in feats.size():
+				if feats[i].id == arg:
+					at = i
+			var r: Dictionary = doc.reorder_feature(arg, at + (-1 if action == "move_feature_up" else 1))
+			hud.toast(r.message)
+			_on_model_changed()
+		"toggle_suppress":
+			for f in doc.get_features():
+				if f.id == arg:
+					hud.toast(doc.set_suppressed(arg, not f.get("suppressed", false)).message)
+			_on_model_changed()
+		"roll_here":
+			var feats: Array = doc.get_features()
+			for i in feats.size():
+				if feats[i].id == arg:
+					hud.toast(doc.set_rollback(i + 1).message)
+			_on_model_changed()
+		"roll_forward":
+			hud.toast(doc.set_rollback(-1).message)
+			_on_model_changed()
+		"repick":
+			for f in doc.get_features():
+				if f.id == arg:
+					hud.set_panel(false)
+					tools.start_repair(f)
 		"delete_feature":
 			var r: Dictionary = doc.delete_feature(arg)
 			hud.toast(r.message)

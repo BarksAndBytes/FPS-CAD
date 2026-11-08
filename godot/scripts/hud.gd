@@ -11,8 +11,12 @@ const MUTED := Color("9ba7b6")
 const ACCENT := Color("ff8a3d")
 const MEASURE := Color("ffd166")
 const UiTheme := preload("res://scripts/ui_theme.gd")
+const Units := preload("res://scripts/units.gd")
 
 var doc: RefCounted
+## whiteboard.gd: notices, the sketch status and the readout go on the board in the room; the
+## screen shows notices and the status only while the board cannot be read.
+var board: Node3D
 var units := "mm"
 var panel_open := false
 var menu_open := false
@@ -23,6 +27,7 @@ var _hint := Label.new()
 var _readout := Label.new()
 var _status := Label.new()
 var _status_box: PanelContainer
+var _readout_box: PanelContainer
 var _aim := Label.new()
 var _cross := Label.new()
 var _toast := Label.new()
@@ -85,6 +90,8 @@ func _ready() -> void:
 		if l == _status:
 			_status_box = b
 			b.visible = false
+		elif l == _readout:
+			_readout_box = b
 
 	# Top right: buttons for mouse and touch
 	var right := HBoxContainer.new()
@@ -171,6 +178,12 @@ func _box(color: Color) -> PanelContainer:
 
 
 func _process(dt: float) -> void:
+	var on_board: bool = board != null and board.active
+	_readout_box.visible = not on_board
+	_status_box.visible = _status.text != "" and not (on_board and board.readable())
+	if on_board and board.readable() and _toast_t > 0.0:
+		_toast_t = 0.0  # the board shows it
+		_toast.modulate.a = 0.0
 	if _toast_t > 0.0:
 		_toast_t -= dt
 		_toast.modulate.a = clampf(_toast_t / 0.3, 0.0, 1.0)
@@ -178,9 +191,17 @@ func _process(dt: float) -> void:
 
 # ---------- readouts ----------
 
-## Formats a length in metres the way an engineer reads it: mm below a metre, m above.
+## Formats a length in metres the way an engineer reads it: in metric parts mm below a metre and
+## m above; in inch parts inches (feet past 1,000 in); in foot parts feet (inches below a foot).
 func length(v: float) -> String:
 	var a := absf(v)
+	if units == "in" or units == "ft":
+		var inches := v / 0.0254
+		if absf(inches) < 1.0:
+			return "%.3f in" % inches
+		if units == "in" and absf(inches) < 1000.0 or units == "ft" and absf(inches) < 12.0:
+			return "%.2f in" % inches
+		return "%.2f ft" % (v / 0.3048)
 	if a >= 1000.0:
 		return "%.2f km" % (v / 1000.0)
 	if a >= 1.0:
@@ -192,7 +213,17 @@ func length(v: float) -> String:
 	return "%.2f mm" % (v * 1000.0)
 
 
+## The crosshair and the aim label hide while the tool wheel is open, so its centre reads clearly.
+func set_crosshair_hidden(hidden: bool) -> void:
+	_cross.modulate.a = 0.0 if hidden else 1.0
+	_aim.modulate.a = 0.0 if hidden else 1.0
+
+
 func toast(msg: String) -> void:
+	if board != null and board.active:
+		board.post(msg)
+		if board.readable():
+			return
 	_toast.text = msg
 	_toast_t = 1.8
 	_toast.modulate.a = 1.0
@@ -207,15 +238,19 @@ func set_tool(t: Dictionary, option: String) -> void:
 
 ## A second line under the tool hint, used for the sketch's state. Empty hides it.
 func set_status(text: String, color: Color = MUTED) -> void:
-	_status_box.visible = text != ""
 	_status.text = text
 	_status.add_theme_color_override("font_color", color)
+	if board != null:
+		# Light screen colours become marker colours: blue for "still free", dark ink otherwise.
+		board.set_status(text, Color("1f6fd1") if color.b > color.r + 0.15 else Color("0f1a36"))
 
 
 func set_readout(size: float, grid: float, snap: float, fly: bool, feet: Vector3) -> void:
 	_readout.text = "%s tall · snap %s · %s\nX %s   Y %s   Z %s" % [
-		length(1.75 * size), length(snap), "FLY" if fly else "WALK",
+		length(preload("res://scripts/player.gd").TALL * size), length(snap), "FLY" if fly else "WALK",
 		length(feet.x), length(-feet.z), length(feet.y)]
+	if board != null:
+		board.set_readout(_readout.text.replace("\n", "   ·   "))
 	_fly_btn.set_pressed_no_signal(fly)
 
 
@@ -258,6 +293,7 @@ func _build_panel(root: Control) -> void:
 	col.add_child(_tree)
 	scroll.add_child(col)
 	_panel.add_child(scroll)
+	UiTheme.scroll_everywhere(scroll)
 	_panel.visible = false
 	root.add_child(_panel)
 
@@ -283,11 +319,10 @@ func show_feature(id: String) -> void:
 func refresh_panel() -> void:
 	for c in _params.get_children() + _tree.get_children():
 		c.queue_free()
+	if doc != null and doc.has_method("mates"):
+		_assembly_panel()
+		return
 	if doc == null or not doc.has_method("get_features"):
-		var l := Label.new()
-		l.text = "Assemblies list their components here in a later build."
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD
-		_params.add_child(l)
 		return
 	var features: Array = doc.get_features()
 	var current: Dictionary = {}
@@ -304,6 +339,11 @@ func refresh_panel() -> void:
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 		hint.add_theme_color_override("font_color", MUTED)
 		_params.add_child(hint)
+		if doc.has_method("material_info"):
+			var part := Label.new()
+			part.text = "Units  %s\nMaterial  %s" % [Units.system_label(units, doc.get_mass_units()), doc.get_material()]
+			part.autowrap_mode = TextServer.AUTOWRAP_WORD
+			_params.add_child(part)
 	else:
 		title.text = "%s  ·  %s" % [current.name, current.type]
 		if not current.ok:
@@ -313,9 +353,14 @@ func refresh_panel() -> void:
 			err.add_theme_color_override("font_color", Color("e0775f"))
 			_params.add_child(err)
 		var params: Dictionary = current.params
+		_history_buttons(current, features)
 		if current.type == "sketch":
 			_sketch_summary(current)
-		elif current.type in ["extrude", "revolve", "sweep", "loft"] and (params.has("sketch") or params.has("sketches")):
+		elif (current.type in ["extrude", "revolve", "sweep", "loft"] and (params.has("sketch") or params.has("sketches"))) \
+				or (current.type == "plane" and params.get("kind", "") in ["offset", "angle"]) \
+				or (current.type == "point" and params.get("kind", "") == "xyz") \
+				or current.type in ["fillet", "chamfer", "hole", "shell", "pattern", "mirror", "draft"] \
+				or (current.type == "body" and params.get("kind", "") != "delete"):
 			var edit := Button.new()
 			edit.text = "Edit %s" % current.name
 			var fid: String = current.id
@@ -329,9 +374,26 @@ func refresh_panel() -> void:
 		del.pressed.connect(func(): request.emit("delete_feature", current.id))
 		_params.add_child(del)
 	var first: Control = null
-	for f in features:
+	var bar: int = doc.get_rollback() if doc.has_method("get_rollback") else -1
+	for fi in features.size():
+		var f: Dictionary = features[fi]
+		if fi == bar:
+			var rb := Button.new()
+			rb.text = "━━  rollback bar  ·  roll forward  ━━"
+			rb.add_theme_color_override("font_color", Color("ff8a3d"))
+			rb.pressed.connect(func(): request.emit("roll_forward", null))
+			_tree.add_child(rb)
 		var b := Button.new()
-		b.text = ("●  " if f.id == _feature_id else "    ") + f.name + ("" if f.ok else "  ⚠")
+		var state := ""
+		if f.get("rolled_back", false):
+			state = "  (rolled back)"
+		elif f.get("suppressed", false):
+			state = "  (suppressed)"
+		elif not f.ok:
+			state = "  ⚠"
+		b.text = ("●  " if f.id == _feature_id else "    ") + f.name + state
+		if f.get("rolled_back", false) or f.get("suppressed", false):
+			b.add_theme_color_override("font_color", MUTED)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		var fid: String = f.id
 		b.pressed.connect(func():
@@ -360,6 +422,100 @@ func refresh_panel() -> void:
 		focus.call_deferred("grab_focus")
 
 
+## Types whose references can be picked again in the room when they no longer resolve.
+const REPICK_TYPES := ["fillet", "chamfer", "shell", "draft", "hole", "pattern", "mirror", "body", "face_offset", "extrude", "plane"]
+
+
+## Move up / down, suppress, roll back to here, and (for a failed feature) re-pick.
+func _history_buttons(current: Dictionary, features: Array) -> void:
+	var fid: String = current.id
+	var at := 0
+	for i in features.size():
+		if features[i].id == fid:
+			at = i
+	var row := HBoxContainer.new()
+	var up := Button.new()
+	up.text = "▲ Move up"
+	up.disabled = at == 0
+	up.pressed.connect(func(): request.emit("move_feature_up", fid))
+	row.add_child(up)
+	var down := Button.new()
+	down.text = "▼ Move down"
+	down.disabled = at == features.size() - 1
+	down.pressed.connect(func(): request.emit("move_feature_down", fid))
+	row.add_child(down)
+	_params.add_child(row)
+	var row2 := HBoxContainer.new()
+	var sup := Button.new()
+	sup.text = "Unsuppress" if current.get("suppressed", false) else "Suppress"
+	sup.pressed.connect(func(): request.emit("toggle_suppress", fid))
+	row2.add_child(sup)
+	var roll := Button.new()
+	roll.text = "Roll back to here"
+	roll.tooltip_text = "Build up to this feature; new features go after it"
+	roll.disabled = at == features.size() - 1 and doc.get_rollback() < 0
+	roll.pressed.connect(func(): request.emit("roll_here", fid))
+	row2.add_child(roll)
+	_params.add_child(row2)
+	if not current.ok and not current.get("rolled_back", false) and current.type in REPICK_TYPES \
+			and (current.type != "extrude" or current.params.get("end", "") == "up_to_face") \
+			and (current.type != "plane" or current.params.get("base", null) is Dictionary):
+		var fix := Button.new()
+		fix.text = "Re-pick what %s uses…" % current.name
+		fix.pressed.connect(func(): request.emit("repick", fid))
+		_params.add_child(fix)
+
+
+## Assemblies: the components (ground / float, remove) and the mates (delete; ⚠ when not met).
+func _assembly_panel() -> void:
+	var title := Label.new()
+	title.add_theme_font_size_override("font_size", 16)
+	title.text = "ASSEMBLY  ·  %s" % doc.get_assembly_name()
+	_params.add_child(title)
+	var st: Dictionary = doc.mate_status()
+	var status := UiTheme.text(String(st.message) if String(st.message) != "" else "No mates yet: use Mate from the Assembly group",
+		14, MUTED if st.ok else Color("e0775f"))
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_params.add_child(status)
+	for c in doc.components():
+		var row := HBoxContainer.new()
+		var name_l := UiTheme.text(("📌 " if c.grounded else "") + String(c.name) + ("" if c.ok else "  ⚠"), 15)
+		name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_l)
+		var cid: String = c.id
+		var g := Button.new()
+		g.text = "Float" if c.grounded else "Ground"
+		g.pressed.connect(func(): request.emit("toggle_ground", cid))
+		row.add_child(g)
+		var rm := Button.new()
+		rm.text = "Remove"
+		rm.pressed.connect(func(): request.emit("remove_component", cid))
+		row.add_child(rm)
+		_tree.add_child(row)
+	var mates: Array = doc.mates()
+	if not mates.is_empty():
+		_tree.add_child(HSeparator.new())
+		var mt := Label.new()
+		mt.text = "MATES"
+		mt.add_theme_color_override("font_color", MUTED)
+		mt.add_theme_font_size_override("font_size", 12)
+		_tree.add_child(mt)
+	for m in mates:
+		var row := HBoxContainer.new()
+		var label := "%s  %s ↔ %s" % [String(m.type).capitalize(), m.a, m.b]
+		if m.has("value"):
+			label += "  (%s)" % ("%.1f°" % rad_to_deg(float(m.value)) if m.type == "angle" else length(float(m.value)))
+		var l := UiTheme.text(label + ("" if m.ok else "  ⚠"), 14)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(l)
+		var mid: String = m.id
+		var del := Button.new()
+		del.text = "Delete"
+		del.pressed.connect(func(): request.emit("delete_mate", mid))
+		row.add_child(del)
+		_tree.add_child(row)
+
+
 func _sketch_summary(f: Dictionary) -> void:
 	for v in doc.sketch_views():
 		if v.id != f.id:
@@ -376,7 +532,8 @@ func _sketch_summary(f: Dictionary) -> void:
 
 
 ## Keys that are references or choices, edited through the feature panel instead of as numbers.
-const SKIP_KEYS := ["target", "edges", "kind", "sketch", "path", "sketches", "direction", "end", "axis", "angle", "planeName"]
+const SKIP_KEYS := ["target", "edges", "kind", "sketch", "path", "sketches", "direction", "end", "axis", "angle", "planeName",
+	"probe", "normal", "feature", "base", "other", "points", "ref", "face", "origin"]
 
 
 func _add_fields(id: String, params: Dictionary, prefix: String) -> void:
@@ -387,14 +544,12 @@ func _add_fields(id: String, params: Dictionary, prefix: String) -> void:
 			continue
 		if v is Array or v is bool or key in SKIP_KEYS:
 			continue
-		var shown: String = v if v is String else ("%.4f" % (float(v) * (1000.0 if units == "mm" else 1.0))).rstrip("0").rstrip(".")
+		var shown: String = Units.show(v, units)
 		var row := _field(prefix + key, shown)
 		var full: String = prefix + key
 		row.get_child(1).text_submitted.connect(func(text: String):
 			# Plain numbers are in document units; anything else is an expression.
-			var value: Variant = text
-			if text.is_valid_float():
-				value = float(text) / (1000.0 if units == "mm" else 1.0)
+			var value: Variant = Units.parse(text, units)
 			request.emit("set_param", [id, full, value]))
 		_params.add_child(row)
 
@@ -435,12 +590,12 @@ func _build_menu(root: Control) -> void:
 
 
 ## Rebuilds the pause menu: items are [label, action] pairs sent through the request signal.
-func set_menu_items(items: Array) -> void:
+func set_menu_items(items: Array, heading := "PAUSED") -> void:
 	_menu_buttons.clear()
 	for c in _menu_col.get_children():
 		_menu_col.remove_child(c)
 		c.queue_free()
-	_menu_col.add_child(UiTheme.title("PAUSED", 22))
+	_menu_col.add_child(UiTheme.title(heading, 22))
 	# Two columns on short screens (phones), so every entry fits without scrolling.
 	var grid := GridContainer.new()
 	grid.columns = 2 if UiTheme.short_screen(self) else 1

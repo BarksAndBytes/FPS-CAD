@@ -16,7 +16,16 @@
 #include <ElSLib.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS.hxx>
+#include <GeomAPI.hxx>
+#include <Geom2dAPI_Interpolate.hxx>
+#include <Geom2d_BSplineCurve.hxx>
+#include <Geom_Curve.hxx>
+#include <TColgp_Array1OfVec2d.hxx>
+#include <TColgp_HArray1OfPnt2d.hxx>
+#include <TColStd_HArray1OfBoolean.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Elips.hxx>
 #include <gp_Pln.hxx>
 
 namespace fpcad {
@@ -68,6 +77,125 @@ ArcGeom arcGeom(const Sketch& s, const SketchEntity& e) {
   return g;
 }
 
+// Ellipse: centre, the axis through pts[1] (semi-axis a) and the square axis (semi-axis r).
+struct EllipseGeom {
+  double cx, cy, ax, ay, a, r;  // (ax, ay) unit direction of the pts[1] axis
+};
+
+EllipseGeom ellipseGeom(const Sketch& s, const SketchEntity& e) {
+  auto c = uv(s, e.pts[0]), m = uv(s, e.pts[1]);
+  double a = std::hypot(m[0] - c[0], m[1] - c[1]);
+  if (a < 1e-12 || e.r < 1e-12) throw std::runtime_error("ellipse " + e.id + " has no size");
+  return {c[0], c[1], (m[0] - c[0]) / a, (m[1] - c[1]) / a, a, e.r};
+}
+
+Poly2 ellipsePoints(const EllipseGeom& g) {
+  Poly2 out;
+  for (int i = 0; i <= kCircleSegments * 2; ++i) {
+    double t = 2 * kPi * i / (kCircleSegments * 2);
+    double u = g.a * std::cos(t), v = g.r * std::sin(t);
+    out.push_back({g.cx + u * g.ax - v * g.ay, g.cy + u * g.ay + v * g.ax});
+  }
+  return out;
+}
+
+bool splineClosed(const SketchEntity& e) { return e.pts.size() > 2 && e.pts.front() == e.pts.back(); }
+
+// Direction leaving entity other at its end point p (a line's or an arc's), or nothing.
+bool leavingAt(const Sketch& s, const SketchEntity& other, const std::string& p, std::array<double, 2>& t) {
+  auto P = uv(s, p);
+  if (other.kind == "line") {
+    if (other.pts[0] != p && other.pts[1] != p) return false;
+    auto q = uv(s, other.pts[0] == p ? other.pts[1] : other.pts[0]);
+    t = {P[0] - q[0], P[1] - q[1]};
+  } else if (other.kind == "arc") {
+    if (other.pts[1] != p && other.pts[2] != p) return false;
+    auto c = uv(s, other.pts[0]);
+    double rx = P[0] - c[0], ry = P[1] - c[1];
+    double sgn = other.pts[2] == p ? 1.0 : -1.0;  // counter-clockwise past the end, back past the start
+    t = {-ry * sgn, rx * sgn};
+  } else {
+    return false;
+  }
+  double n = std::hypot(t[0], t[1]);
+  if (n < 1e-15) return false;
+  t = {t[0] / n, t[1] / n};
+  return true;
+}
+
+// The fit-point spline through the entity's points, in plane coordinates. Tangent relations to a
+// line or arc sharing an end set the direction it leaves (or arrives at) that end.
+Handle(Geom2d_BSplineCurve) splineCurve(const Sketch& s, const SketchEntity& e) {
+  bool closed = splineClosed(e);
+  size_t n = closed ? e.pts.size() - 1 : e.pts.size();
+  if (n < 2) throw std::runtime_error("spline " + e.id + " needs at least two points");
+  Handle(TColgp_HArray1OfPnt2d) pts = new TColgp_HArray1OfPnt2d(1, static_cast<int>(n));
+  for (size_t i = 0; i < n; ++i) {
+    auto q = uv(s, e.pts[i]);
+    if (i > 0) {
+      auto prev = uv(s, e.pts[i - 1]);
+      if (std::hypot(q[0] - prev[0], q[1] - prev[1]) < 1e-12)
+        throw std::runtime_error("spline " + e.id + " has two points on top of each other");
+    }
+    pts->SetValue(static_cast<int>(i + 1), gp_Pnt2d(q[0], q[1]));
+  }
+  Geom2dAPI_Interpolate interp(pts, closed, 1e-9);
+  if (!closed) {
+    TColgp_Array1OfVec2d tans(1, static_cast<int>(n));
+    Handle(TColStd_HArray1OfBoolean) flags = new TColStd_HArray1OfBoolean(1, static_cast<int>(n));
+    for (int i = 1; i <= static_cast<int>(n); ++i) {
+      tans.SetValue(i, gp_Vec2d(1, 0));
+      flags->SetValue(i, false);
+    }
+    bool any = false;
+    for (auto& c : s.constraints) {
+      if (c.kind != "tangent" || c.refs.size() != 2) continue;
+      std::string otherId = c.refs[0] == e.id ? c.refs[1] : (c.refs[1] == e.id ? c.refs[0] : "");
+      const SketchEntity* other = otherId.empty() ? nullptr : s.entity(otherId);
+      if (!other) continue;
+      std::array<double, 2> t;
+      if (leavingAt(s, *other, e.pts.front(), t)) {
+        tans.SetValue(1, gp_Vec2d(t[0], t[1]));
+        flags->SetValue(1, true);
+        any = true;
+      }
+      if (leavingAt(s, *other, e.pts.back(), t)) {
+        tans.SetValue(static_cast<int>(n), gp_Vec2d(-t[0], -t[1]));  // arriving: against the leaving way
+        flags->SetValue(static_cast<int>(n), true);
+        any = true;
+      }
+    }
+    if (any) interp.Load(tans, flags, true);
+  }
+  interp.Perform();
+  if (!interp.IsDone()) throw std::runtime_error("spline " + e.id + " could not be fitted");
+  return interp.Curve();
+}
+
+Poly2 splinePoints(const Handle(Geom2d_BSplineCurve)& c, size_t fitPoints) {
+  Poly2 out;
+  int n = std::max(16, static_cast<int>(fitPoints) * 12);
+  double t0 = c->FirstParameter(), t1 = c->LastParameter();
+  for (int i = 0; i <= n; ++i) {
+    gp_Pnt2d p = c->Value(t0 + (t1 - t0) * i / n);
+    out.push_back({p.X(), p.Y()});
+  }
+  return out;
+}
+
+// A text's glyph outlines placed at its anchor and scaled to its cap height.
+std::vector<Poly2> textContours(const Sketch& s, const SketchEntity& e) {
+  std::vector<Poly2> out;
+  auto a = uv(s, e.pts[0]);
+  for (auto& c : e.contours) {
+    if (c.size() < 3) continue;
+    Poly2 poly;
+    for (auto& q : c) poly.push_back({a[0] + q[0] * e.r, a[1] + q[1] * e.r});
+    out.push_back(poly);
+  }
+  return out;
+}
+
 double signedArea(const Poly2& p) {
   double a = 0;
   for (size_t i = 0; i < p.size(); ++i) {
@@ -116,6 +244,17 @@ std::vector<SketchPolyline> sketchPolylines(const Sketch& s) {
       } else if (e.kind == "arc") {
         ArcGeom g = arcGeom(s, e);
         pl.points = arcPoints(g.cx, g.cy, g.r, g.a0, g.a1);
+      } else if (e.kind == "ellipse") {
+        pl.points = ellipsePoints(ellipseGeom(s, e));
+      } else if (e.kind == "spline") {
+        pl.points = splinePoints(splineCurve(s, e), e.pts.size());
+      } else if (e.kind == "text") {
+        for (auto& c : textContours(s, e)) {
+          SketchPolyline part{e.id, e.construction, c};
+          part.points.push_back(c.front());
+          out.push_back(std::move(part));
+        }
+        continue;
       }
     } catch (...) {
       continue;
@@ -156,6 +295,49 @@ SketchGeometry buildSketchGeometry(const Sketch& s) {
       segs.push_back({&e, uf.find(e.pts[0]), uf.find(e.pts[1])});
     } else if (e.kind == "arc") {
       segs.push_back({&e, uf.find(e.pts[1]), uf.find(e.pts[2])});
+    } else if (e.kind == "spline" && !splineClosed(e)) {
+      segs.push_back({&e, uf.find(e.pts.front()), uf.find(e.pts.back())});
+    } else if (e.kind == "text") {
+      // Each glyph outline is a loop; the nesting below cuts the holes in letters like "o".
+      if (e.r <= 1e-12) continue;
+      for (auto& c : textContours(s, e)) {
+        try {
+          BRepBuilderAPI_MakePolygon mp;
+          for (auto& q : c) mp.Add(P(q));
+          mp.Close();
+          if (!mp.IsDone()) continue;
+          Loop L;
+          L.wire = mp.Wire();
+          L.poly = c;
+          loops.push_back(L);
+        } catch (const Standard_Failure&) {
+          g.problems.push_back("a letter of text " + e.id + " could not be built");
+        }
+      }
+    } else if (e.kind == "spline" || e.kind == "ellipse") {
+      // Closed on their own, like a circle.
+      try {
+        Loop L;
+        if (e.kind == "spline") {
+          Handle(Geom2d_BSplineCurve) c2 = splineCurve(s, e);
+          L.wire = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(GeomAPI::To3d(c2, pln))).Wire();
+          L.poly = splinePoints(c2, e.pts.size());
+        } else {
+          EllipseGeom eg = ellipseGeom(s, e);
+          gp_Dir A = gp_Dir(eg.ax * X.XYZ() + eg.ay * N.Crossed(X).XYZ());
+          gp_Dir B = N.Crossed(A);
+          bool alongA = eg.a >= eg.r;
+          gp_Elips el(gp_Ax2(P({eg.cx, eg.cy}), N, alongA ? A : B), std::max(eg.a, eg.r), std::min(eg.a, eg.r));
+          L.wire = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(el)).Wire();
+          L.poly = ellipsePoints(eg);
+        }
+        L.poly.pop_back();
+        loops.push_back(L);
+      } catch (const Standard_Failure& ex) {
+        g.problems.push_back(std::string(e.kind) + " " + e.id + " could not be built: " + ex.GetMessageString());
+      } catch (const std::exception& ex) {
+        g.problems.push_back(ex.what());
+      }
     } else if (e.kind == "circle") {
       if (e.r <= 1e-12) {
         g.problems.push_back("circle " + e.id + " has no size");
@@ -179,6 +361,7 @@ SketchGeometry buildSketchGeometry(const Sketch& s) {
       if (std::hypot(b[0] - a[0], b[1] - a[1]) < 1e-12) throw std::runtime_error("zero-length line " + e.id);
       return BRepBuilderAPI_MakeEdge(P(a), P(b)).Edge();
     }
+    if (e.kind == "spline") return BRepBuilderAPI_MakeEdge(GeomAPI::To3d(splineCurve(s, e), pln)).Edge();
     ArcGeom ag = arcGeom(s, e);
     gp_Circ circ(gp_Ax2(P({ag.cx, ag.cy}), N, X), ag.r);
     return BRepBuilderAPI_MakeEdge(circ, ag.a0, ag.a1).Edge();
@@ -188,6 +371,8 @@ SketchGeometry buildSketchGeometry(const Sketch& s) {
     Poly2 pts;
     if (e.kind == "line") {
       pts = {uv(s, e.pts[0]), uv(s, e.pts[1])};
+    } else if (e.kind == "spline") {
+      pts = splinePoints(splineCurve(s, e), e.pts.size());
     } else {
       ArcGeom ag = arcGeom(s, e);
       pts = arcPoints(ag.cx, ag.cy, ag.r, ag.a0, ag.a1);
@@ -347,6 +532,12 @@ std::vector<std::array<double, 2>> sketchFill(const Sketch& s) {
   } catch (...) {
     return {};
   }
+}
+
+std::vector<SketchCurve> sketchCurves(const Sketch& s) {
+  std::vector<SketchCurve> out;
+  for (auto& pl : sketchPolylines(s)) out.push_back({pl.entityId, pl.construction, pl.points});
+  return out;
 }
 
 }  // namespace fpcad

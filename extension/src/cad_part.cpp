@@ -1,6 +1,10 @@
 #include "cad_part.h"
 
 #include <algorithm>
+#include <cmath>
+#if defined(__unix__) || defined(__APPLE__)
+#include <dlfcn.h>
+#endif
 #include <set>
 
 #include <godot_cpp/core/class_db.hpp>
@@ -13,7 +17,9 @@
 #include "fpcad/Compare.h"
 #include "fpcad/Expression.h"
 #include "fpcad/Export.h"
+#include "fpcad/Drawing.h"
 #include "fpcad/FileIO.h"
+#include "fpcad/Materials.h"
 
 using namespace godot;
 
@@ -27,6 +33,34 @@ Dictionary result(bool ok, const std::string& message) {
   d["ok"] = ok;
   d["message"] = str(message);
   return d;
+}
+
+Dictionary materialDict(const fpcad::Material& m) {
+  Dictionary d;
+  d["name"] = str(m.name);
+  d["category"] = str(m.category);
+  d["density"] = m.density;
+  d["youngs_modulus"] = m.youngsModulus;
+  d["poissons_ratio"] = m.poissonsRatio;
+  d["yield_strength"] = m.yieldStrength ? Variant(*m.yieldStrength) : Variant();
+  d["tensile_strength"] = m.tensileStrength ? Variant(*m.tensileStrength) : Variant();
+  d["thermal_conductivity"] = m.thermalConductivity;
+  d["specific_heat"] = m.specificHeat;
+  d["thermal_expansion"] = m.thermalExpansion;
+  d["color"] = str(m.color);
+  d["metallic"] = m.metallic;
+  d["roughness"] = m.roughness;
+  d["opacity"] = m.opacity;
+  return d;
+}
+
+// Size and position of everything, to check a unit change left the part as it was.
+std::vector<double> signature(const fpcad::PartModel& m) {
+  fpcad::MassProperties mp = m.massProperties();
+  std::vector<double> s = {mp.volume, mp.area, mp.centreOfMass[0], mp.centreOfMass[1], mp.centreOfMass[2]};
+  if (auto b = m.boundingBox())
+    for (int i = 0; i < 3; ++i) s.insert(s.end(), {b->min[i], b->max[i]});
+  return s;
 }
 }  // namespace
 
@@ -80,8 +114,139 @@ String CadPart::save_file(const String& path) {
 }
 
 String CadPart::get_part_name() const { return str(model_->document().name); }
+void CadPart::set_part_name(const String& name) {
+  std::string n = str(name.strip_edges());
+  if (!n.empty()) model_->document().name = n;
+}
 String CadPart::get_units() const { return str(model_->document().units); }
 String CadPart::get_file_id() const { return str(model_->document().fileId); }
+String CadPart::get_material() const {
+  const fpcad::Material* m = fpcad::findMaterial(model_->document().material);
+  return str(m ? m->name : model_->document().material);
+}
+
+namespace {
+void libraryMarker() {}
+}  // namespace
+
+// The folder this extension was loaded from. On Android that is the app's native library folder,
+// the one place Android lets an app run a program it ships (the video board's FFmpeg).
+String CadPart::native_library_dir() const {
+#if defined(__unix__) || defined(__APPLE__)
+  Dl_info info;
+  if (dladdr(reinterpret_cast<void*>(&libraryMarker), &info) && info.dli_fname) {
+    std::string p = info.dli_fname;
+    auto slash = p.rfind('/');
+    if (slash != std::string::npos) return str(p.substr(0, slash));
+  }
+#endif
+  return String();
+}
+
+String CadPart::get_mass_units() const { return str(model_->document().massUnit()); }
+
+Array CadPart::material_library() const {
+  Array out;
+  for (const auto& m : fpcad::materialLibrary()) out.push_back(materialDict(m));
+  return out;
+}
+
+Dictionary CadPart::material_info() const {
+  const auto& doc = model_->document();
+  if (const fpcad::Material* m = fpcad::findMaterial(doc.material)) {
+    Dictionary d = materialDict(*m);
+    d["density"] = doc.density;
+    return d;
+  }
+  fpcad::Material custom;  // a typed-in density: no other properties known
+  custom.name = doc.material.empty() ? fpcad::kCustomMaterial : doc.material;
+  custom.category = "Custom";
+  custom.density = doc.density;
+  Dictionary d = materialDict(custom);
+  d["youngs_modulus"] = Variant();
+  d["poissons_ratio"] = Variant();
+  d["thermal_conductivity"] = Variant();
+  d["specific_heat"] = Variant();
+  d["thermal_expansion"] = Variant();
+  return d;
+}
+
+Dictionary CadPart::set_material(const String& name, double density) {
+  std::string n = str(name);
+  const fpcad::Material* m = fpcad::findMaterial(n);
+  if (!m && n != fpcad::kCustomMaterial) return result(false, "Unknown material '" + n + "'");
+  if (!m && !(density > 0 && density < 1e6)) return result(false, "A density must be above zero");
+  checkpoint();
+  auto& doc = model_->document();
+  doc.material = m ? m->name : n;
+  doc.density = m ? m->density : density;
+  return result(true, "");
+}
+
+// Brings in a STEP file as an import feature: a new body standing on the ground at the origin
+// (or the part's first body when there is none yet).
+Dictionary CadPart::import_step(const String& path) {
+  fpcad::ImportResult im = fpcad::importStep(str(path));
+  if (!im.ok) return result(false, im.message);
+  checkpoint();
+  auto& doc = model_->document();
+  std::string id = fpcad::newId();
+  doc.imports[id] = im.brep;
+  fpcad::Feature f;
+  f.type = "import";
+  std::string file = str(path.get_file());
+  f.name = doc.uniqueName("Import " + (file.empty() ? std::string("STEP") : file.substr(0, file.find_last_of('.'))));
+  f.op = model_->bodyCount() == 0 ? fpcad::BodyOp::Add : fpcad::BodyOp::NewBody;
+  f.params = {{"shape", id}, {"file", file},
+              {"x", -(im.min[0] + im.max[0]) / 2}, {"y", -(im.min[1] + im.max[1]) / 2}, {"z", -im.min[2]}};
+  std::string fid = doc.insert(f).id;
+  fpcad::RebuildReport r = model_->rebuild();
+  bool ok = true;
+  for (auto& st : r.features)
+    if (st.featureId == fid && !st.ok) ok = false;
+  if (!ok) {
+    undo();
+    redo_.clear();
+    return result(false, "the imported shape could not be added to the part");
+  }
+  Dictionary d = result(true, im.message);
+  d["id"] = str(fid);
+  d["volume"] = im.volume;
+  d["solids"] = im.solids;
+  return d;
+}
+
+Dictionary CadPart::set_units(const String& length, const String& mass) {
+  std::string len = str(length), ms = str(mass);
+  if (ms != "g" && ms != "kg" && ms != "lb") return result(false, "Unknown mass unit '" + ms + "'");
+  fpcad::PartDocument backup = model_->document();
+  bool wasOk = model_->lastReport().ok;
+  std::vector<double> before = signature(*model_);
+  checkpoint();
+  if (!model_->document().changeUnits(len)) {
+    drop_checkpoint();
+    return result(false, "Unknown length unit '" + len + "'");
+  }
+  model_->document().massUnits = ms;
+  fpcad::RebuildReport r = model_->rebuild();
+  std::vector<double> after = signature(*model_);
+  bool same = before.size() == after.size();
+  for (size_t i = 0; same && i < before.size(); ++i)
+    same = std::abs(before[i] - after[i]) <= 1e-7 * std::max(1.0, std::abs(before[i]));
+  if ((wasOk && !r.ok) || !same) {
+    model_->document() = backup;
+    model_->rebuild();
+    drop_checkpoint();
+    return result(false, "The units were not changed: an expression would change size with them. Give its plain numbers a unit (\"5 mm\") and try again.");
+  }
+  return result(true, "");
+}
+double CadPart::get_density() const { return model_->document().density; }
+Array CadPart::get_boards() const {
+  Variant v = jsonToVariant(model_->document().boards);
+  return v.get_type() == Variant::ARRAY ? Array(v) : Array();
+}
+void CadPart::set_boards(const Array& boards) { model_->document().boards = variantToJson(boards); }
 
 Dictionary CadPart::rebuild() {
   fpcad::RebuildReport r = model_->rebuild();
@@ -191,13 +356,19 @@ Dictionary CadPart::pick(const Vector3& origin, const Vector3& direction, double
 }
 
 Dictionary CadPart::push_pull(const Dictionary& hit, double delta) {
-  std::string msg;
-  bool ok = model_->pushPull(dictToHit(hit), delta, &msg);
-  Dictionary d = result(ok, msg);
-  if (ok) {
-    if (auto drv = model_->faceDrive(dictToHit(hit))) d["drive_value"] = drv->value;
+  try {
+    std::string msg;
+    bool ok = model_->pushPull(dictToHit(hit), delta, &msg);
+    Dictionary d = result(ok, msg);
+    if (ok) {
+      if (auto drv = model_->faceDrive(dictToHit(hit))) d["drive_value"] = drv->value;
+    }
+    return d;
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  return d;
 }
 
 void CadPart::checkpoint() {
@@ -213,7 +384,9 @@ void CadPart::drop_checkpoint() {
 bool CadPart::undo() {
   if (undo_.empty()) return false;
   redo_.push_back(model_->document());
+  fpcad::Json boards = model_->document().boards;  // the boards stay where they stand
   model_->document() = undo_.back();
+  model_->document().boards = boards;
   undo_.pop_back();
   model_->rebuild();
   return true;
@@ -222,7 +395,9 @@ bool CadPart::undo() {
 bool CadPart::redo() {
   if (redo_.empty()) return false;
   undo_.push_back(model_->document());
+  fpcad::Json boards = model_->document().boards;
   model_->document() = redo_.back();
+  model_->document().boards = boards;
   redo_.pop_back();
   model_->rebuild();
   return true;
@@ -266,66 +441,360 @@ String CadPart::add_primitive(const String& type, const Vector3& base, const Dic
   }
   checkpoint();
   fpcad::PartDocument backup = model_->document();
-  std::string id = model_->document().add(f).id;
+  std::string id = model_->document().insert(f).id;
   Dictionary r = commitOrRevert(backup, "placed");
   return bool(r["ok"]) ? str(id) : String();
 }
 
 Dictionary CadPart::move_feature(const String& id, const Vector3& delta) {
-  fpcad::Feature* f = model_->document().find(str(id));
-  if (!f) return result(false, "that feature no longer exists");
-  fpcad::Vec3 d = toCad(delta);
-  fpcad::PartDocument backup = model_->document();
-  auto shift = [&](fpcad::Json& obj, const char* key, double by) {
-    obj[key] = model_->param(*f, key) + by;
-  };
-  if (f->type == "box" || f->type == "cylinder" || f->type == "sphere" || f->type == "cone") {
-    shift(f->params, "x", d[0]);
-    shift(f->params, "y", d[1]);
-    shift(f->params, "z", d[2]);
-  } else if (f->type == "extrude") {
-    auto& o = f->params["plane"]["origin"];
-    o = {o[0].get<double>() + d[0], o[1].get<double>() + d[1], o[2].get<double>() + d[2]};
-  } else {
-    return result(false, f->name + " cannot be moved on its own");
+  try {
+    fpcad::Feature* f = model_->document().find(str(id));
+    if (!f) return result(false, "that feature no longer exists");
+    fpcad::Vec3 d = toCad(delta);
+    fpcad::PartDocument backup = model_->document();
+    auto shift = [&](fpcad::Json& obj, const char* key, double by) {
+      obj[key] = model_->param(*f, key) + by;
+    };
+    if (f->type == "box" || f->type == "cylinder" || f->type == "sphere" || f->type == "cone" || f->type == "import") {
+      shift(f->params, "x", d[0]);
+      shift(f->params, "y", d[1]);
+      shift(f->params, "z", d[2]);
+    } else if (f->type == "extrude") {
+      auto& o = f->params["plane"]["origin"];
+      o = {o[0].get<double>() + d[0], o[1].get<double>() + d[1], o[2].get<double>() + d[2]};
+    } else {
+      return result(false, f->name + " cannot be moved on its own");
+    }
+    fpcad::RebuildReport r = model_->rebuild();
+    if (!r.ok) {
+      model_->document() = backup;
+      model_->rebuild();
+      return result(false, "moving there would break the model");
+    }
+    return result(true, "moved");
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  fpcad::RebuildReport r = model_->rebuild();
-  if (!r.ok) {
-    model_->document() = backup;
-    model_->rebuild();
-    return result(false, "moving there would break the model");
-  }
-  return result(true, "moved");
 }
 
 Dictionary CadPart::delete_feature(const String& id) {
-  std::string sid = str(id);
-  auto& feats = model_->document().features;
-  const fpcad::Feature* f = model_->document().find(sid);
-  if (!f) return result(false, "that feature no longer exists");
-  std::string name = f->name;
-  checkpoint();
-  // Features built from the deleted one go with it: edge features that target it, and extrudes,
-  // revolves, sweeps and lofts that use a deleted sketch (repeated so chains are followed).
-  std::set<std::string> gone{sid};
-  auto uses = [&](const fpcad::Feature& x) {
-    for (const char* k : {"target", "sketch", "path"})
-      if (x.params.contains(k) && x.params[k].is_string() && gone.count(x.params[k].get<std::string>())) return true;
-    if (x.params.contains("sketches") && x.params["sketches"].is_array())
-      for (auto& e : x.params["sketches"])
-        if (e.is_string() && gone.count(e.get<std::string>())) return true;
-    return false;
-  };
-  for (bool grew = true; grew;) {
-    grew = false;
-    for (auto& x : feats)
-      if (!gone.count(x.id) && uses(x)) { gone.insert(x.id); grew = true; }
+  try {
+    std::string sid = str(id);
+    auto& feats = model_->document().features;
+    const fpcad::Feature* f = model_->document().find(sid);
+    if (!f) return result(false, "that feature no longer exists");
+    std::string name = f->name;
+    checkpoint();
+    // Features built from the deleted one go with it: edge features that target it, and extrudes,
+    // revolves, sweeps and lofts that use a deleted sketch (repeated so chains are followed).
+    std::set<std::string> gone{sid};
+    auto uses = [&](const fpcad::Feature& x) {
+      for (const char* k : {"target", "sketch", "path"})
+        if (x.params.contains(k) && x.params[k].is_string() && gone.count(x.params[k].get<std::string>())) return true;
+      if (x.params.contains("sketches") && x.params["sketches"].is_array())
+        for (auto& e : x.params["sketches"])
+          if (e.is_string() && gone.count(e.get<std::string>())) return true;
+      return false;
+    };
+    for (bool grew = true; grew;) {
+      grew = false;
+      for (auto& x : feats)
+        if (!gone.count(x.id) && uses(x)) { gone.insert(x.id); grew = true; }
+    }
+    size_t extra = gone.size() - 1;
+    model_->document().erase(gone);
+    model_->rebuild();
+    return result(true, name + " deleted" + (extra ? " with " + std::to_string(extra) + " feature" + (extra > 1 ? "s" : "") + " built on it" : ""));
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
   }
-  size_t extra = gone.size() - 1;
-  feats.erase(std::remove_if(feats.begin(), feats.end(), [&](const fpcad::Feature& x) { return gone.count(x.id) > 0; }),
-              feats.end());
+}
+
+int CadPart::get_rollback() const { return model_->document().rollback; }
+
+namespace {
+
+fpcad::DrawingInfo drawingInfo(const fpcad::PartModel& m, const Dictionary& options) {
+  fpcad::DrawingInfo info;
+  info.partName = m.document().name;
+  info.units = m.document().units;
+  info.material = m.document().material;
+  info.hidden = bool(options.get("hidden", true));
+  info.dimensions = bool(options.get("dimensions", true));
+  return info;
+}
+
+Dictionary writeSheet(const fpcad::Sheet& sheet, const String& path) {
+  std::string p = str(path);
+  std::string ext = p.size() > 4 ? p.substr(p.size() - 4) : "";
+  for (auto& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+  std::string err;
+  if (ext == ".dxf") err = fpcad::writeDxf(sheet, p);
+  else if (ext == ".pdf") err = fpcad::writePdf(sheet, p);
+  else err = "drawings are written as .pdf or .dxf";
+  Dictionary d;
+  d["ok"] = err.empty();
+  d["message"] = str(err.empty() ? "Saved " + std::filesystem::path(p).filename().string() : err);
+  d["path"] = path;
+  return d;
+}
+
+}  // namespace
+
+Dictionary CadPart::drawing_sheet(const Dictionary& options) const {
+  fpcad::Sheet s = fpcad::standardViews(*model_, drawingInfo(*model_, options));
+  Dictionary d;
+  d["width"] = s.width;
+  d["height"] = s.height;
+  d["scale"] = s.scale;
+  PackedVector2Array vis, hid, dim, border;
+  for (auto& l : s.lines) {
+    PackedVector2Array* to = l.layer == fpcad::DrawLayer::Hidden ? &hid
+                             : l.layer == fpcad::DrawLayer::Dimension ? &dim
+                             : l.layer == fpcad::DrawLayer::Border ? &border : &vis;
+    to->push_back(Vector2(float(l.x1), float(l.y1)));
+    to->push_back(Vector2(float(l.x2), float(l.y2)));
+  }
+  d["visible"] = vis;
+  d["hidden"] = hid;
+  d["dimensions"] = dim;
+  d["border"] = border;
+  Array texts;
+  for (auto& t : s.texts) {
+    Dictionary e;
+    e["position"] = Vector2(float(t.x), float(t.y));
+    e["height"] = t.height;
+    e["angle"] = t.angle;
+    e["text"] = str(t.text);
+    texts.push_back(e);
+  }
+  d["texts"] = texts;
+  return d;
+}
+
+Dictionary CadPart::export_drawing(const String& path, const Dictionary& options) const {
+  if (model_->bodyCount() == 0) {
+    Dictionary d;
+    d["ok"] = false;
+    d["message"] = "There is nothing to draw yet";
+    return d;
+  }
+  return writeSheet(fpcad::standardViews(*model_, drawingInfo(*model_, options)), path);
+}
+
+Dictionary CadPart::export_sketch_flat(const Dictionary& sketch, const String& path) const {
+  std::vector<std::vector<std::array<double, 2>>> polys;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    for (auto& c : fpcad::sketchCurves(s))
+      if (!c.construction) polys.push_back(std::vector<std::array<double, 2>>(c.points.begin(), c.points.end()));
+  } catch (const std::exception& e) {
+    Dictionary d;
+    d["ok"] = false;
+    d["message"] = str(e.what());
+    return d;
+  }
+  if (polys.empty()) {
+    Dictionary d;
+    d["ok"] = false;
+    d["message"] = "The sketch has no geometry to export";
+    return d;
+  }
+  return writeSheet(fpcad::flatView(polys, str(String(sketch.get("planeName", "Sketch"))), model_->document().units), path);
+}
+
+Dictionary CadPart::export_face_flat(const Dictionary& hit, const String& path) const {
+  try {
+    Dictionary d;
+    d["ok"] = false;
+    std::string name;
+    auto plane = model_->planeFromHit(dictToHit(hit), &name);
+    if (!plane) {
+      d["message"] = "Aim at a flat face";
+      return d;
+    }
+    fpcad::PickHit h = dictToHit(hit);
+    std::vector<std::vector<std::array<double, 2>>> polys;
+    for (auto& c : model_->projectFace(h.body, h.face, *plane)) {
+      std::vector<std::array<double, 2>> poly;
+      if (c.kind == "circle" && !c.pts.empty()) {
+        for (int i = 0; i <= 96; ++i) {
+          double a = 2 * Math_PI * i / 96;
+          poly.push_back({c.pts[0][0] + c.r * std::cos(a), c.pts[0][1] + c.r * std::sin(a)});
+        }
+      } else if (c.kind == "arc" && c.pts.size() == 3) {
+        // Centre, start, end: the arc runs anticlockwise from start to end.
+        auto& o = c.pts[0];
+        double r = std::hypot(c.pts[1][0] - o[0], c.pts[1][1] - o[1]);
+        double a0 = std::atan2(c.pts[1][1] - o[1], c.pts[1][0] - o[0]);
+        double a1 = std::atan2(c.pts[2][1] - o[1], c.pts[2][0] - o[0]);
+        while (a1 <= a0 + 1e-12) a1 += 2 * Math_PI;
+        int n = std::max(4, int((a1 - a0) / (2 * Math_PI) * 96));
+        for (int i = 0; i <= n; ++i) {
+          double a = a0 + (a1 - a0) * i / n;
+          poly.push_back({o[0] + r * std::cos(a), o[1] + r * std::sin(a)});
+        }
+      } else {
+        poly.assign(c.pts.begin(), c.pts.end());
+        if (c.closed && !poly.empty()) poly.push_back(poly.front());
+      }
+      polys.push_back(std::move(poly));
+    }
+    if (polys.empty()) {
+      d["message"] = "That face has no outline to export";
+      return d;
+    }
+    return writeSheet(fpcad::flatView(polys, model_->document().name + " · " + name, model_->document().units), path);
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
+}
+
+String CadPart::save_drawing(const String& path, const String& part_path, const Dictionary& options) const {
+  try {
+    fpcad::DrawingDocument dd;
+    dd.name = model_->document().name + " drawing";
+    std::filesystem::path pp(str(part_path)), dp(str(path));
+    dd.partPath = pp.parent_path() == dp.parent_path() ? pp.filename().string() : pp.string();
+    dd.partFileId = model_->document().fileId;
+    dd.hidden = bool(options.get("hidden", true));
+    dd.dimensions = bool(options.get("dimensions", true));
+    fpcad::saveDrawing(str(path), dd);
+    return "";
+  } catch (const std::exception& e) {
+    return str(e.what());
+  }
+}
+
+Dictionary CadPart::load_drawing(const String& path) const {
+  Dictionary d;
+  try {
+    fpcad::DrawingDocument dd = fpcad::loadDrawing(str(path));
+    std::filesystem::path pp(dd.partPath);
+    if (pp.is_relative()) pp = std::filesystem::path(str(path)).parent_path() / pp;
+    d["ok"] = true;
+    d["name"] = str(dd.name);
+    d["part_path"] = str(pp.string());
+    d["part_file_id"] = str(dd.partFileId);
+    d["hidden"] = dd.hidden;
+    d["dimensions"] = dd.dimensions;
+  } catch (const std::exception& e) {
+    d["ok"] = false;
+    d["message"] = str(e.what());
+  }
+  return d;
+}
+
+void CadPart::set_section(const Dictionary& plane) {
+  if (plane.is_empty()) {
+    model_->setSection(std::nullopt);
+    return;
+  }
+  Vector3 o = plane.get("origin", Vector3());
+  Vector3 n = plane.get("normal", Vector3(0, 0, -1));
+  fpcad::Vec3 co = toCad(o), cn = toCad(n);
+  model_->setSection(std::make_pair(co, cn));
+}
+
+bool CadPart::has_section() const { return model_->hasSection(); }
+
+Dictionary CadPart::face_measure(const Dictionary& hit) const {
+  try {
+    fpcad::PickHit h = dictToHit(hit);
+    auto m = model_->faceMeasure(h.body, h.face);
+    Dictionary d;
+    d["ok"] = m.ok;
+    if (!m.ok) return d;
+    d["area"] = m.area;
+    d["kind"] = str(m.kind);
+    d["radius"] = m.radius;
+    d["radius2"] = m.radius2;
+    d["normal"] = toGodot(m.normal);
+    d["axis"] = toGodot(m.axis);
+    d["centre"] = toGodot(m.centre);
+    return d;
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
+}
+
+Array CadPart::interference() const {
+  Array out;
+  for (auto& x : model_->interference()) {
+    Dictionary d;
+    d["a"] = x.a;
+    d["b"] = x.b;
+    d["volume"] = x.volume;
+    d["centre"] = toGodot(x.centre);
+    out.push_back(d);
+  }
+  return out;
+}
+
+Dictionary CadPart::set_rollback(int index) {
+  auto& doc = model_->document();
+  int n = static_cast<int>(doc.features.size());
+  int bar = index < 0 || index >= n ? -1 : index;
+  if (bar == doc.rollback) return result(true, "");
+  checkpoint();
+  doc.rollback = bar;
   model_->rebuild();
-  return result(true, name + " deleted" + (extra ? " with " + std::to_string(extra) + " feature" + (extra > 1 ? "s" : "") + " built on it" : ""));
+  return result(true, bar < 0 ? "Rolled forward: every feature is built"
+                              : "Rolled back to before " + doc.features[static_cast<size_t>(bar)].name + ": new features go here");
+}
+
+Dictionary CadPart::reorder_feature(const String& id, int index) {
+  auto& doc = model_->document();
+  std::string sid = str(id);
+  int from = doc.indexOf(sid);
+  if (from < 0) return result(false, "that feature no longer exists");
+  if (index < 0 || index >= static_cast<int>(doc.features.size())) return result(false, "it cannot move further");
+  if (index == from) return result(true, "");
+  std::map<std::string, bool> before;
+  for (auto& st : model_->lastReport().features) before[st.featureId] = st.ok;
+  fpcad::PartDocument backup = doc;
+  std::string name = doc.features[static_cast<size_t>(from)].name;
+  doc.moveTo(sid, static_cast<size_t>(index));
+  fpcad::RebuildReport r = model_->rebuild();
+  for (auto& st : r.features) {
+    if (st.ok || !before[st.featureId]) continue;
+    const fpcad::Feature* broken = doc.find(st.featureId);
+    std::string why = (broken ? broken->name : std::string("a feature")) + " would fail: " + st.message;
+    doc = backup;
+    model_->rebuild();
+    return result(false, "Moving " + name + " there breaks the model. " + why);
+  }
+  undo_.push_back(backup);
+  if (undo_.size() > kUndoLimit) undo_.pop_front();
+  redo_.clear();
+  return result(true, name + " moved");
+}
+
+Dictionary CadPart::set_suppressed(const String& id, bool suppressed) {
+  fpcad::Feature* f = model_->document().find(str(id));
+  if (!f) return result(false, "that feature no longer exists");
+  if (f->suppressed == suppressed) return result(true, "");
+  checkpoint();
+  f->suppressed = suppressed;
+  std::string name = f->name;
+  fpcad::RebuildReport r = model_->rebuild();
+  std::string later;
+  for (auto& st : r.features)
+    if (!st.ok) {
+      const fpcad::Feature* g = model_->document().find(st.featureId);
+      later = (g ? g->name : std::string("a feature")) + " fails: " + st.message;
+      break;
+    }
+  Dictionary d = result(true, name + (suppressed ? " suppressed" : " back on") + (later.empty() ? "" : " · " + later));
+  return d;
 }
 
 String CadPart::duplicate_feature(const String& id, const Vector3& offset) {
@@ -336,7 +805,7 @@ String CadPart::duplicate_feature(const String& id, const Vector3& offset) {
   copy.name.clear();
   checkpoint();
   fpcad::PartDocument backup = model_->document();
-  std::string nid = model_->document().add(copy).id;
+  std::string nid = model_->document().insert(copy).id;
   model_->rebuild();
   Dictionary moved = move_feature(str(nid), offset);
   if (!bool(moved["ok"])) {
@@ -417,8 +886,13 @@ Array CadPart::get_features() const {
     d["params"] = jsonToVariant(f.params);
     d["ok"] = true;
     d["message"] = String();
+    d["rolled_back"] = false;
     for (auto& st : rep.features)
-      if (st.featureId == f.id) { d["ok"] = st.ok; d["message"] = str(st.message); }
+      if (st.featureId == f.id) {
+        d["ok"] = st.ok;
+        d["message"] = str(st.message);
+        d["rolled_back"] = st.rolledBack;
+      }
     out.push_back(d);
   }
   return out;
@@ -486,13 +960,24 @@ Dictionary CadPart::standard_plane(const String& name) const {
 }
 
 Dictionary CadPart::plane_from_hit(const Dictionary& hit) const {
-  std::string name;
-  auto p = model_->planeFromHit(dictToHit(hit), &name);
-  return p ? namedPlane(*p, name) : Dictionary();
+  try {
+    std::string name;
+    auto p = model_->planeFromHit(dictToHit(hit), &name);
+    return p ? namedPlane(*p, name) : Dictionary();
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
 }
 
 Dictionary CadPart::plane_basis(const Dictionary& plane) const {
-  fpcad::SketchPlane p = planeOf(plane);
+  fpcad::SketchPlane p;
+  try {
+    p = planeOf(plane);
+  } catch (const std::exception&) {
+    return Dictionary();
+  }
   Dictionary d;
   d["origin"] = toGodot(p.origin);
   d["normal"] = toGodot(p.normal);
@@ -502,12 +987,26 @@ Dictionary CadPart::plane_basis(const Dictionary& plane) const {
 }
 
 Vector3 CadPart::plane_point(const Dictionary& plane, const Vector2& uv) const {
-  return toGodot(planeOf(plane).toWorld(uv.x, uv.y));
+  try {
+    return toGodot(planeOf(plane).toWorld(uv.x, uv.y));
+  } catch (const std::exception& e) {
+    (void)e;
+    return Vector3();
+  } catch (...) {
+    return Vector3();
+  }
 }
 
 Vector2 CadPart::plane_uv(const Dictionary& plane, const Vector3& world) const {
-  auto uv = planeOf(plane).toPlane(toCad(world));
-  return Vector2(float(uv[0]), float(uv[1]));
+  try {
+    auto uv = planeOf(plane).toPlane(toCad(world));
+    return Vector2(float(uv[0]), float(uv[1]));
+  } catch (const std::exception& e) {
+    (void)e;
+    return Vector2();
+  } catch (...) {
+    return Vector2();
+  }
 }
 
 Dictionary CadPart::solve_sketch(const Dictionary& sketch) const {
@@ -521,6 +1020,11 @@ Dictionary CadPart::solve_sketch(const Dictionary& sketch) const {
     PackedStringArray conflicts;
     for (auto& c : r.conflicts) conflicts.push_back(str(c));
     d["conflicts"] = conflicts;
+    PackedStringArray freePts, freeEnts;
+    for (auto& id : r.freePoints) freePts.push_back(str(id));
+    for (auto& id : r.freeEntities) freeEnts.push_back(str(id));
+    d["free_points"] = freePts;
+    d["free_entities"] = freeEnts;
     d["sketch"] = jsonToVariant(s.toJson());
   } catch (const std::exception& e) {
     d["ok"] = false;
@@ -542,25 +1046,200 @@ PackedVector2Array CadPart::sketch_fill(const Dictionary& sketch) const {
   return out;
 }
 
+Array CadPart::sketch_curves(const Dictionary& sketch) const {
+  Array out;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    for (auto& c : fpcad::sketchCurves(s)) {
+      PackedVector2Array pts;
+      for (auto& q : c.points) pts.push_back(Vector2(float(q[0]), float(q[1])));
+      Dictionary d;
+      d["id"] = str(c.entityId);
+      d["construction"] = c.construction;
+      d["points"] = pts;
+      out.push_back(d);
+    }
+  } catch (const std::exception&) {
+  }
+  return out;
+}
+
+Array CadPart::project_face(int body, int face, const Dictionary& plane) const {
+  Array out;
+  try {
+    fpcad::SketchPlane pl = fpcad::SketchPlane::fromJson(variantToJson(plane));
+    for (auto& c : model_->projectFace(body, face, pl)) {
+      PackedVector2Array pts;
+      for (auto& q : c.pts) pts.push_back(Vector2(float(q[0]), float(q[1])));
+      Dictionary d;
+      d["kind"] = str(c.kind);
+      d["pts"] = pts;
+      d["r"] = c.r;
+      d["closed"] = c.closed;
+      out.push_back(d);
+    }
+  } catch (const std::exception&) {
+  }
+  return out;
+}
+
+Array CadPart::reference_views() const {
+  Array out;
+  for (auto& v : model_->referenceViews()) {
+    Dictionary d;
+    d["id"] = str(v.featureId);
+    d["name"] = str(v.name);
+    d["kind"] = str(v.kind);
+    d["ok"] = v.ok;
+    d["message"] = str(v.message);
+    d["origin"] = toGodot(v.origin);
+    d["xdir"] = toGodot(v.xdir);
+    d["ydir"] = toGodot(v.ydir);
+    d["normal"] = toGodot(v.normal);
+    d["size"] = v.size;
+    out.push_back(d);
+  }
+  return out;
+}
+
+Dictionary CadPart::reference_plane(const String& id) const {
+  Dictionary d;
+  auto p = model_->referencePlane(str(id));
+  if (!p) return d;
+  d["plane"] = jsonToVariant(p->toJson());
+  const fpcad::Feature* f = model_->document().find(str(id));
+  d["name"] = f ? str(f->name) : id;
+  return d;
+}
+
+PackedVector3Array CadPart::straight_edge_near(const Dictionary& hit, double tolerance) const {
+  try {
+    PackedVector3Array out;
+    if (auto e = model_->straightEdgeNear(dictToHit(hit), tolerance)) {
+      out.push_back(toGodot((*e)[0]));
+      out.push_back(toGodot((*e)[1]));
+    }
+    return out;
+  } catch (const std::exception& e) {
+    (void)e;
+    return PackedVector3Array();
+  } catch (...) {
+    return PackedVector3Array();
+  }
+}
+
+bool CadPart::is_cylinder(const Dictionary& hit) const { return model_->isCylinder(dictToHit(hit)); }
+
+Dictionary CadPart::bounding_box() const {
+  Dictionary d;
+  auto b = model_->boundingBox();
+  d["ok"] = b.has_value();
+  if (!b) return d;
+  Vector3 a = toGodot(b->min), c = toGodot(b->max);
+  d["min"] = Vector3(std::min(a.x, c.x), std::min(a.y, c.y), std::min(a.z, c.z));
+  d["max"] = Vector3(std::max(a.x, c.x), std::max(a.y, c.y), std::max(a.z, c.z));
+  d["size"] = Vector3(float(b->max[0] - b->min[0]), float(b->max[1] - b->min[1]), float(b->max[2] - b->min[2]));
+  return d;
+}
+
+Dictionary CadPart::face_ref(const Dictionary& hit) const {
+  try {
+    fpcad::PickHit h = dictToHit(hit);
+    Dictionary d;
+    d["probe"] = cad_point(toGodot(h.point));
+    Array n;
+    n.push_back(h.normal[0]);
+    n.push_back(h.normal[1]);
+    n.push_back(h.normal[2]);
+    d["normal"] = n;
+    d["feature"] = str(h.featureId);
+    std::string role = model_->faceRole(h.body, h.face);
+    if (!role.empty()) d["role"] = str(role);
+    return d;
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
+}
+
+// The edge nearest a point (Godot space), for fillet / chamfer picking: its middle in CAD
+// coordinates (what a pick stores), points along it (Godot space) for drawing, length, radius.
+Dictionary CadPart::edge_near(const Vector3& point, double tolerance) const {
+  Dictionary d;
+  auto e = model_->edgeNear(toCad(point), tolerance);
+  d["ok"] = e.has_value();
+  if (!e) return d;
+  Array mid;
+  for (double v : e->mid) mid.push_back(v);
+  d["probe"] = mid;
+  PackedVector3Array pts;
+  for (auto& q : e->points) pts.push_back(toGodot(q));
+  d["points"] = pts;
+  d["length"] = e->length;
+  d["radius"] = e->radius;
+  d["body"] = e->body;
+  return d;
+}
+
+Array CadPart::cad_point(const Vector3& p) const {
+  fpcad::Vec3 c = toCad(p);
+  Array a;
+  a.push_back(c[0]);
+  a.push_back(c[1]);
+  a.push_back(c[2]);
+  return a;
+}
+
+Dictionary CadPart::convert_face(const Dictionary& sketch, int body, int face, const Vector3& probe) {
+  Dictionary d;
+  d["sketch"] = sketch;
+  try {
+    fpcad::Sketch s = fpcad::Sketch::fromJson(variantToJson(sketch));
+    std::string message;
+    bool ok = model_->convertFace(s, body, face, toCad(probe), &message);
+    d["ok"] = ok;
+    d["message"] = str(message);
+    if (ok) d["sketch"] = jsonToVariant(s.toJson());
+  } catch (const std::exception& e) {
+    d["ok"] = false;
+    d["message"] = str(e.what());
+  }
+  return d;
+}
+
 String CadPart::add_sketch(const Dictionary& sketch) {
-  fpcad::Feature f;
-  f.type = "sketch";
-  f.params = variantToJson(sketch);
-  checkpoint();
-  fpcad::PartDocument backup = model_->document();
-  std::string id = model_->document().add(f).id;
-  Dictionary r = commitOrRevert(backup, "sketch added");
-  return bool(r["ok"]) ? str(id) : String();
+  try {
+    fpcad::Feature f;
+    f.type = "sketch";
+    f.params = variantToJson(sketch);
+    checkpoint();
+    fpcad::PartDocument backup = model_->document();
+    std::string id = model_->document().insert(f).id;
+    Dictionary r = commitOrRevert(backup, "sketch added");
+    return bool(r["ok"]) ? str(id) : String();
+  } catch (const std::exception& e) {
+    (void)e;
+    return String();
+  } catch (...) {
+    return String();
+  }
 }
 
 Dictionary CadPart::set_sketch(const String& id, const Dictionary& sketch) {
-  fpcad::Feature* f = model_->document().find(str(id));
-  if (!f || f->type != "sketch") return result(false, "that sketch no longer exists");
-  checkpoint();
-  fpcad::PartDocument backup = model_->document();
-  std::string name = f->name;
-  f->params = variantToJson(sketch);
-  return commitOrRevert(backup, name + " updated");
+  try {
+    fpcad::Feature* f = model_->document().find(str(id));
+    if (!f || f->type != "sketch") return result(false, "that sketch no longer exists");
+    checkpoint();
+    fpcad::PartDocument backup = model_->document();
+    std::string name = f->name;
+    f->params = variantToJson(sketch);
+    return commitOrRevert(backup, name + " updated");
+  } catch (const std::exception& e) {
+    return result(false, std::string("could not do that: ") + e.what());
+  } catch (...) {
+    return result(false, "could not do that: the geometry kernel failed");
+  }
 }
 
 Dictionary CadPart::get_sketch(const String& id) const {
@@ -637,7 +1316,7 @@ Dictionary CadPart::insert_feature(const String& type, const String& op, const D
     return result(false, e.what());
   }
   f.params = variantToJson(params);
-  std::string id = model_->document().add(f).id;
+  std::string id = model_->document().insert(f).id;
   Dictionary d = featureResult(*model_, id);
   if (const fpcad::Feature* added = model_->document().find(id)) d["name"] = str(added->name);
   return d;
@@ -738,6 +1417,19 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("get_part_name"), &CadPart::get_part_name);
   ClassDB::bind_method(D_METHOD("get_units"), &CadPart::get_units);
   ClassDB::bind_method(D_METHOD("get_file_id"), &CadPart::get_file_id);
+  ClassDB::bind_method(D_METHOD("get_material"), &CadPart::get_material);
+  ClassDB::bind_method(D_METHOD("get_density"), &CadPart::get_density);
+  ClassDB::bind_method(D_METHOD("get_mass_units"), &CadPart::get_mass_units);
+  ClassDB::bind_method(D_METHOD("import_step", "path"), &CadPart::import_step);
+  ClassDB::bind_method(D_METHOD("edge_near", "point", "tolerance"), &CadPart::edge_near);
+  ClassDB::bind_method(D_METHOD("set_part_name", "name"), &CadPart::set_part_name);
+  ClassDB::bind_method(D_METHOD("native_library_dir"), &CadPart::native_library_dir);
+  ClassDB::bind_method(D_METHOD("material_library"), &CadPart::material_library);
+  ClassDB::bind_method(D_METHOD("material_info"), &CadPart::material_info);
+  ClassDB::bind_method(D_METHOD("set_material", "name", "density"), &CadPart::set_material, DEFVAL(0.0));
+  ClassDB::bind_method(D_METHOD("set_units", "length", "mass"), &CadPart::set_units);
+  ClassDB::bind_method(D_METHOD("get_boards"), &CadPart::get_boards);
+  ClassDB::bind_method(D_METHOD("set_boards", "boards"), &CadPart::set_boards);
   ClassDB::bind_method(D_METHOD("rebuild"), &CadPart::rebuild);
   ClassDB::bind_method(D_METHOD("body_count"), &CadPart::body_count);
   ClassDB::bind_method(D_METHOD("build_mesh", "body", "deflection"), &CadPart::build_mesh);
@@ -750,6 +1442,20 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("add_primitive", "type", "base", "dims", "op"), &CadPart::add_primitive);
   ClassDB::bind_method(D_METHOD("move_feature", "id", "delta"), &CadPart::move_feature);
   ClassDB::bind_method(D_METHOD("delete_feature", "id"), &CadPart::delete_feature);
+  ClassDB::bind_method(D_METHOD("get_rollback"), &CadPart::get_rollback);
+  ClassDB::bind_method(D_METHOD("drawing_sheet", "options"), &CadPart::drawing_sheet);
+  ClassDB::bind_method(D_METHOD("export_drawing", "path", "options"), &CadPart::export_drawing);
+  ClassDB::bind_method(D_METHOD("export_sketch_flat", "sketch", "path"), &CadPart::export_sketch_flat);
+  ClassDB::bind_method(D_METHOD("export_face_flat", "hit", "path"), &CadPart::export_face_flat);
+  ClassDB::bind_method(D_METHOD("save_drawing", "path", "part_path", "options"), &CadPart::save_drawing);
+  ClassDB::bind_method(D_METHOD("load_drawing", "path"), &CadPart::load_drawing);
+  ClassDB::bind_method(D_METHOD("set_section", "plane"), &CadPart::set_section);
+  ClassDB::bind_method(D_METHOD("has_section"), &CadPart::has_section);
+  ClassDB::bind_method(D_METHOD("face_measure", "hit"), &CadPart::face_measure);
+  ClassDB::bind_method(D_METHOD("interference"), &CadPart::interference);
+  ClassDB::bind_method(D_METHOD("set_rollback", "index"), &CadPart::set_rollback);
+  ClassDB::bind_method(D_METHOD("reorder_feature", "id", "index"), &CadPart::reorder_feature);
+  ClassDB::bind_method(D_METHOD("set_suppressed", "id", "suppressed"), &CadPart::set_suppressed);
   ClassDB::bind_method(D_METHOD("duplicate_feature", "id", "offset"), &CadPart::duplicate_feature);
   ClassDB::bind_method(D_METHOD("feature_dims", "id"), &CadPart::feature_dims);
   ClassDB::bind_method(D_METHOD("set_param", "id", "key", "value"), &CadPart::set_param);
@@ -765,6 +1471,16 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("plane_uv", "plane", "world"), &CadPart::plane_uv);
   ClassDB::bind_method(D_METHOD("solve_sketch", "sketch"), &CadPart::solve_sketch);
   ClassDB::bind_method(D_METHOD("sketch_fill", "sketch"), &CadPart::sketch_fill);
+  ClassDB::bind_method(D_METHOD("sketch_curves", "sketch"), &CadPart::sketch_curves);
+  ClassDB::bind_method(D_METHOD("project_face", "body", "face", "plane"), &CadPart::project_face);
+  ClassDB::bind_method(D_METHOD("convert_face", "sketch", "body", "face", "probe"), &CadPart::convert_face);
+  ClassDB::bind_method(D_METHOD("reference_views"), &CadPart::reference_views);
+  ClassDB::bind_method(D_METHOD("reference_plane", "id"), &CadPart::reference_plane);
+  ClassDB::bind_method(D_METHOD("straight_edge_near", "hit", "tolerance"), &CadPart::straight_edge_near);
+  ClassDB::bind_method(D_METHOD("is_cylinder", "hit"), &CadPart::is_cylinder);
+  ClassDB::bind_method(D_METHOD("bounding_box"), &CadPart::bounding_box);
+  ClassDB::bind_method(D_METHOD("face_ref", "hit"), &CadPart::face_ref);
+  ClassDB::bind_method(D_METHOD("cad_point", "p"), &CadPart::cad_point);
   ClassDB::bind_method(D_METHOD("add_sketch", "sketch"), &CadPart::add_sketch);
   ClassDB::bind_method(D_METHOD("set_sketch", "id", "sketch"), &CadPart::set_sketch);
   ClassDB::bind_method(D_METHOD("get_sketch", "id"), &CadPart::get_sketch);
