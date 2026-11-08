@@ -20,17 +20,17 @@ const Units := preload("res://scripts/units.gd")
 const WHEEL := [
 	"select",
 	"sketch",
-	["Solids", "Turn a sketch into a solid: extrude, revolve, sweep, loft", ["extrude", "revolve", "sweep", "loft"]],
+	["Solids", "Make solids: extrude, revolve, sweep and loft a sketch, or place a box, cylinder or sphere",
+		["extrude", "revolve", "sweep", "loft", "box", "cylinder", "sphere"]],
 	["Finish", "Round, bevel, drill, hollow and draft: fillet, chamfer, hole, shell, draft", ["fillet", "chamfer", "hole", "shell", "draft"]],
 	["Repeat", "Copy features in rows, around an axis, or mirrored", ["linear_pattern", "circular_pattern", "mirror"]],
-	["Bodies", "Whole bodies: combine, subtract, split, delete", ["combine", "split", "delete_body"]],
-	["Modify", "Change what is there: push/pull faces, move, delete", ["push", "move", "delete"]],
-	["Primitives", "Place ready-made shapes", ["box", "cylinder", "sphere"]],
+	["Modify", "Push/pull faces, move, delete; combine, split and delete whole bodies",
+		["push", "move", "delete", "combine", "split", "delete_body"]],
 	["Reference", "Planes, axes, points and coordinate systems to build from", ["ref_plane", "ref_axis", "ref_point", "ref_csys"]],
 	["Measure", "Distances, angles, areas, the bounding box, mass properties, section view, interference",
 		["measure", "bbox", "mass", "section", "interference"]],
 	["Assembly", "Place saved parts, mate them, explode the view, list the parts", ["insert_part", "mate", "explode", "bom"]],
-	["Boards", "Whiteboards in the room: part properties, your notes; carry, turn and resize them",
+	["Boards", "Whiteboards in the room: properties, notes, video, the drawing; carry, turn and resize them",
 		["board_props", "board_notes", "board_video", "board_drawing", "board_arrange"]],
 ]
 const TOOLS := [
@@ -133,17 +133,28 @@ func tool() -> Dictionary:
 
 
 ## The wheel's tree for tool_wheel.gd; tool values are TOOLS indices.
+## Only the tools that work in the open document are shown: part tools in a part, assembly tools
+## in an assembly. A group left with one tool shows that tool on the inner ring.
 func wheel_tree() -> Array:
 	var out := []
 	for entry in WHEEL:
 		if entry is String:
-			out.append(_wheel_node(entry))
-		else:
-			var kids := []
-			for id in entry[2]:
+			if _usable(entry):
+				out.append(_wheel_node(entry))
+			continue
+		var kids := []
+		for id in entry[2]:
+			if _usable(id):
 				kids.append(_wheel_node(id))
+		if kids.size() == 1:
+			out.append(kids[0])
+		elif kids.size() > 1:
 			out.append({name = entry[0], desc = entry[1], children = kids})
 	return out
+
+
+func _usable(id: String) -> bool:
+	return not (id in (PART_ONLY if is_assembly else ASSEMBLY_ONLY))
 
 
 func _wheel_node(id: String) -> Dictionary:

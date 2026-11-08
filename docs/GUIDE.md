@@ -20,7 +20,9 @@ the full controls map, and play **Training** from the title screen to learn the 
 | Controls map | View | F1 |
 | Pause menu (save, files, units) | Menu | Esc |
 
-The aim label under the crosshair says what a tool would act on before you press anything.
+The aim label under the crosshair says what a tool would act on before you press anything. The
+wheel only shows the tools that work in what you have open: part tools in a part, assembly tools in
+an assembly.
 
 ## 1. Start a part
 
@@ -49,8 +51,8 @@ you aimed at; one way, the other way, both sides, or two different depths), **Re
 **Sweep** and **Loft**. The feature panel previews live as you change values; the result can add
 material, cut it away, or start a new body.
 
-**Primitives** places boxes, cylinders and spheres directly. **Push / Pull** grows or shrinks the
-face you aim at by snap steps. **Move** carries a feature; **Delete** removes one.
+Solids also places boxes, cylinders and spheres directly. In **Modify**, **Push / Pull** grows or
+shrinks the face you aim at by snap steps, **Move** carries a feature and **Delete** removes one.
 
 ## 4. Finish the part
 
@@ -71,7 +73,7 @@ The **Repeat** group: pick features with the primary action, then press the seco
 **Circular pattern** (aim at a round face or an axis), or a **Mirror** (aim at the face or plane
 to mirror in; with no features picked, the whole part is mirrored).
 
-The **Bodies** group combines, subtracts, intersects, splits and deletes whole bodies.
+**Modify** also combines, subtracts, intersects, splits and deletes whole bodies.
 
 ## 6. Control the history
 

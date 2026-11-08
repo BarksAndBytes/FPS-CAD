@@ -273,12 +273,18 @@ aims at in the room, then open the feature panel on the sizes with a live previe
 - **Draft** (Finish group): pick the faces to draft, then aim at the flat face they are drafted
   from (the neutral plane) and press the secondary action. The faces lean in as they go away
   from the neutral face, like a part drawn from a mould; the angle steps by 1°.
-- **Bodies** group: **Combine bodies** picks two or more bodies (the first is kept) and joins
+- **Body tools** (in the Modify group): **Combine bodies** picks two or more bodies (the first is kept) and joins
   them, subtracts the others from it, or keeps only the overlap, using the others up or keeping
   them. **Split body** picks a body, then splits it in two with the face or plane aimed at (or a
   standard or reference plane). **Delete body** removes the body aimed at; the secondary action
   undoes. Bodies are remembered by a face on them, so the feature follows edits upstream.
-- The wheel's inner ring grows with the number of groups so its buttons never overlap.
+- The wheel's inner ring grows with the number of groups so its buttons never overlap. Since the
+  UI clean-up it shows only the tools that work in the open document (a part: nine entries, one per
+  number key; an assembly: Select, Move, Measure, Assembly); primitives sit in Solids and the
+  body tools in Modify. Labels wrap only between words at one text size for the whole ring, the
+  number keys show only with a keyboard, branches fan out just wide enough not to overlap, and on
+  a touch screen a tap outside the buttons steps back. The crosshair and aim label hide while the
+  wheel is open.
 
 ## Controlling the history (0.6)
 

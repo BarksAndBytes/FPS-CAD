@@ -329,7 +329,7 @@ func _run() -> void:
 		if main.wheel.tree[i].name == "Solids":
 			solids = i
 	main.wheel._set_hover(solids)
-	_check(solids >= 0 and main.wheel._kids.size() == 4, "aiming at Solids shows its four tools branching out")
+	_check(solids >= 0 and main.wheel._kids.size() == 7, "aiming at Solids shows its seven tools branching out (extrude to loft, then the primitives)")
 	_check(main.wheel.commit() == load("res://scripts/tool_wheel.gd").ENTERED and main.wheel.visible and main.wheel.group == solids,
 		"choosing a group opens its branch and keeps the wheel open")
 	main.wheel.aim(Vector2.from_angle(main.wheel._kid_angle(solids, 1)))
@@ -1246,7 +1246,10 @@ func _repeat(main: Node) -> void:
 	fresh.call()
 	await _frames(2)
 	var groups: Array = tools.wheel_tree().map(func(n): return n.name)
-	_check("Repeat" in groups and "Bodies" in groups, "the tool wheel has Repeat and Bodies groups")
+	_check("Repeat" in groups and not "Bodies" in groups and not "Assembly" in groups, "the part wheel has Repeat; body tools sit in Modify; no assembly tools (%s)" % ", ".join(groups))
+	var modify: Array = tools.wheel_tree().filter(func(n): return n.name == "Modify")
+	_check(not modify.is_empty() and modify[0].children.size() == 6, "Modify holds push/pull, move, delete and the body tools")
+	_check(tools.wheel_tree().size() <= 9, "nine entries or fewer on the part wheel, one per number key")
 	# A linear pattern of a boss: four along +X, 200 mm apart.
 	main.doc.add_primitive("box", Vector3(-0.4, 0.5, 0.0), {w = 0.1, d = 0.1, h = 0.1}, "add")
 	main._on_model_changed()

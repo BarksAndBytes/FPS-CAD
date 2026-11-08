@@ -979,6 +979,7 @@ func _process(dt: float) -> void:
 		return
 	var playing: bool = not modal_open()
 	player.input_enabled = playing and not wheel.visible
+	hud.set_crosshair_hidden(wheel.visible)
 	player.limited = dialog.visible
 	_aim = _aim_hit()
 	if playing and not dialog.visible:
@@ -1044,11 +1045,17 @@ func _wheel_current() -> int:
 func _open_wheel(from_button: bool, group := -1) -> void:
 	_wheel_from_button = from_button
 	var title := "SKETCH TOOLS" if sketcher.active else "TOOLS"
-	var how := "aim, then %s" % Actions.prompt(&"ui_accept")
-	if not from_button:
-		how = ("right stick: group · left stick: tool · let go to pick" if Actions.last_device == "controller"
-			else "mouse: group, then further out: tool · click or let go to pick")
-	wheel.setup(_wheel_tree(), title, how + "   ·   %s back" % Actions.prompt(&"ui_cancel"))
+	var how := ""
+	match Actions.last_device:
+		"touch":
+			how = "tap a group, then a tool   ·   tap outside to go back"
+		"controller":
+			how = ("right stick: group · left stick: tool · let go to pick" if not from_button
+				else "aim, then A") + "   ·   B back"
+		_:
+			how = ("mouse: group, then further out: tool · click or let go to pick" if not from_button
+				else "point, then click or Enter") + "   ·   Esc back"
+	wheel.setup(_wheel_tree(), title, how)
 	wheel.open(_wheel_current())
 	if group >= 0:
 		wheel.enter(group)

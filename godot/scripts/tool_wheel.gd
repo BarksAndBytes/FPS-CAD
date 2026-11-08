@@ -37,6 +37,8 @@ var _detail := Label.new()
 var _page := Label.new()
 var _r := RADIUS
 var _r2 := RADIUS + 100.0
+var _spread := SPREAD  # radians between neighbouring tools on a branch, just enough not to overlap
+var _slot_size := SLOT
 
 
 func _ready() -> void:
@@ -73,10 +75,13 @@ func setup(nodes: Array, title := "", hint := "") -> void:
 	for b in _slots:
 		b.queue_free()
 	_slots.clear()
+	# Under the name: an arrow on groups, and the number key with a keyboard.
+	var keys: bool = Actions.last_device == "keyboard"
 	for i in tree.size():
 		var node: Dictionary = tree[i]
 		var b := _button(SLOT)
-		b.text = "%s%s\n%d" % [node.name, "  ›" if node.has("children") else "", i + 1]
+		var under := ("›" if node.has("children") else "") + ("  %d" % (i + 1) if keys and i < 9 else "")
+		b.text = node.name + ("\n" + under.strip_edges() if under.strip_edges() != "" else "")
 		var idx := i
 		b.pressed.connect(func(): _choose_slot(idx))
 		b.mouse_entered.connect(_hover_slot.bind(idx))
@@ -88,9 +93,29 @@ func _button(d: float) -> Button:
 	b.custom_minimum_size = Vector2(d, d)
 	b.size = Vector2(d, d)
 	b.focus_mode = Control.FOCUS_NONE
-	b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	b.autowrap_mode = TextServer.AUTOWRAP_WORD  # between words only; _fit_text sizes the font
+	b.clip_text = true  # a label never makes its button grow over its neighbours
 	add_child(b)
+	# Thin inner margins: the buttons are small, so the names get the room.
+	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+		var box: StyleBox = b.get_theme_stylebox(state)
+		if box != null:
+			box = box.duplicate()
+			box.content_margin_left = 4.0
+			box.content_margin_right = 4.0
+			box.content_margin_top = 3.0
+			box.content_margin_bottom = 3.0
+			b.add_theme_stylebox_override(state, box)
 	return b
+
+
+## A tap or click on the dimmed background (not on a button) steps back: from a branch to the
+## groups, from the groups closed.
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT \
+			and Actions.last_device == "touch":
+		back()
+		accept_event()
 
 
 ## Opens at the inner ring, highlighting the group that holds the tool in use.
@@ -237,7 +262,7 @@ func _slot_angle(i: int) -> float:
 
 func _kid_angle(g: int, k: int) -> float:
 	var n: int = tree[g].children.size()
-	return _slot_angle(g) + (k - (n - 1) / 2.0) * SPREAD
+	return _slot_angle(g) + (k - (n - 1) / 2.0) * _spread
 
 
 func _layout() -> void:
@@ -252,16 +277,27 @@ func _layout() -> void:
 	_r = clampf(half - 12.0 - CHILD / 2.0 - (SLOT + CHILD) / 2.0 - 14.0, 84.0, want)
 	var slot := minf(SLOT, 2.0 * _r * gap - 8.0)
 	_r2 = _r + (slot + CHILD) / 2.0 + 14.0
+	_slot_size = slot
+	_spread = minf(SPREAD, 2.0 * asin(clampf((CHILD + 16.0) / (2.0 * _r2), 0.0, 1.0)))
 	for i in _slots.size():
 		var a := _slot_angle(i)
 		_slots[i].custom_minimum_size = Vector2(slot, slot)
 		_slots[i].size = Vector2(slot, slot)
 		_slots[i].position = c + Vector2(cos(a), sin(a)) * _r - Vector2(slot, slot) / 2.0
+	# One text size for the whole ring: the largest at which every name fits its button.
+	var fit := 17
+	for b in _slots:
+		fit = mini(fit, _fit_size(b, slot, 17))
+	for b in _slots:
+		b.add_theme_font_size_override("font_size", fit)
 	_title.position = c + Vector2(-90, -30)
 	_title.size = Vector2(180, 28)
 	_detail.position = c + Vector2(-78, 0)
 	_detail.size = Vector2(156, 40)
-	_back.position = c + Vector2(-48, 36)
+	_detail.clip_text = true
+	_detail.max_lines_visible = 2
+	# Back sits low in the middle, clear of the two lines of detail above it.
+	_back.position = c + Vector2(-48, clampf(_r - _slot_size / 2.0 - 40.0, 40.0, 70.0))
 	_page.position = c + Vector2(-220, -_r2 - CHILD * 0.5 - 30)
 	_page.size = Vector2(440, 24)
 
@@ -281,7 +317,7 @@ func _show_branch(g: int) -> void:
 	for k in kids.size():
 		var b := _button(CHILD)
 		b.text = kids[k].name
-		b.add_theme_font_size_override("font_size", 15)
+		_fit_text(b, CHILD, 15)
 		var a := _kid_angle(g, k)
 		b.position = c + Vector2(cos(a), sin(a)) * _r2 - Vector2(CHILD, CHILD) / 2.0
 		var kk := k
@@ -289,6 +325,41 @@ func _show_branch(g: int) -> void:
 		b.pressed.connect(func(): _choose_kid(gg, kk))
 		b.mouse_entered.connect(_hover_kid.bind(gg, kk))
 		_kids.append(b)
+
+
+## The largest font size (at most top) at which every word of the button's text fits its width,
+## so names wrap between words and never inside one.
+static func _fit_text(b: Button, width: float, top: int) -> void:
+	b.add_theme_font_size_override("font_size", _fit_size(b, width, top))
+
+
+static func _fit_size(b: Button, width: float, top: int) -> int:
+	var font: Font = b.get_theme_font("font")
+	var box: StyleBox = b.get_theme_stylebox("normal")
+	var room := width - 6.0 - (box.get_margin(SIDE_LEFT) + box.get_margin(SIDE_RIGHT) if box != null else 16.0)
+	var tall := width - 4.0 - (box.get_margin(SIDE_TOP) + box.get_margin(SIDE_BOTTOM) if box != null else 12.0)
+	var size := top
+	while size > 9:
+		# Lay the words out greedily at this size: every word must fit, and so must the lines.
+		var fits := true
+		var lines := 0
+		for para in b.text.split("\n"):
+			var line_w := 0.0
+			lines += 1
+			for w in para.split(" ", false):
+				var ww := font.get_string_size(w, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+				var sp := font.get_string_size(" ", HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+				if ww > room:
+					fits = false
+				if line_w > 0.0 and line_w + sp + ww > room:
+					lines += 1
+					line_w = ww
+				else:
+					line_w += (sp if line_w > 0.0 else 0.0) + ww
+		if fits and lines * font.get_height(size) <= tall:
+			break
+		size -= 1
+	return size
 
 
 func _hover_slot(i: int) -> void:

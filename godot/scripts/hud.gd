@@ -213,6 +213,12 @@ func length(v: float) -> String:
 	return "%.2f mm" % (v * 1000.0)
 
 
+## The crosshair and the aim label hide while the tool wheel is open, so its centre reads clearly.
+func set_crosshair_hidden(hidden: bool) -> void:
+	_cross.modulate.a = 0.0 if hidden else 1.0
+	_aim.modulate.a = 0.0 if hidden else 1.0
+
+
 func toast(msg: String) -> void:
 	if board != null and board.active:
 		board.post(msg)

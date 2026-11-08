@@ -79,10 +79,10 @@ any way you like, in any orientation, and it passes when the geometry matches. P
 | Y (sketching) | I | Sketch view ↔ free look (sketches open square to the plane, X right, Y up) |
 
 The tool wheel groups tools: **Select**, **Sketch**, **Solids** (Extrude, Revolve, Sweep,
-Loft), **Finish** (Fillet and Chamfer on picked edges, Hole: simple, counterbore, countersink
-or tapped, Shell, Draft), **Repeat** (Linear pattern, Circular pattern, Mirror), **Bodies**
-(Combine, Split, Delete body), **Assembly** (Insert part, Mate, Exploded view, Bill of materials), **Modify** (Push/Pull, Move, Delete), **Primitives** (Box, Cylinder, Sphere),
-**Reference** (Plane, Axis, Point, Coordinate system), **Measure** (Measure: distance, face or edge, angle; Bounding box, Mass properties, Section view, Interference) and **Boards** (Properties board, Notes board, Video board, Drawing board, Arrange boards: whiteboards you set up in the room, carry, turn and resize; while carrying one the D-pad ← / → or mouse wheel turns it and ↑ / ↓ or = / − resizes it). Aiming at a group shows its tools branching out from it; let go (or press A) to open
+Loft, Box, Cylinder, Sphere), **Finish** (Fillet and Chamfer on picked edges, Hole: simple,
+counterbore, countersink or tapped, Shell, Draft), **Repeat** (Linear pattern, Circular pattern,
+Mirror), **Modify** (Push/Pull, Move, Delete, Combine bodies, Split body, Delete body),
+**Reference** (Plane, Axis, Point, Coordinate system), **Measure** (Measure: distance, face or edge, angle; Bounding box, Mass properties, Section view, Interference) and **Boards** (Properties board, Notes board, Video board, Drawing board, Arrange boards: whiteboards you set up in the room, carry, turn and resize; while carrying one the D-pad ← / → or mouse wheel turns it and ↑ / ↓ or = / − resizes it). The wheel shows only what works in the open document: in an assembly it holds Select, Move, Measure and **Assembly** (Insert part, Mate, Exploded view, Bill of materials). Names always fit their buttons (one text size for the ring), number keys show only with a keyboard, and on a touch screen a tap outside the buttons steps back. Aiming at a group shows its tools branching out from it; let go (or press A) to open
 the branch, then aim and press A / RT to pick. B steps back. In sketch mode the wheel holds the sketch tools: Lines (line, rectangles, polygon, slot, point), Curves (circles, arcs, tangent arc, ellipse, spline), Modify (trim, extend, fillet, chamfer, offset, convert edges), Copy (move, copy, rotate, scale, mirror, patterns), Constrain, Text, Construction and Delete. Modify also has split. Messages (objectives, challenge cards, notices, the sketch status and the readout) are written on a whiteboard in the room rather than over the view; they come back on screen only while the board is out of sight. The full sketch and feature-panel controls are
 in [docs/SKETCHING.md](docs/SKETCHING.md) and on the controls map's fourth page.
 
