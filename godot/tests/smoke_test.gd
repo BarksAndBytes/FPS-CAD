@@ -1877,6 +1877,7 @@ func _video_board(main: Node) -> void:
 		WB.forget_video(copied_to)
 	else:
 		print("SKIP FFmpeg conversion: no ffmpeg on this machine")
+	await _phone_cast(main, vb)
 	vb.play_url("ftp://example.com/abc.ogv")
 	_check(vb.video_state == "error" and String(vb.text_lines()[2]).contains("web link"), "a link that isn't a web link gets the error screen at once")
 	vb.set_video("https://example.com/tiny.ogv")
@@ -1884,6 +1885,54 @@ func _video_board(main: Node) -> void:
 	var saved: Array = main.doc.get_boards().filter(func(d): return d.kind == "video")
 	_check(not saved.is_empty() and saved[-1].url == "https://example.com/tiny.ogv" and vb.video_state == "ready", "the link is saved with the part")
 	main.boards.remove(vb)
+
+
+## Phones cast to video boards over DLNA (board_cast.gd and the ProjectedPlayer addon): the board
+## gets the phone's link, plays it with the app's title, and the app's pause, volume and stop work.
+func _phone_cast(main: Node, vb: Node3D) -> void:
+	var WB = load("res://scripts/whiteboard.gd")
+	var cast: Node = vb.get_node_or_null("PhoneCast")
+	_check(cast != null and cast.get_port() > 0 and String(vb.cast_name).begins_with("FPS-CAD board ") and cast.friendly_name == vb.cast_name
+		and main.video_menu.cast_note(vb.cast_name).contains(vb.cast_name), "a video board is a TV phones can cast to, named in its video menu")
+	if cast == null:
+		return
+	var req := HTTPRequest.new()
+	main.add_child(req)
+	req.request("http://127.0.0.1:%d/dlna/device.xml" % cast.get_port())
+	var got: Array = await req.request_completed
+	req.queue_free()
+	_check(int(got[1]) == 200 and (got[3] as PackedByteArray).get_string_from_utf8().contains("<friendlyName>%s</friendlyName>" % vb.cast_name),
+		"its DLNA description answers over the network")
+	# A link already converted once plays at once, so no phone is needed here.
+	var link := "http://192.0.2.9:5000/phone/clip-%d.mp4" % Time.get_ticks_usec()
+	DirAccess.make_dir_recursive_absolute(WB.VIDEO_DIR)
+	var kept := FileAccess.open(WB.cached_path(link), FileAccess.WRITE)
+	kept.store_buffer(FileAccess.get_file_as_bytes("res://tests/tiny.ogv"))
+	kept.close()
+	var didl := '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/"><item><dc:title>Phone clip</dc:title></item></DIDL-Lite>'
+	cast._run("AVTransport", "SetAVTransportURI", {InstanceID = "0", CurrentURI = link, CurrentURIMetaData = didl})
+	cast._run("AVTransport", "Play", {InstanceID = "0", Speed = "1"})
+	await _frames(5)
+	_check(vb.video_state == "playing" and vb.video_url == link and vb.video_title == "Phone clip" and cast.get_transport_state() == "PLAYING",
+		"a phone's cast plays on the board with the app's title (%s, %s)" % [vb.video_state, cast.get_transport_state()])
+	var saved: Array = main.doc.get_boards().filter(func(d): return d.kind == "video" and d.get("url", "") == link)
+	_check(not saved.is_empty(), "the cast link is saved with the part")
+	cast._run("AVTransport", "Pause", {InstanceID = "0"})
+	_check(vb.video_state == "paused" and cast.get_transport_state() == "PAUSED_PLAYBACK", "the phone pauses it")
+	cast._run("RenderingControl", "SetVolume", {InstanceID = "0", Channel = "Master", DesiredVolume = "25"})
+	_check(is_equal_approx(vb.cast_volume, 0.25), "and sets its volume")
+	cast._run("RenderingControl", "SetVolume", {InstanceID = "0", Channel = "Master", DesiredVolume = "100"})
+	cast._run("AVTransport", "Stop", {InstanceID = "0"})
+	_check(vb.video_state == "ready" and cast.get_transport_state() == "STOPPED", "and stops it")
+	WB.forget_video(WB.cached_path(link))
+	cast._run("AVTransport", "SetAVTransportURI", {InstanceID = "0", CurrentURI = "http://127.0.0.1:9/nothing.mp4", CurrentURIMetaData = ""})
+	cast._run("AVTransport", "Play", {InstanceID = "0", Speed = "1"})
+	for i in 300:
+		await process_frame
+		if cast.get_last_error() != "":
+			break
+	_check(vb.video_state == "error" and cast.get_transport_state() == "STOPPED" and cast._status == "ERROR_OCCURRED" and cast.get_last_error() != "",
+		"a cast that can't be downloaded tells the phone why (%s)" % cast.get_last_error())
 
 
 ## Units and material from the pause menu: sizes stay put, mass and looks follow the material.

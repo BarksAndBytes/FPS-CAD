@@ -13,6 +13,8 @@ extends Node3D
 ## board for now.
 
 const Whiteboard := preload("res://scripts/whiteboard.gd")
+const BoardCast := preload("res://scripts/board_cast.gd")
+const DlnaRenderer := preload("res://addons/projected_player/dlna/dlna_renderer.gd")
 const Units := preload("res://scripts/units.gd")
 
 const TURN_STEP := PI / 12.0   # 15° per tap
@@ -101,9 +103,41 @@ func add(kind: String, feet: Vector3, yaw: float, s: float, id := "") -> Node3D:
 	elif kind == "video":
 		b.set_video("")
 	extra.append(b)
+	if kind == "video":
+		_let_phones_cast(b)
 	if kind in ["properties", "drawing"]:
 		refresh_properties()
 	return b
+
+
+## Makes video board b a TV that phones on the same network can cast to (board_cast.gd), listed
+## as "FPS-CAD board N". Its identity comes from this device and the board's id, so phones
+## recognise it from one session to the next.
+func _let_phones_cast(b: Node3D) -> void:
+	if OS.has_feature("web"):
+		return
+	var taken := {}
+	for other in extra:
+		taken[other.cast_name] = true
+	var n := 1
+	while taken.has("FPS-CAD board %d" % n):
+		n += 1
+	var screen: Node3D = BoardCast.new()
+	screen.name = "PhoneCastScreen"
+	screen.board = b
+	screen.on_play = func() -> void: save()
+	b.add_child(screen)
+	var renderer: Node = DlnaRenderer.new()
+	renderer.name = "PhoneCast"
+	renderer.screen = screen
+	renderer.friendly_name = "FPS-CAD board %d" % n
+	renderer.uuid = DlnaRenderer.derived_uuid(OS.get_unique_id() + "|fps-cad|" + b.board_id)
+	renderer.cache_dir = Whiteboard.VIDEO_DIR  # unused: the board converts
+	renderer.cast_received.connect(func(_uri: String, title: String) -> void:
+		screen.title = title
+		game.hud.toast("A phone is casting to %s%s" % [renderer.friendly_name, ": " + title if title != "" else ""]))
+	b.add_child(renderer)
+	b.cast_name = renderer.friendly_name
 
 
 func remove(b: Node3D) -> void:

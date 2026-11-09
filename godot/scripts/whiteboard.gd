@@ -68,6 +68,8 @@ var _sheet_canvas: Control = null
 var video_state := ""      # "", "ready", "loading", "copying", "converting", "playing", "paused" or "error"
 var video_message := ""    # the error screen's reason
 var video_title := ""      # what the library calls it: the page's title, else the file's name
+var cast_volume := 1.0     # set by a phone casting to the board (board_cast.gd), 0 to 1
+var cast_name := ""        # what phones list the board as, when they can cast to it
 var _copy := {}            # copying a file picked on Android into the videos folder: {src, dst, tmp, total, done}
 var _video: VideoStreamPlayer = null
 var _video_back := ColorRect.new()
@@ -1059,6 +1061,32 @@ func _video_error(message: String) -> void:
 	set_card("VIDEO", "Can't play this video", "%s\n\n%s" % [message, video_url], RED)
 
 
+func pause_video() -> void:
+	if video_state == "playing":
+		toggle_video()
+
+
+func resume_video() -> void:
+	if video_state == "paused":
+		toggle_video()
+
+
+## Seconds into the video playing (or paused), else 0.
+func video_position() -> float:
+	return _video.stream_position if video_state == "playing" or video_state == "paused" else 0.0
+
+
+## The video's length in seconds, 0 until it plays.
+func video_length() -> float:
+	return _video.get_stream_length() if _video != null and _video.stream != null and (video_state == "playing" or video_state == "paused") else 0.0
+
+
+func seek_video(seconds: float) -> void:
+	if video_state == "playing" or video_state == "paused":
+		var length := video_length()
+		_video.stream_position = clampf(seconds, 0.0, length if length > 0.0 else seconds)
+
+
 func _video_live() -> bool:
 	return _video != null and _video.visible
 
@@ -1096,7 +1124,7 @@ func _update_video(dt: float) -> void:
 	if cam != null:
 		var d := cam.global_position.distance_to(global_transform * PANEL_CENTRE) / maxf(board_scale, 0.01)
 		var loud := clampf(1.0 - (d - 3.0) / 17.0, 0.0, 1.0)
-		_video.volume_db = linear_to_db(maxf(loud, 0.0001))
+		_video.volume_db = linear_to_db(maxf(loud * cast_volume, 0.0001))
 
 
 # ---------- local files and the library of downloaded videos ----------

@@ -187,6 +187,18 @@ the tool chip and hint, the crosshair and aim label, measurements, menus and dia
   its `Retry-After` (else 5, 10, 20 s), three times at most, with a countdown on the board, and an
   error names the link that failed when it was the video found on a page.
   The link is saved with the board; a reopened part shows "Ready to play".
+- **Casting to a video board from a phone**: every video board is also a TV (a DLNA / UPnP
+  MediaRenderer) that phone apps which cast to DLNA TVs list as "FPS-CAD board N" (BubbleUPnP,
+  Web Video Caster…; not apps that only use Google Cast, like YouTube). The video menu names it.
+  Each board has a `ProjectedDlnaRenderer` from the ProjectedPlayer addon
+  (`godot/addons/projected_player/`, docs in its repository) driving the board through
+  `board_cast.gd`: the phone's link goes to the board's own `play_url` with the app's title, so it
+  downloads, converts, shows progress and joins the library like any link, and is saved with the
+  part. The app's play, pause, seek, stop and volume (on top of the distance fade) work; while the
+  board downloads or converts the app shows it loading, and the board's error reason is passed
+  back. Its identity comes from this device and the board's id, so phones recognise it from one
+  session to the next. Android needs `CHANGE_WIFI_MULTICAST_STATE` to hear phones' searches; on
+  Windows, the firewall asks the first time. DLNA has no passwords: anyone on the network can cast.
 - **Arrange boards**: RT picks up any board, the message board included. A carried board stays at
   the same distance ahead and turned the same way relative to the player, standing on the floor;
   D-pad ← / → (mouse wheel) turns it 15°, ↑ / ↓ (= / −) resizes it ×1.25 about its feet (0.1× to

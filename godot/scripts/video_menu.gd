@@ -17,6 +17,7 @@ var _list := VBoxContainer.new()
 var _link_button: Button
 var _file_button: Button
 var _clear_button: Button
+var _cast_note: Label
 
 
 func _ready() -> void:
@@ -35,6 +36,9 @@ func _ready() -> void:
 	col.custom_minimum_size = Vector2(620, 0)
 	_panel.add_child(col)
 	col.add_child(UiTheme.title("VIDEO FOR THIS BOARD", 22))
+	_cast_note = UiTheme.text("", 15, UiTheme.MUTED)
+	_cast_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(_cast_note)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	col.add_child(row)
@@ -74,6 +78,8 @@ func _button(label: String, action: Callable) -> Button:
 func open(b: Node3D) -> void:
 	board = b
 	_file_button.visible = DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE)
+	_cast_note.text = cast_note(String(b.cast_name))
+	_cast_note.visible = _cast_note.text != ""
 	refresh()
 	visible = true
 	(_link_button as Control).grab_focus.call_deferred()
@@ -123,6 +129,14 @@ func refresh() -> void:
 		del.pressed.connect(func(): _delete(entry))
 		row.add_child(del)
 		_list.add_child(row)
+
+
+## How to cast to a board listed as name from a phone ("" when phones can't).
+static func cast_note(name: String) -> String:
+	if name == "":
+		return ""
+	return ("Or cast from your phone: on the same Wi-Fi, open an app that casts to DLNA TVs (such as BubbleUPnP or "
+		+ "Web Video Caster), choose “%s” as the TV, and pick a video." % name)
 
 
 static func size_text(bytes: int) -> String:
