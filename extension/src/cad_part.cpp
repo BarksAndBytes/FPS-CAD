@@ -371,6 +371,50 @@ Dictionary CadPart::push_pull(const Dictionary& hit, double delta) {
   }
 }
 
+String CadPart::state_text(bool with_imports) const {
+  return str(fpcad::partState(model_->document(), with_imports).dump());
+}
+
+String CadPart::imports_signature() const {
+  std::string sig;
+  for (auto& [id, data] : model_->document().imports)
+    sig += id + ":" + std::to_string(data.size()) + ":" + std::to_string(std::hash<std::string>{}(data)) + ";";
+  return str(sig);
+}
+
+String CadPart::set_state(const String& text, bool keep_undo) {
+  try {
+    fpcad::Json j = fpcad::Json::parse(str(text));
+    fpcad::PartDocument d = fpcad::partFromState(j, &model_->document());
+    if (keep_undo) {
+      checkpoint();
+    } else {
+      undo_.clear();
+      redo_.clear();
+    }
+    model_->document() = std::move(d);
+    model_->rebuild();
+    return "";
+  } catch (const std::exception& e) {
+    return str(e.what());
+  }
+}
+
+Dictionary CadPart::merge_states(const String& base, const String& theirs, const String& mine) const {
+  Dictionary d;
+  try {
+    fpcad::StateMerge m = fpcad::mergePartStates(fpcad::Json::parse(str(base)), fpcad::Json::parse(str(theirs)),
+                                                 fpcad::Json::parse(str(mine)));
+    d["state"] = str(m.state.dump());
+    Array conflicts;
+    for (auto& c : m.conflicts) conflicts.push_back(str(c));
+    d["conflicts"] = conflicts;
+  } catch (const std::exception& e) {
+    d["error"] = str(e.what());
+  }
+  return d;
+}
+
 void CadPart::checkpoint() {
   undo_.push_back(model_->document());
   if (undo_.size() > kUndoLimit) undo_.pop_front();
@@ -1414,6 +1458,10 @@ void CadPart::_bind_methods() {
   ClassDB::bind_method(D_METHOD("new_blank", "name", "units"), &CadPart::new_blank);
   ClassDB::bind_method(D_METHOD("load_file", "path"), &CadPart::load_file);
   ClassDB::bind_method(D_METHOD("save_file", "path"), &CadPart::save_file);
+  ClassDB::bind_method(D_METHOD("state_text", "with_imports"), &CadPart::state_text);
+  ClassDB::bind_method(D_METHOD("imports_signature"), &CadPart::imports_signature);
+  ClassDB::bind_method(D_METHOD("set_state", "text", "keep_undo"), &CadPart::set_state);
+  ClassDB::bind_method(D_METHOD("merge_states", "base", "theirs", "mine"), &CadPart::merge_states);
   ClassDB::bind_method(D_METHOD("get_part_name"), &CadPart::get_part_name);
   ClassDB::bind_method(D_METHOD("get_units"), &CadPart::get_units);
   ClassDB::bind_method(D_METHOD("get_file_id"), &CadPart::get_file_id);

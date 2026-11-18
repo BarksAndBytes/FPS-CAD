@@ -1370,6 +1370,89 @@ int main() {
     CHECK(!importStep((out / "missing.step").string()).ok);
   });
 
+  run("two players' changes to a part merge item by item, numbers keeping their types", [&] {
+    PartModel src(PartDocument::sample());
+    src.rebuild();
+    Json base = partState(src.document(), false);
+    CHECK(base["features"].size() >= 3);
+    Json theirs = base, mine = base;
+    std::string a = base["features"][0]["id"], c = base["features"][2]["id"];
+    theirs["material"] = "Custom";
+    theirs["features"][0]["name"] = "Theirs";
+    mine["name"] = "Mine";
+    Json added = base["features"][1];
+    added["id"] = "added-by-mine";
+    added["name"] = "Added";
+    mine["features"].insert(mine["features"].begin() + 1, added);
+    mine["rollback"] = 3;  // before the old third feature, now fourth in mine
+    theirs["rollback"] = 2;
+    StateMerge m = mergePartStates(base, theirs, mine);
+    CHECK(m.conflicts.empty());
+    CHECK(m.state["name"] == "Mine" && m.state["material"] == "Custom");
+    CHECK(m.state["features"].size() == base["features"].size() + 1);
+    CHECK(m.state["features"][0]["name"] == "Theirs" && m.state["features"][1]["id"] == "added-by-mine");
+    CHECK(m.state["rollback"] == 3 && m.state["features"][3]["id"] == c);
+    CHECK(m.state["rollback"].is_number_integer() && m.state["density"].is_number());
+    Json same = mergePartStates(base, base, base).state;
+    CHECK(same == base && same.dump() == base.dump());
+    Json both = base;
+    both["features"][0]["name"] = "Mine too";
+    m = mergePartStates(base, theirs, both);
+    CHECK(m.state["features"][0]["name"] == "Theirs" && m.conflicts.size() == 1);
+    Json gone = base;
+    gone["features"].erase(gone["features"].begin());  // mine deletes what theirs renamed
+    m = mergePartStates(base, theirs, gone);
+    CHECK(m.state["features"][0]["id"] == a && m.conflicts.size() == 1);
+    PartModel merged(partFromState(mergePartStates(base, theirs, mine).state));
+    merged.rebuild();
+    CHECK(merged.document().features.size() == base["features"].size() + 1 && merged.document().rollback == 3);
+  });
+
+  run("part state round-trips for multiplayer, with or without the imported shapes", [&] {
+    PartDocument d = PartDocument::sample();
+    d.name = "Shared \"part\"";
+    d.material = "Custom";
+    d.density = 1234.5;
+    d.rollback = 1;
+    d.imports["shape1"] = std::string("\0\x01\xff binary\n", 12);
+    d.imports["shape2"] = "ab";  // every base64 padding case: 12, 2 and (below) 1 bytes
+    d.imports["shape3"] = "a";
+    d.boards = Json::array({Json{{"kind", "notes"}, {"notes", Json::array({"hello"})}}});
+    Viewpoint vp;
+    vp.name = "Front";
+    vp.position = {1, 2, 3};
+    vp.yaw = 0.5;
+    d.viewpoints.push_back(vp);
+    Json full = partState(d, true);
+    PartDocument back = partFromState(Json::parse(full.dump()));
+    CHECK(partState(back, true) == full);
+    CHECK(back.imports == d.imports && back.fileId == d.fileId && back.rollback == 1);
+    CHECK(back.viewpoints.size() == d.viewpoints.size() && back.viewpoints.back().position[2] == 3 && back.viewpoints.back().name == "Front");
+    Json lean = partState(d, false);
+    CHECK(!lean.contains("imports"));
+    PartDocument kept = partFromState(lean, &d);
+    CHECK(kept.imports == d.imports);
+    CHECK(partFromState(lean).imports.empty());
+    PartDocument other;
+    other.imports["older"] = "kept";
+    other.imports["shape2"] = "replaced";
+    PartDocument both = partFromState(full, &other);
+    CHECK(both.imports.size() == 4 && both.imports["older"] == "kept" && both.imports["shape2"] == "ab");
+    PartModel m(partFromState(full));
+    CHECK(m.rebuild().ok);
+    bool threw = false;
+    try { partFromState(Json{{"kind", "something else"}}); } catch (const FileError&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { partFromState(Json{{"kind", "fpcad-part-state"}}); } catch (const FileError&) { threw = true; }
+    CHECK(threw);  // no features
+    threw = false;
+    Json bad = full;
+    bad["imports"]["shape1"] = "not*base64";
+    try { partFromState(bad); } catch (const FileError&) { threw = true; }
+    CHECK(threw);
+  });
+
   run("native part file round-trips with cached geometry", [&] {
     PartModel m(PartDocument::sample());
     m.rebuild();

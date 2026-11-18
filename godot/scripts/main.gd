@@ -39,6 +39,7 @@ var hud: CanvasLayer
 var _menu_page := ""  # "", "units" or "material": which page of the pause menu shows
 var board: Node3D  # whiteboard.gd: the messages, standing in the room
 var boards: Node3D  # boards.gd: the whiteboards the player adds, and carrying any board
+var net: Node  # net.gd: multiplayer on the local network
 var wheel: Control
 var touch: Control
 var cmap: CanvasLayer
@@ -100,6 +101,11 @@ func _ready() -> void:
 	player.input_enabled = false
 	tools = ToolsScript.new()
 	add_child(tools)
+	net = preload("res://scripts/net.gd").new()
+	net.name = "Net"  # the same path on every player's game, for its messages
+	net.game = self
+	add_child(net)
+	net.changed.connect(_on_net_changed)
 	tools.view = view
 	tools.player = player
 	tools.hud = hud
@@ -202,6 +208,9 @@ func _load_background() -> void:
 
 
 func _show_title() -> void:
+	if net != null:
+		net.stop()
+		net.listen_for_games(false)
 	_close_editors()
 	splash = null
 	state = "title"
@@ -227,6 +236,11 @@ func _show_title() -> void:
 
 
 func _start_mode(m: String, challenge_index := 0) -> void:
+	if net != null:
+		net.stop()  # a new part, the training or a challenge replaces the shared one
+	if splash != null:  # started before the splash ended (tests): it mustn't send us to the title
+		splash.queue_free()
+		splash = null
 	state = "play"
 	mode = m
 	_close_editors()
@@ -311,6 +325,8 @@ func _start_mode(m: String, challenge_index := 0) -> void:
 
 func _toggle_menu() -> void:
 	if not hud.menu_open and _menu_page != "":
+		if _menu_page == "mp":
+			net.listen_for_games(false)
 		_menu_page = ""
 		hud.set_menu_items(_menu_items())
 	hud.set_menu(not hud.menu_open)
@@ -321,6 +337,8 @@ func _menu_back() -> void:
 	var was := _menu_page
 	_menu_page = ""
 	hud.set_menu_items(_menu_items())
+	if was == "mp":
+		net.listen_for_games(false)
 	hud.focus_menu_action("new_part" if was == "new" else was + "_menu")
 
 
@@ -411,6 +429,7 @@ func _menu_items() -> Array:
 	if doc != null and doc.has_method("material_info") and not is_assembly:
 		items += [["Units: " + Units.system_label(hud.units, doc.get_mass_units()), "units_menu"],
 			["Material: " + doc.get_material(), "material_menu"]]
+	items.append([net.status_text(), "mp_menu"])
 	items += [["Save", "save"], ["File: new, open, save as, import, export…", "file_menu"], ["Exit to title", "title"], ["Quit", "quit"]]
 	return items
 
@@ -516,6 +535,22 @@ func _open(new_doc: RefCounted, assembly: bool) -> void:
 	hud.refresh_panel()
 	boards.load_from(doc)
 	_show_tool()
+
+
+## The Multiplayer page of the pause menu.
+func _mp_page() -> void:
+	_menu_page = "mp"
+	hud.set_menu_items(net.menu_items(), "MULTIPLAYER")
+
+
+## Games found or players changed: the Multiplayer page and the pause menu follow.
+func _on_net_changed() -> void:
+	if not hud.menu_open:
+		return
+	if _menu_page == "mp":
+		_mp_page()
+	elif _menu_page == "":
+		hud.set_menu_items(_menu_items())
 
 
 func _on_model_changed() -> void:
@@ -745,6 +780,8 @@ func _open_drawing(path: String) -> void:
 
 
 func open_file(path: String) -> void:
+	if net != null and net.in_game():
+		net.stop()  # opening another part leaves the shared one
 	var local := path
 	if path.begins_with("content://"):
 		var data := FileAccess.get_file_as_bytes(path)
@@ -1137,11 +1174,15 @@ func _gameplay_input() -> void:
 		if Input.is_action_just_pressed(&"shrink"):
 			boards.rescale(-1.0)
 	elif Input.is_action_just_pressed(&"redo"):
-		if doc.has_method("redo") and doc.redo():
+		if net.is_guest():
+			net.request_undo(true)
+		elif doc.has_method("redo") and doc.redo():
 			_on_model_changed()
 			hud.toast("Redo")
 	elif Input.is_action_just_pressed(&"undo") and not Input.is_key_pressed(KEY_SHIFT):
-		if doc.has_method("undo") and doc.undo():
+		if net.is_guest():
+			net.request_undo(false)
+		elif doc.has_method("undo") and doc.undo():
 			_on_model_changed()
 			hud.toast("Undo")
 	if Input.is_action_just_pressed(&"inspect"):
@@ -1341,6 +1382,10 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 	if action.begins_with("units:"):
 		_apply_units(action.substr(6))
 		return
+	if action.begins_with("mp_join:"):
+		net.join(action.substr(8))
+		_mp_page()
+		return
 	if action.begins_with("material:"):
 		_apply_material(action.substr(9))
 		return
@@ -1377,11 +1422,15 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 		"undo":
 			if sketcher.active:
 				sketcher.undo()
+			elif net.is_guest():
+				net.request_undo(false)
 			elif doc.has_method("undo") and doc.undo():
 				_on_model_changed()
 		"redo":
 			if sketcher.active:
 				sketcher.redo()
+			elif net.is_guest():
+				net.request_undo(true)
 			elif doc.has_method("redo") and doc.redo():
 				_on_model_changed()
 		"finish_sketch":
@@ -1447,6 +1496,23 @@ func _on_hud_request(action: String, arg: Variant) -> void:
 			_show_title()
 		"save":
 			_save()
+		"mp_menu":
+			if net.role == "":
+				net.listen_for_games(true)
+			_mp_page()
+			hud.focus_menu_action("menu_back")
+		"mp_host":
+			var problem: String = net.host()
+			hud.toast(problem if problem != "" else "Hosting on this Wi-Fi: others can join from Multiplayer in their pause menu")
+			if problem == "":
+				net.listen_for_games(false)
+			_mp_page()
+		"mp_leave":
+			net.stop()
+			net.listen_for_games(true)
+			_mp_page()
+		"mp_none":
+			pass
 		"file_menu":
 			_menu_page = "file"
 			hud.set_menu_items(_file_items(), "FILE")

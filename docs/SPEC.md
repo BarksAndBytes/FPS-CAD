@@ -409,6 +409,49 @@ what it uses…**.
   is the slow step), and once more when the changes stop.
 - [GUIDE.md](GUIDE.md) is the user guide for the whole workflow.
 
+## Multiplayer on the same Wi-Fi
+
+Up to four players walk around one part and change it together, with no server: one player's game
+hosts and the others join it (`godot/scripts/net.gd`).
+
+- **Hosting and joining**: the pause menu's **Multiplayer** page. *Host this part on this Wi-Fi*
+  shares the open part (parts only for now: an assembly's parts are files on each device); the page
+  lists the games it hears on the network, *Join …* joins one, and *Leave the game* / *Stop
+  hosting* ends it. Joining saves the part that was open (if it has a file) and opens the shared
+  one. Starting another mode, opening or making another part, or going to the title leaves the
+  game. When the host stops, everyone keeps the part as it is.
+- **Finding games**: a hosting game broadcasts a UDP beacon on port 47821 every second (its
+  player's name, the part's name, how many players); a game goes from the list 4 s after its last
+  beacon. Android needs `CHANGE_WIFI_MULTICAST_STATE` to hear broadcasts. Broadcasts don't cross
+  routers, so players must be on the same network.
+- **Connection**: ENet (UDP) on port 47820 (the next three if it's taken), the host in the middle:
+  it relays what guests send each other. A guest says hello with the protocol version; a game with
+  a different protocol, or a full game, is refused with the reason.
+- **The part**: the host's game keeps the official copy and a version number. Each game reads its
+  part's whole state a few times a second (`CadPart.state_text`: history, variables, settings,
+  rollback bar, viewpoints, boards) and sends it when it changed: the host's as the next version
+  to everyone; a guest's to the host, with the version it was made from. If nobody else changed the
+  part since, the host takes it as it is; otherwise it merges the two (`CadPart.merge_states`, C++:
+  item by item, features by id, variables and viewpoints by name, boards by id; what only one side
+  changed, added or deleted is kept; when both changed the same item the host's copy wins and the
+  guest is told; a move of features on one side is kept; the rollback bar stays before the same
+  feature). A guest that changed its part again while its change was on the way merges the
+  answer with its newer change the same way. Imported shapes are sent only when they change.
+  While a player is in a sketch or a feature dialog, others' changes wait and theirs goes out when
+  they finish (a host queues guests' changes meanwhile). The state's text is only made and read by
+  C++, so numbers keep their types.
+- **Undo and redo** on a guest ask the host, so there is one history: undo takes back the latest
+  change, whoever made it. The host's undo stack keeps guests' changes like its own.
+- **Players**: each game sends its player's feet, look direction, size and aim point ten times a
+  second (unreliable); the others appear as avatars in their colour (`avatar.gd`), scaled to their
+  size, with their name above and a dot where they aim, moving smoothly between updates.
+- **Not shared yet**: what a video board is playing (each player plays it themselves), sketches
+  in progress, the tool in hand.
+- **Tests**: `godot/tests/net_test.gd` runs a host and a guest game on one machine over the real
+  network: discovery, joining, edits in turn and at the same moment, a change held while the host
+  is in a dialog and merged after, the guest's undo, boards, avatars, and identical parts at the
+  end. CI runs it after the smoke test.
+
 ## Native file layout (`.fpprt`)
 
 ```

@@ -34,6 +34,7 @@ func _run() -> void:
 		quit(1)
 		return
 
+	_doc_merge()
 	var part = ClassDB.instantiate(&"CadPart")
 	part.make_sample()
 	var report: Dictionary = part.rebuild()
@@ -1100,6 +1101,7 @@ func _references(main: Node) -> void:
 	_check(main.view._com.visible, "Mass properties marks the centre of mass")
 	await _boards(main)
 	await _part_settings(main)
+	_multiplayer_menu(main)
 	await _video_board(main)
 	await _files(main)
 	await _finish(main)
@@ -1885,6 +1887,86 @@ func _video_board(main: Node) -> void:
 	var saved: Array = main.doc.get_boards().filter(func(d): return d.kind == "video")
 	_check(not saved.is_empty() and saved[-1].url == "https://example.com/tiny.ogv" and vb.video_state == "ready", "the link is saved with the part")
 	main.boards.remove(vb)
+
+
+## Merging two players' changes to a shared part (CadPart.merge_states), item by item.
+func _doc_merge() -> void:
+	var part = ClassDB.instantiate(&"CadPart")
+	var M := func(b: Dictionary, t: Dictionary, m: Dictionary) -> Dictionary:
+		var r: Dictionary = part.merge_states(JSON.stringify(b), JSON.stringify(t), JSON.stringify(m))
+		return {state = JSON.parse_string(r.state), conflicts = r.conflicts} if r.has("state") else {state = {}, conflicts = [r.error]}
+	var f := func(id: String, x: float) -> Dictionary: return {id = id, name = id.to_upper(), type = "box", params = {x = x}}
+	var base := {kind = "fpcad-part-state", name = "Desk", material = "Oak", rollback = -1,
+		features = [f.call("a", 1.0), f.call("b", 2.0), f.call("c", 3.0)], variables = [], viewpoints = [],
+		boards = [{id = "n1", kind = "notes", notes = ["x"]}]}
+	var theirs := base.duplicate(true)
+	var mine := base.duplicate(true)
+	theirs.features[0].params.x = 10.0  # theirs changes a
+	theirs.features.append(f.call("t", 0.0))  # and adds t at the end
+	theirs.material = "Steel"
+	mine.features[1].params.x = 20.0  # mine changes b
+	mine.features.insert(1, f.call("m", 0.0))  # adds m after a
+	mine.name = "Shared desk"
+	mine.boards[0].notes = ["y"]
+	var r: Dictionary = M.call(base, theirs, mine)
+	var ids: Array = r.state.features.map(func(x): return x.id)
+	_check(ids == ["a", "m", "b", "c", "t"] and r.state.features[0].params.x == 10.0 and r.state.features[2].params.x == 20.0
+		and r.state.name == "Shared desk" and r.state.material == "Steel" and r.state.boards[0].notes == ["y"] and r.conflicts.is_empty(),
+		"merging: each side's changes and additions are kept, in place (%s)" % [ids])
+	mine = base.duplicate(true)
+	mine.features[0].params.x = 99.0
+	r = M.call(base, theirs, mine)
+	_check(r.state.features[0].params.x == 10.0 and r.conflicts == ["A"], "the same feature changed on both sides: the host's wins, and it's reported")
+	mine = base.duplicate(true)
+	mine.features.remove_at(2)  # mine deletes c
+	r = M.call(base, theirs, mine)
+	_check(r.state.features.map(func(x): return x.id) == ["a", "b", "t"] and r.conflicts.is_empty(), "a feature deleted on one side is deleted")
+	mine = base.duplicate(true)
+	mine.features.remove_at(0)  # mine deletes a, which theirs changed
+	r = M.call(base, theirs, mine)
+	_check(r.state.features[0].id == "a" and r.conflicts.size() == 1, "deleted on one side and changed on the other: kept, and reported")
+	mine = base.duplicate(true)
+	mine.features = [mine.features[2], mine.features[0], mine.features[1]]  # mine moves c first
+	r = M.call(base, theirs, mine)
+	_check(r.state.features.map(func(x): return x.id) == ["c", "a", "b", "t"] and r.state.features[1].params.x == 10.0,
+		"a move on one side is kept, with the other side's changes")
+	var barred := base.duplicate(true)
+	barred.rollback = 2  # the bar before c
+	mine = barred.duplicate(true)
+	mine.features.insert(0, f.call("m", 0.0))
+	mine.rollback = 3  # adding before the bar moves it along
+	theirs = barred.duplicate(true)
+	theirs.features.remove_at(0)
+	theirs.rollback = 1
+	r = M.call(barred, theirs, mine)
+	_check(r.state.features.map(func(x): return x.id) == ["m", "b", "c"] and r.state.rollback == 2, "the rollback bar stays before the same feature")
+	part.make_sample()
+	part.rebuild()
+	var st: String = part.state_text(false)
+	var same: Dictionary = part.merge_states(st, st, st)
+	var copy = ClassDB.instantiate(&"CadPart")
+	_check(same.state == st and copy.set_state(same.state, false) == "" and copy.state_text(false) == st,
+		"a part's state goes through the merge and back unchanged, to the byte")
+	_check(part.merge_states("{", st, st).has("error"), "a damaged state is refused, not merged")
+
+
+## The pause menu's Multiplayer page: host, see it, stop. (tests/net_test.gd plays a real game.)
+func _multiplayer_menu(main: Node) -> void:
+	main.hud.set_menu_items(main._menu_items())
+	_check(main.hud._menu_buttons.has("mp_menu") and main.hud._menu_buttons.mp_menu.text == "Multiplayer…", "the pause menu has Multiplayer")
+	main._on_hud_request("mp_menu", null)
+	_check(main._menu_page == "mp" and main.hud._menu_buttons.has("mp_host") and main.net._listen != null,
+		"its page offers to host this part, and listens for games on the Wi-Fi")
+	main._on_hud_request("mp_host", null)
+	_check(main.net.role == "host" and main.net.players.size() == 1 and main.net._listen == null
+		and main.hud._menu_buttons.has("mp_leave"), "hosting starts, and the page offers to stop")
+	main._on_hud_request("mp_leave", null)
+	_check(main.net.role == "" and main.hud._menu_buttons.has("mp_host"), "and stops")
+	main._on_hud_request("menu_back", null)
+	_check(main._menu_page == "" and main.net._listen == null, "leaving the page stops listening")
+	main.is_assembly = true
+	_check(main.net.host_problem().contains("assembly"), "assemblies aren't shared yet, and the page says why")
+	main.is_assembly = false
 
 
 ## Phones cast to video boards over DLNA (board_cast.gd and the ProjectedPlayer addon): the board

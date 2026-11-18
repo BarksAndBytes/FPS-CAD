@@ -144,6 +144,15 @@ public:
   bool can_redo() const { return !redo_.empty(); }
   void checkpoint();     // call before a series of edits that should undo as one step
   void drop_checkpoint();  // forget the last checkpoint (the edit was cancelled)
+  // Multiplayer: the whole document as JSON text (imports included only when asked), a cheap
+  // signature of the imports (to tell when they need sending), and setting the document from such
+  // text (keep_undo: the previous document goes on the undo stack; else undo and redo are cleared).
+  godot::String state_text(bool with_imports) const;
+  godot::String imports_signature() const;
+  godot::String set_state(const godot::String& text, bool keep_undo);
+  // Combines two changes made from base (fpcad::mergePartStates): {state (text), conflicts (names)},
+  // or {error}.
+  godot::Dictionary merge_states(const godot::String& base, const godot::String& theirs, const godot::String& mine) const;
 
 protected:
   static void _bind_methods();
